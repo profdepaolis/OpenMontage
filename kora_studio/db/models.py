@@ -1,0 +1,137 @@
+"""Canonical Pydantic domain models for KORA STUDIO."""
+
+from __future__ import annotations
+
+from enum import Enum
+from typing import Any, Optional
+
+from pydantic import BaseModel, Field
+
+
+class JobState(str, Enum):
+    IN_PREPARAZIONE = "In preparazione"
+    ANALISI_MATERIALI = "Analisi materiali"
+    CONCEPT = "Concept"
+    STORYBOARD = "Storyboard"
+    GENERAZIONE_ASSET = "Generazione asset"
+    VOICEOVER = "Voiceover"
+    MONTAGGIO = "Montaggio"
+    SOUND_DESIGN = "Sound design"
+    RENDERING = "Rendering"
+    CONTROLLO_QUALITA = "Controllo qualità"
+    COMPLETATO = "Completato"
+    RICHIEDE_INTERVENTO = "Richiede intervento"
+    ERRORE = "Errore"
+
+
+class ProductionMode(str, Enum):
+    AUTO = "AUTO"
+    GUIDATA = "GUIDATA"
+    REGIA_COMPLETA = "REGIA_COMPLETA"
+
+
+class AuthenticityStatus(str, Enum):
+    AUTENTICO = "autentico"
+    DERIVATO_CONSERVATIVO = "derivato_conservativo"
+    GENERATIVO_CONTROLLATO = "generativo_controllato"
+    ILLUSTRATIVO_SINTETICO = "illustrativo_sintetico"
+    DA_VERIFICARE = "da_verificare"
+
+
+class EditingPreset(str, Enum):
+    CINEMATIC_IDENTITY = "KORA Cinematic Identity"
+    EXPERIENCE = "KORA Experience"
+    SEASONAL = "KORA Seasonal"
+    EDITORIAL = "KORA Editorial"
+    CUSTOM = "KORA Custom"
+
+
+class CameraMotion(str, Enum):
+    SLOW_PUSH_IN = "slow_push_in"
+    SLOW_PULL_OUT = "slow_pull_out"
+    PAN_LEFT = "pan_left"
+    PAN_RIGHT = "pan_right"
+    TILT_UP = "tilt_up"
+    TILT_DOWN = "tilt_down"
+    MICRO_PARALLAX = "micro_parallax"
+    STATIC_BREATHE = "static_breathe"
+
+
+class SceneTransition(str, Enum):
+    CROSS_DISSOLVE = "cross_dissolve"
+    WARM_FADE = "warm_fade"
+    CUT_ON_MOTION = "cut_on_motion"
+    FADE_BLACK = "fade_black"
+
+
+class StoryboardScene(BaseModel):
+    scene_number: int
+    start_frame: int
+    end_frame: int
+    duration_frames: int
+    start_sec: float
+    end_sec: float
+    duration_sec: float
+    narrative_goal: str
+    spoken_text: str = ""
+    voice_id: str = "brando"
+    selected_asset_id: Optional[str] = None
+    alternative_asset_id: Optional[str] = None
+    asset_mode: str = "original"  # original | crop_detail | animated_photo | i2v | outro
+    camera_motion: str = CameraMotion.SLOW_PUSH_IN.value
+    transition: str = SceneTransition.CROSS_DISSOLVE.value
+    sfx_category: Optional[str] = None
+    sfx_asset_id: Optional[str] = None
+    music_cue: Optional[str] = None
+    subtitle_text: str = ""
+    production_status: str = "pianificata"
+    approval_status: str = "approvata"
+    is_outro: bool = False
+    crop_focus: Optional[dict[str, float]] = None  # x, y, zoom
+
+
+class CreativeConcept(BaseModel):
+    id: str
+    title: str
+    central_idea: str
+    message: str
+    primary_emotion: str
+    hook: str
+    narrative_arc: str
+    ending: str
+    voiceover_script: str
+    visual_mood: str
+    required_materials: list[str]
+    available_asset_ids: list[str] = Field(default_factory=list)
+    missing_materials: list[str] = Field(default_factory=list)
+    duration_sec: float = 20.0
+    feasibility_score: float = 1.0
+    originality_score: float = 1.0
+    preset: str = EditingPreset.CINEMATIC_IDENTITY.value
+    anti_repetition_notes: list[str] = Field(default_factory=list)
+
+
+class QualityCheckItem(BaseModel):
+    category: str  # technical | visual | narrative
+    name: str
+    passed: bool
+    severity: str = "error"  # error | warning | info
+    detail: str = ""
+    requires_human_review: bool = False
+
+
+class QualityReport(BaseModel):
+    passed: bool
+    needs_human_review: bool = False
+    human_review_reasons: list[str] = Field(default_factory=list)
+    checks: list[QualityCheckItem] = Field(default_factory=list)
+    metrics: dict[str, Any] = Field(default_factory=dict)
+
+
+class RevisionProposal(BaseModel):
+    instruction: str
+    target_scenes: list[int]
+    global_changes: list[str]
+    what_will_change: list[str]
+    preserved_scenes: list[int]
+    selective_render_possible: bool = True

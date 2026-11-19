@@ -1,0 +1,170 @@
+"""Sound Designer agent — scene-matched SFX, licensed CC0 music, ducking, and peak-safe mix."""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any, Optional
+
+from kora_studio.db.models import StoryboardScene
+from kora_studio.media_tools import run_ffmpeg
+from kora_studio.vault.sound_library import SoundLibrary
+
+
+class SoundDesigner:
+    """Selects coherent, licensed SFX and music and mixes them safely under voiceover."""
+
+    def __init__(self, sound_library: SoundLibrary) -> None:
+        self.sound_library = sound_library
+
+    def select_music(self, preset: str, preferred_music_id: Optional[str] = None) -> Optional[dict[str, Any]]:
+        if preferred_music_id:
+            found = self.sound_library.get_sound(preferred_music_id)
+            if found:
+                return found
+        all_sounds = self.sound_library.list_sounds()
+        if "editorial" in preset.lower() or "seasonal" in preset.lower():
+            for s in all_sounds:
+                if s["category"] == "musica_ambient":
+                    return s
+        for s in all_sounds:
+            if s["category"] == "musica_cinematic":
+                return s
+        for s in all_sounds:
+            if s["category"] == "musica_ambient":
+                return s
+        return None
+
+    def plan_audio(
+        self,
+        scenes: list[StoryboardScene],
+        preset: str,
+        preferred_music_id: Optional[str] = None,
+        include_music: bool = True,
+    ) -> dict[str, Any]:
+        all_sounds = self.sound_library.list_sounds()
+        by_cat: dict[str, list[dict[str, Any]]] = {}
+        for s in all_sounds:
+            by_cat.setdefault(s["category"], []).append(s)
+
+        music = self.select_music(preset, preferred_music_id) if include_music else None
+        sfx_cues: list[dict[str, Any]] = []
+        for scene in scenes:
+            cat = scene.sfx_category
+            if not cat or cat not in by_cat:
+                continue
+            sfx = by_cat[cat][0]
+            # Keep SFX subtle and physically justified by scene content
+            gain = 0.22 if not scene.is_outro else 0.16
+            if cat in ("tazzine", "bicchieri"):
+                gain = 0.28
+            sfx_cues.append(
+                {
+                    "scene_number": scene.scene_number,
+                    "sound_id": sfx["id"],
+                    "sound_name": sfx["name"],
+                    "category": cat,
+                    "file_path": sfx["file_path"],
+                    "license": sfx["license"],
+                    "start_sec": round(scene.start_sec + 0.15, 3),
+                    "duration_sec": min(sfx["duration_sec"], max(0.8, scene.duration_sec - 0.2)),
+                    "gain": gain,
+                }
+            )
+
+        return {
+            "music": music,
+            "include_music": include_music,
+            "sfx_cues": sfx_cues,
+        }
+
+    def render_mix(
+        self,
+        total_duration_sec: float,
+        audio_plan: dict[str, Any],
+        voice_audio_path: Optional[Path],
+        output_wav: Path,
+    ) -> Path:
+        """Mix voiceover + music (ducked) + scene SFX with fade-in/out and anti-clipping limiter."""
+        output_wav.parent.mkdir(parents=True, exist_ok=True)
+        has_voice = bool(voice_audio_path and voice_audio_path.is_file())
+        music = audio_plan.get("music") if audio_plan.get("include_music", True) else None
+        has_music = bool(music and Path(music["file_path"]).is_file())
+        sfx_cues = [c for c in audio_plan.get("sfx_cues", []) if Path(c["file_path"]).is_file()][:6]
+
+        # Build deterministic FFmpeg filter_complex starting from silent stereo bed
+        inputs: list[str] = [
+            "-f",
+            "lavfi",
+            "-t",
+            f"{total_duration_sec:.3f}",
+            "-i",
+            "anullsrc=channel_layout=stereo:sample_rate=48000",
+        ]
+        filter_parts: list[str] = ["[0:a]volume=1.0[base]"]
+        mix_labels = ["[base]"]
+        idx = 1
+
+        if has_voice and voice_audio_path:
+            inputs.extend(["-i", str(voice_audio_path)])
+            # Place voice cleanly at t=0.25s so opening visual breathes
+            filter_parts.append(
+                f"[{idx}:a]aresample=48000,aformat=channel_layouts=stereo,adelay=250|250,volume=1.05[vo]"
+            )
+            mix_labels.append("[vo]")
+            idx += 1
+
+        if has_music and music:
+            inputs.extend(["-stream_loop", "-1", "-i", str(music["file_path"])])
+            music_vol = 0.17 if has_voice else 0.42
+            fade_out_start = max(0.5, total_duration_sec - 1.8)
+            filter_parts.append(
+                f"[{idx}:a]aresample=48000,aformat=channel_layouts=stereo,"
+                f"atrim=0:{total_duration_sec:.3f},asetpts=PTS-STARTPTS,"
+                f"afade=t=in:st=0:d=1.0,afade=t=out:st={fade_out_start:.3f}:d=1.8,"
+                f"volume={music_vol:.3f}[mus]"
+            )
+            mix_labels.append("[mus]")
+            idx += 1
+
+        for k, cue in enumerate(sfx_cues):
+            inputs.extend(["-i", str(cue["file_path"])])
+            delay_ms = max(0, int(round(cue["start_sec"] * 1000)))
+            cue_dur = max(0.4, float(cue["duration_sec"]))
+            fade_st = max(0.1, cue_dur - 0.35)
+            gain = float(cue.get("gain", 0.22)) * (0.65 if has_voice else 1.0)
+            filter_parts.append(
+                f"[{idx}:a]aresample=48000,aformat=channel_layouts=stereo,"
+                f"atrim=0:{cue_dur:.3f},asetpts=PTS-STARTPTS,"
+                f"afade=t=in:st=0:d=0.15,afade=t=out:st={fade_st:.3f}:d=0.35,"
+                f"volume={gain:.3f},adelay={delay_ms}|{delay_ms}[sfx{k}]"
+            )
+            mix_labels.append(f"[sfx{k}]")
+            idx += 1
+
+        n_mix = len(mix_labels)
+        filter_parts.append(
+            f"{''.join(mix_labels)}amix=inputs={n_mix}:duration=first:normalize=0,"
+            f"alimiter=limit=0.891:attack=5:release=60[mixout]"
+        )
+
+        run_ffmpeg(
+            [
+                "-y",
+                "-loglevel",
+                "error",
+                *inputs,
+                "-filter_complex",
+                ";".join(filter_parts),
+                "-map",
+                "[mixout]",
+                "-t",
+                f"{total_duration_sec:.3f}",
+                "-ar",
+                "48000",
+                "-ac",
+                "2",
+                str(output_wav),
+            ],
+            timeout=120,
+        )
+        return output_wav
