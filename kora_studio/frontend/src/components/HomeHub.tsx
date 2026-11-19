@@ -41,6 +41,8 @@ export function HomeHub({
   const [activeAction, setActiveAction] = useState<"surprise" | "theme" | "photos" | "resume" | null>(null);
   const [themeText, setThemeText] = useState("");
   const [durationSec, setDurationSec] = useState(20);
+  const [presetOverride, setPresetOverride] = useState("AUTO_CONCEPT");
+  const [dragActive, setDragActive] = useState(false);
   const [voiceId, setVoiceId] = useState("brando");
   const [prodMode, setProdMode] = useState<ProductionMode>("AUTO");
   const [loading, setLoading] = useState(false);
@@ -224,8 +226,22 @@ export function HomeHub({
                 <option value={30}>30 s (750 frame)</option>
               </select>
             </label>
+            <label className="flex items-center gap-2">
+              <span className="font-medium text-[#1D1B18]">Stile:</span>
+              <select
+                value={presetOverride}
+                onChange={(e) => setPresetOverride(e.target.value)}
+                className="rounded-lg border border-[#DDD4C4] bg-white px-2.5 py-1.5 text-xs text-[#1D1B18]"
+              >
+                <option value="AUTO_CONCEPT">Automatico (dal concept)</option>
+                <option value="KORA Cinematic Identity">KORA Cinematic Identity</option>
+                <option value="KORA Experience">KORA Experience</option>
+                <option value="KORA Seasonal">KORA Seasonal</option>
+                <option value="KORA Editorial">KORA Editorial</option>
+              </select>
+            </label>
           </div>
-          <span>Formato fisso: 1080×1920 · 9:16 · 25 fps · Rec.709</span>
+          <span>1080×1920 · 9:16 · 25 fps · Rec.709</span>
         </div>
 
         {/* Action Drawers */}
@@ -270,7 +286,21 @@ export function HomeHub({
         )}
 
         {activeAction === "photos" && (
-          <div className="mt-6 rounded-2xl border-2 border-dashed border-[#9A8052]/60 bg-[#FAF7F2] p-6 text-center">
+          <div
+            onDragOver={(e) => {
+              e.preventDefault();
+              setDragActive(true);
+            }}
+            onDragLeave={() => setDragActive(false)}
+            onDrop={(e) => {
+              e.preventDefault();
+              setDragActive(false);
+              handlePhotoUpload(e.dataTransfer.files);
+            }}
+            className={`mt-6 rounded-2xl border-2 border-dashed p-6 text-center transition ${
+              dragActive ? "border-[#224C66] bg-[#224C66]/5" : "border-[#9A8052]/60 bg-[#FAF7F2]"
+            }`}
+          >
             <input
               id="home-photo-upload"
               type="file"
@@ -388,7 +418,9 @@ export function HomeHub({
                     setLoading(true);
                     try {
                       await onStartProduction(
-                        c,
+                        presetOverride === "AUTO_CONCEPT"
+                          ? c
+                          : { ...c, preset: presetOverride },
                         themeText.trim() || c.central_idea,
                         activeAction || "theme",
                         voiceId,

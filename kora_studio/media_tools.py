@@ -93,30 +93,69 @@ def find_ffprobe() -> Optional[str]:
     return None
 
 
+def find_chromium_binary() -> Optional[str]:
+    """Detect Chrome/Chromium/Remotion headless-shell across Linux, macOS, and Windows."""
+    for name in ("chromium", "chromium-browser", "google-chrome", "chrome", "msedge"):
+        found = shutil.which(name)
+        if found:
+            return found
+
+    os_candidates = [
+        # macOS
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+        "/Applications/Chromium.app/Contents/MacOS/Chromium",
+        "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+        "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
+        # Windows
+        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+        r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+        r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+    ]
+    for path_str in os_candidates:
+        if Path(path_str).is_file():
+            return path_str
+
+    # Remotion downloaded headless-shell cache
+    remotion_cache_dirs = [
+        REPO_ROOT / "remotion-composer" / "node_modules" / ".remotion",
+        Path.home() / ".cache" / "remotion",
+    ]
+    for cache_dir in remotion_cache_dirs:
+        if cache_dir.is_dir():
+            for exe_name in ("chrome-headless-shell", "chrome-headless-shell.exe", "chrome", "chrome.exe"):
+                matches = list(cache_dir.rglob(exe_name))
+                if matches and matches[0].is_file():
+                    return str(matches[0])
+    return None
+
+
 def check_remotion_runtime() -> dict[str, Any]:
     """Check whether Remotion and headless Chromium are usable on this host."""
     composer_dir = REPO_ROOT / "remotion-composer"
     node_bin = shutil.which("node")
-    remotion_bin = composer_dir / "node_modules" / ".bin" / "remotion"
-    chrome_bin = (
-        shutil.which("chromium")
-        or shutil.which("chromium-browser")
-        or shutil.which("google-chrome")
+    remotion_bin = composer_dir / "node_modules" / ".bin" / (
+        "remotion.cmd" if os.name == "nt" else "remotion"
     )
+    if not remotion_bin.is_file():
+        alt = composer_dir / "node_modules" / ".bin" / "remotion"
+        if alt.is_file():
+            remotion_bin = alt
+    chrome_bin = find_chromium_binary()
     available = bool(node_bin and remotion_bin.is_file() and chrome_bin)
     reasons = []
     if not node_bin:
         reasons.append("Node.js non trovato")
     if not remotion_bin.is_file():
-        reasons.append("Dipendenze remotion-composer non installate")
+        reasons.append("Dipendenze remotion-composer non installate (eseguire npm install in remotion-composer)")
     if not chrome_bin:
-        reasons.append("Browser Chromium headless non presente su questo ambiente")
+        reasons.append("Browser Chrome/Chromium headless non trovato (eseguire npx remotion browser ensure)")
     return {
         "available": available,
         "node": node_bin,
         "remotion_bin": str(remotion_bin) if remotion_bin.is_file() else None,
         "chromium": chrome_bin,
         "reasons": reasons,
+        "install_command": "cd remotion-composer && npm install && npx remotion browser ensure",
     }
 
 

@@ -187,6 +187,21 @@ export default function KoraStudioPage() {
             </div>
           </div>
         )}
+
+        {budget && (
+          <div className="mt-3 hidden rounded-2xl border border-[#EDE6D9] bg-white p-3.5 text-[11px] text-[#6C6459] lg:block">
+            <div className="flex items-center justify-between">
+              <span>Motore locale</span>
+              <span className="font-medium text-emerald-700">Operativo</span>
+            </div>
+            <div className="mt-1 flex items-center justify-between">
+              <span>Spesa mese</span>
+              <span className="font-medium text-[#1D1B18]">
+                {budget.actual_month_eur.toFixed(2)} / {budget.monthly_cap_eur.toFixed(0)} €
+              </span>
+            </div>
+          </div>
+        )}
       </aside>
 
       {/* Main Content */}
@@ -251,6 +266,7 @@ export default function KoraStudioPage() {
               setSection("production");
               refreshAll();
             }}
+            onRestored={() => refreshAll()}
             onGoExport={() => setSection("export")}
           />
         )}
@@ -259,6 +275,7 @@ export default function KoraStudioPage() {
           <ProvidersView
             providers={providers}
             budget={budget}
+            voices={voices}
             onRefresh={() => refreshAll()}
           />
         )}

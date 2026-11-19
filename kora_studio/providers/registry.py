@@ -332,10 +332,14 @@ class ProviderManager:
                     errors.append(f"HTTP {r.status_code}")
             elif provider_id in ("gemini_api", "google_veo_api"):
                 r = requests.get(
-                    f"https://generativelanguage.googleapis.com/v1beta/models?key={key}",
+                    "https://generativelanguage.googleapis.com/v1beta/models",
+                    headers={"x-goog-api-key": key},
                     timeout=8,
                 )
-                if r.status_code != 200:
+                if r.status_code in (401, 403):
+                    status = "errore"
+                    errors.append("API key Google Gemini non valida o senza permessi (401/403)")
+                elif r.status_code != 200:
                     status = "errore"
                     errors.append(f"HTTP {r.status_code}")
             elif provider_id == "huggingface_api":
@@ -344,12 +348,33 @@ class ProviderManager:
                     headers={"Authorization": f"Bearer {key}"},
                     timeout=8,
                 )
-                if r.status_code != 200:
+                if r.status_code in (401, 403):
+                    status = "errore"
+                    errors.append("Token Hugging Face non valido (401/403)")
+                elif r.status_code != 200:
                     status = "errore"
                     errors.append(f"HTTP {r.status_code}")
         except Exception as exc:
             status = "errore"
-            errors.append(str(exc)[:180])
+            raw_err = str(exc)
+            if key:
+                raw_err = raw_err.replace(key, "***")
+            if any(
+                k in raw_err
+                for k in (
+                    "SSLZeroReturnError",
+                    "SSLError",
+                    "ConnectionError",
+                    "NameResolutionError",
+                    "Max retries exceeded",
+                    "ConnectTimeout",
+                )
+            ):
+                errors.append(
+                    "Connessione esterna bloccata da rete/firewall o sandbox (chiave salvata e cifrata; verifica in locale sul tuo PC)."
+                )
+            else:
+                errors.append(raw_err[:180])
 
         latency = round((time.monotonic() - t0) * 1000, 1)
         with self.db.session() as conn:
@@ -360,9 +385,53 @@ class ProviderManager:
                     avg_latency_ms = ?, recent_errors_json = ?, updated_at = ?
                 WHERE id = ?
                 """,
-                (status, quota, now, latency, json.dumps(errors), now, provider_id),
+                (status, quota, now, latency, json.dumps(errors, ensure_ascii=False), now, provider_id),
             )
         return self.get_provider(provider_id)  # type: ignore
+
+    def setup_remotion(self) -> dict[str, Any]:
+        """Attempt to install/verify Remotion dependencies and headless Chromium."""
+        import shutil
+        import subprocess
+        from kora_studio.config import REPO_ROOT
+
+        composer_dir = REPO_ROOT / "remotion-composer"
+        logs: list[str] = []
+        rem = check_remotion_runtime()
+
+        npm_bin = shutil.which("npm")
+        if not rem["remotion_bin"] and npm_bin and composer_dir.is_dir():
+            proc = subprocess.run(
+                [npm_bin, "install", "--no-audit", "--no-fund"],
+                cwd=composer_dir,
+                capture_output=True,
+                text=True,
+                timeout=180,
+            )
+            logs.append(f"npm install -> exit {proc.returncode}")
+            if proc.returncode != 0:
+                logs.append((proc.stderr or proc.stdout)[-240:])
+
+        rem = check_remotion_runtime()
+        if rem["remotion_bin"] and not rem["chromium"]:
+            proc = subprocess.run(
+                [rem["remotion_bin"], "browser", "ensure"],
+                cwd=composer_dir,
+                capture_output=True,
+                text=True,
+                timeout=180,
+            )
+            logs.append(f"remotion browser ensure -> exit {proc.returncode}")
+            if proc.returncode != 0:
+                logs.append(
+                    "Impossibile scaricare Chrome Headless Shell in questo ambiente (rete esterna bloccata o firewall). "
+                    "In locale sul tuo PC esegui: cd remotion-composer && npx remotion browser ensure (oppure installa Google Chrome)."
+                )
+
+        self.refresh_local_statuses()
+        final_rem = check_remotion_runtime()
+        prov = self.get_provider("remotion_local")
+        return {"remotion": final_rem, "provider": prov, "logs": logs}
 
     def _row_to_dict(self, row: Any) -> dict[str, Any]:
         has_key = False

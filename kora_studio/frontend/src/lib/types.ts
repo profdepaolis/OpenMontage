@@ -181,6 +181,8 @@ export interface VoiceOption {
   tone: string;
   status: string;
   vault_duration_sec?: number | null;
+  elevenlabs_voice_id?: string;
   elevenlabs_configured: boolean;
+  openai_tts_configured?: boolean;
   piper_local_available: boolean;
 }

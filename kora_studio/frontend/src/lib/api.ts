@@ -84,6 +84,14 @@ export const koraApi = {
       body: JSON.stringify({ theme, duration_sec: durationSec, asset_ids: assetIds }),
     }),
   listVoices: () => apiFetch<VoiceOption[]>("/api/voices"),
+  setVoiceElevenLabsId: (voiceId: string, elevenlabsVoiceId: string) =>
+    apiFetch<{ voice_id: string; elevenlabs_voice_id: string }>(
+      `/api/voices/${voiceId}/elevenlabs-id`,
+      {
+        method: "PUT",
+        body: JSON.stringify({ elevenlabs_voice_id: elevenlabsVoiceId }),
+      }
+    ),
   listSounds: () => apiFetch<Array<Record<string, unknown>>>("/api/sounds"),
 
   // Projects & Production
@@ -164,6 +172,19 @@ export const koraApi = {
     }),
   checkProvider: (id: string) =>
     apiFetch<ProviderRecord>(`/api/providers/${id}/check`, { method: "POST" }),
+  setupRemotion: () =>
+    apiFetch<{
+      remotion: {
+        available: boolean;
+        node?: string | null;
+        remotion_bin?: string | null;
+        chromium?: string | null;
+        reasons: string[];
+        install_command?: string;
+      };
+      provider: ProviderRecord;
+      logs: string[];
+    }>("/api/providers/remotion_local/setup", { method: "POST" }),
   getBudget: () => apiFetch<BudgetSettings>("/api/budget"),
   updateBudget: (paidBudgetEur?: number, monthlyCapEur?: number) =>
     apiFetch<BudgetSettings>("/api/budget", {

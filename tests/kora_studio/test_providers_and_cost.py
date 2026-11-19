@@ -51,8 +51,7 @@ def test_cost_guard_defaults_to_zero_and_caps_at_20_eur(isolated_env):
 
 def test_provider_manager_registry_and_zero_spend_selection(isolated_env):
     db = Database(isolated_env["db_path"])
-    guard = CostGuard(db)
-    pm = ProviderManager(db, guard)
+    pm = ProviderManager(db)
 
     providers = pm.list_providers()
     assert len(providers) >= 7
@@ -117,8 +116,7 @@ def test_voice_director_never_reuses_old_recording_for_new_script(isolated_env):
     db = Database(isolated_env["db_path"])
     vault = MediaVault(db)
     vault.seed_kora_authentic_assets()
-    guard = CostGuard(db)
-    pm = ProviderManager(db, guard)
+    pm = ProviderManager(db)
     vd = VoiceDirector(vault, pm)
 
     new_scenes = [

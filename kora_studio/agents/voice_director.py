@@ -83,6 +83,22 @@ class VoiceDirector:
         self.vault = vault
         self.providers = providers
 
+    def _get_elevenlabs_voice_id(self, voice_id: str) -> Optional[str]:
+        meta = VOICE_CATALOG.get(voice_id, {})
+        if voice_id == "none":
+            return None
+        pref_val = self.providers.db.get_preference(f"elevenlabs_voice_{voice_id}")
+        if pref_val and str(pref_val).strip():
+            return str(pref_val).strip()
+        env_name = meta.get("elevenlabs_env")
+        return os.environ.get(env_name) if env_name else None
+
+    def set_elevenlabs_voice_id(self, voice_id: str, el_voice_id: str) -> dict[str, Any]:
+        if voice_id not in VOICE_CATALOG or voice_id == "none":
+            raise ValueError(f"Voce non valida: {voice_id}")
+        self.providers.db.set_preference(f"elevenlabs_voice_{voice_id}", el_voice_id.strip())
+        return {"voice_id": voice_id, "elevenlabs_voice_id": el_voice_id.strip()}
+
     def list_voices(self) -> list[dict[str, Any]]:
         assets = self.vault.list_assets(media_type="audio")
         eleven_key = self.providers.get_decrypted_key("elevenlabs_api")
@@ -97,12 +113,13 @@ class VoiceDirector:
                     if meta["vault_match"] in a["filename"].lower():
                         vault_asset = a
                         break
-            el_id = os.environ.get(meta["elevenlabs_env"]) if meta["elevenlabs_env"] else None
+            el_id = self._get_elevenlabs_voice_id(vid)
             out.append(
                 {
                     **meta,
                     "vault_asset_id": vault_asset["id"] if vault_asset else None,
                     "vault_duration_sec": vault_asset["duration_sec"] if vault_asset else None,
+                    "elevenlabs_voice_id": el_id or "",
                     "elevenlabs_configured": bool(eleven_key and el_id),
                     "openai_tts_configured": bool(openai_key),
                     "piper_local_available": piper_ready,
@@ -161,8 +178,7 @@ class VoiceDirector:
         self, voice_id: str, text: str, dest: Path
     ) -> Optional[Path]:
         key = self.providers.get_decrypted_key("elevenlabs_api")
-        meta = VOICE_CATALOG.get(voice_id, {})
-        el_voice_id = os.environ.get(meta.get("elevenlabs_env") or "")
+        el_voice_id = self._get_elevenlabs_voice_id(voice_id)
         if not key or not el_voice_id:
             return None
         r = requests.post(
@@ -320,8 +336,8 @@ class VoiceDirector:
 
         # 1. Primary: Official ElevenLabs API (synthesizes exact new script in requested voice)
         el_key = self.providers.get_decrypted_key("elevenlabs_api")
-        el_env = VOICE_CATALOG[voice_id]["elevenlabs_env"]
-        if el_key and el_env and os.environ.get(el_env):
+        el_voice_id = self._get_elevenlabs_voice_id(voice_id)
+        if el_key and el_voice_id:
             auth = self.providers.cost_guard.check_authorization(
                 0.05, explicit_user_authorization=explicit_paid_authorization
             )

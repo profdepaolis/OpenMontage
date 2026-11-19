@@ -23,6 +23,13 @@ const MOTIONS = [
   "static_breathe",
 ];
 
+const TRANSITIONS = [
+  { id: "cross_dissolve", label: "Dissolvenza morbida" },
+  { id: "warm_fade", label: "Warm Fade" },
+  { id: "cut_on_motion", label: "Cut on Motion" },
+  { id: "fade_black", label: "Fade to Black" },
+];
+
 export function CreativeStudioView({
   project,
   assets,
@@ -31,6 +38,7 @@ export function CreativeStudioView({
 }: CreativeStudioViewProps) {
   const [scenes, setScenes] = useState<StoryboardScene[]>([]);
   const [saving, setSaving] = useState(false);
+  const [savedMsg, setSavedMsg] = useState<string | null>(null);
 
   useEffect(() => {
     setScenes(project?.storyboard || []);
@@ -46,17 +54,42 @@ export function CreativeStudioView({
 
   const visualAssets = assets.filter((a) => a.media_type === "image" || a.media_type === "video");
   const totalFrames = scenes.reduce((acc, s) => acc + s.duration_frames, 0);
+  const fps = project.fps || 25;
+
+  const recalculateTimeline = (list: StoryboardScene[]): StoryboardScene[] => {
+    let curFrame = 0;
+    return list.map((sc) => {
+      const df = Math.max(fps, Math.round(sc.duration_sec * fps));
+      const startF = curFrame;
+      const endF = curFrame + df;
+      curFrame = endF;
+      return {
+        ...sc,
+        duration_frames: df,
+        start_frame: startF,
+        end_frame: endF,
+        start_sec: Number((startF / fps).toFixed(2)),
+        end_sec: Number((endF / fps).toFixed(2)),
+        duration_sec: Number((df / fps).toFixed(2)),
+      };
+    });
+  };
 
   const updateField = (idx: number, field: keyof StoryboardScene, value: string | number) => {
-    setScenes((prev) =>
-      prev.map((s, i) => (i === idx ? { ...s, [field]: value } : s))
-    );
+    setScenes((prev) => {
+      const next = prev.map((s, i) => (i === idx ? { ...s, [field]: value } : s));
+      return field === "duration_sec" ? recalculateTimeline(next) : next;
+    });
   };
 
   const handleSave = async () => {
     setSaving(true);
+    setSavedMsg(null);
     try {
-      await koraApi.updateStoryboard(project.id, scenes);
+      const normalized = recalculateTimeline(scenes);
+      setScenes(normalized);
+      await koraApi.updateStoryboard(project.id, normalized);
+      setSavedMsg("Storyboard salvato con nuova versione.");
       onUpdated();
     } finally {
       setSaving(false);
@@ -71,7 +104,8 @@ export function CreativeStudioView({
             Creative Studio · {project.title}
           </h2>
           <p className="text-xs text-[#6C6459]">
-            Preset: {project.preset} · {scenes.length} scene · {totalFrames} frame totali ({project.fps} fps = {(totalFrames / project.fps).toFixed(2)}s)
+            Preset: {project.preset} · {scenes.length} scene · {totalFrames} frame totali ({fps} fps ={" "}
+            {(totalFrames / fps).toFixed(2)}s)
           </p>
         </div>
         <div className="flex gap-2">
@@ -95,6 +129,12 @@ export function CreativeStudioView({
           </button>
         </div>
       </div>
+
+      {savedMsg && (
+        <div className="rounded-xl border border-[#DDD4C4] bg-[#EFE8DB] px-4 py-2 text-xs text-[#1D1B18]">
+          {savedMsg}
+        </div>
+      )}
 
       {/* Scenes */}
       <div className="space-y-3">
@@ -133,7 +173,16 @@ export function CreativeStudioView({
                 />
               </label>
               <label className="block text-[11px] font-medium text-[#6C6459]">
-                Sottotitolo / Testo scena
+                Testo parlato (Voiceover)
+                <input
+                  type="text"
+                  value={sc.spoken_text}
+                  onChange={(e) => updateField(idx, "spoken_text", e.target.value)}
+                  className="mt-1 w-full rounded-lg border border-[#DDD4C4] px-3 py-1.5 text-xs text-[#1D1B18]"
+                />
+              </label>
+              <label className="block text-[11px] font-medium text-[#6C6459]">
+                Sottotitolo a schermo
                 <input
                   type="text"
                   value={sc.subtitle_text}
@@ -173,6 +222,32 @@ export function CreativeStudioView({
                       </option>
                     ))}
                   </select>
+                </label>
+                <label className="block text-[11px] font-medium text-[#6C6459]">
+                  Transizione
+                  <select
+                    value={sc.transition}
+                    onChange={(e) => updateField(idx, "transition", e.target.value)}
+                    className="mt-1 w-full rounded-lg border border-[#DDD4C4] bg-white px-2.5 py-1.5 text-xs text-[#1D1B18]"
+                  >
+                    {TRANSITIONS.map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="block text-[11px] font-medium text-[#6C6459]">
+                  Durata (secondi)
+                  <input
+                    type="number"
+                    step="0.5"
+                    min="1.5"
+                    max="10"
+                    value={sc.duration_sec}
+                    onChange={(e) => updateField(idx, "duration_sec", Number(e.target.value))}
+                    className="mt-1 w-full rounded-lg border border-[#DDD4C4] px-2.5 py-1.5 text-xs text-[#1D1B18]"
+                  />
                 </label>
                 <label className="block text-[11px] font-medium text-[#6C6459]">
                   SFX

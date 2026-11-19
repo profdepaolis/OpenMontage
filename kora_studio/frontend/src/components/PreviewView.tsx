@@ -1,24 +1,34 @@
 "use client";
 
-import React, { useState } from "react";
-import { CheckCircle2, AlertTriangle, Sparkles, Wand2, ArrowRight } from "lucide-react";
+import React, { useEffect, useState } from "react";
+import { CheckCircle2, AlertTriangle, Sparkles, Wand2, ArrowRight, RotateCcw } from "lucide-react";
 import type { ProjectRecord } from "@/lib/types";
 import { koraApi } from "@/lib/api";
 
 interface PreviewViewProps {
   project: ProjectRecord | null;
   onRevisionStarted: (jobId: string) => void;
+  onRestored: () => void;
   onGoExport: () => void;
 }
 
-export function PreviewView({ project, onRevisionStarted, onGoExport }: PreviewViewProps) {
+export function PreviewView({ project, onRevisionStarted, onRestored, onGoExport }: PreviewViewProps) {
   const [instruction, setInstruction] = useState("");
   const [diffPreview, setDiffPreview] = useState<{
     what_will_change: string[];
     preserved_scenes: number[];
     target_scenes: number[];
   } | null>(null);
+  const [versions, setVersions] = useState<
+    Array<{ id: number; version: number; summary: string; agent_name: string; created_at: string }>
+  >([]);
   const [loading, setLoading] = useState(false);
+  const [statusMsg, setStatusMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!project) return;
+    koraApi.projectVersions(project.id).then(setVersions).catch(() => {});
+  }, [project]);
 
   if (!project) {
     return (
@@ -53,6 +63,19 @@ export function PreviewView({ project, onRevisionStarted, onGoExport }: PreviewV
     }
   };
 
+  const handleRestore = async (ver: number) => {
+    setLoading(true);
+    try {
+      await koraApi.restoreVersion(project.id, ver);
+      setStatusMsg(`Progetto ripristinato alla versione v${ver}.`);
+      const vList = await koraApi.projectVersions(project.id);
+      setVersions(vList);
+      onRestored();
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const qc = project.qc_report || {};
   const checks = qc.checks || [];
 
@@ -79,7 +102,7 @@ export function PreviewView({ project, onRevisionStarted, onGoExport }: PreviewV
         </div>
       </div>
 
-      {/* Natural Language Revisions & QC */}
+      {/* Natural Language Revisions, QC, and Version History */}
       <div className="lg:col-span-7 space-y-5">
         <div className="rounded-2xl border border-[#DDD4C4] bg-white p-6">
           <div className="flex items-center justify-between">
@@ -97,6 +120,12 @@ export function PreviewView({ project, onRevisionStarted, onGoExport }: PreviewV
               </button>
             )}
           </div>
+
+          {statusMsg && (
+            <div className="mt-3 rounded-xl bg-[#EFE8DB] px-3 py-2 text-xs text-[#1D1B18]">
+              {statusMsg}
+            </div>
+          )}
 
           {/* NL Revision Prompt */}
           <form onSubmit={handlePreviewDiff} className="mt-5 space-y-3">
@@ -208,6 +237,34 @@ export function PreviewView({ project, onRevisionStarted, onGoExport }: PreviewV
             ))}
           </div>
         </div>
+
+        {/* Version History & Rollback */}
+        {versions.length > 0 && (
+          <div className="rounded-2xl border border-[#DDD4C4] bg-white p-5">
+            <h3 className="text-sm font-medium text-[#1D1B18]">Cronologia versioni & Rollback</h3>
+            <div className="mt-3 space-y-2 max-h-48 overflow-y-auto">
+              {versions.map((v) => (
+                <div
+                  key={v.id}
+                  className="flex items-center justify-between rounded-xl bg-[#FAF7F2] px-3.5 py-2 text-xs"
+                >
+                  <div>
+                    <strong>v{v.version}</strong> · {v.summary}{" "}
+                    <span className="text-[#6C6459]">({v.agent_name})</span>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={loading}
+                    onClick={() => handleRestore(v.version)}
+                    className="flex items-center gap-1 rounded-lg border border-[#DDD4C4] bg-white px-2.5 py-1 text-[11px] hover:border-[#9A8052]"
+                  >
+                    <RotateCcw className="h-3 w-3" /> Ripristina
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

@@ -70,6 +70,10 @@ class ProviderKeyRequest(BaseModel):
     api_key: str
 
 
+class VoiceIdMappingRequest(BaseModel):
+    elevenlabs_voice_id: str
+
+
 class BudgetUpdateRequest(BaseModel):
     paid_budget_eur: Optional[float] = None
     monthly_cap_eur: Optional[float] = None
@@ -469,12 +473,23 @@ def create_app(db_path: Optional[Path] = None, auto_seed: bool = True) -> FastAP
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc))
 
+    @app.post("/api/providers/remotion_local/setup")
+    def setup_remotion() -> dict[str, Any]:
+        return director.providers.setup_remotion()
+
     @app.post("/api/providers/{provider_id}/check")
     def check_provider(provider_id: str) -> dict[str, Any]:
         try:
             return director.providers.check_provider(provider_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc))
+
+    @app.put("/api/voices/{voice_id}/elevenlabs-id")
+    def set_voice_elevenlabs_id(voice_id: str, req: VoiceIdMappingRequest) -> dict[str, Any]:
+        try:
+            return director.voice_director.set_elevenlabs_voice_id(voice_id, req.elevenlabs_voice_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
 
     @app.get("/api/budget")
     def get_budget() -> dict[str, Any]:

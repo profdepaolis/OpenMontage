@@ -45,7 +45,7 @@ if [ ! -x ".venv/bin/ffprobe" ]; then
   fi
 fi
 
-# 5. Build Frontend Static Bundle if Node/npm is present
+# 5. Build Frontend Static Bundle & Remotion Composer if Node/npm is present
 if command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then
   echo "[..] Verifica e build frontend KORA STUDIO..."
   (
@@ -55,6 +55,16 @@ if command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then
     fi
     npm run build
   )
+  if [ -d "remotion-composer" ]; then
+    echo "[..] Preparazione Remotion Composer locale..."
+    (
+      cd remotion-composer
+      if [ ! -d "node_modules" ]; then
+        npm install --no-audit --no-fund
+      fi
+      ./node_modules/.bin/remotion browser ensure >/dev/null 2>&1 || echo "[INFO] Browser Chromium Remotion non scaricabile (o Chrome già presente): FFmpeg resterà il motore principale."
+    )
+  fi
 else
   echo "[AVVISO] Node/npm non trovato: usa il bundle statico esistente se presente in kora_studio/frontend/out."
 fi
