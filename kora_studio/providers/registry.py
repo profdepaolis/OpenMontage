@@ -191,6 +191,19 @@ DEFAULT_PROVIDERS: list[dict[str, Any]] = [
         "is_free_local": False,
         "env_var": "DEEPSEEK_API_KEY",
     },
+    {
+        "id": "claude_api",
+        "name": "Anthropic Claude API (Solo Testo / Copy / Regia)",
+        "capabilities": ["llm"],
+        "endpoint": "https://api.anthropic.com/v1/messages",
+        "auth_type": "API Key (ANTHROPIC_API_KEY)",
+        "models": ["claude-sonnet-4-5", "claude-haiku-4-5"],
+        "declared_costs": {"llm_per_call_eur": 0.01},
+        "quota_status": "Non verificabile",
+        "limits_doc": "Solo API ufficiale console.anthropic.com (l'abbonamento web Claude Pro è separato). Ottimo per copywriting italiano e regia.",
+        "is_free_local": False,
+        "env_var": "ANTHROPIC_API_KEY",
+    },
 ]
 
 
@@ -484,6 +497,23 @@ class ProviderManager:
                     status = "errore"
                     errors.append("DEEPSEEK_API_KEY non valida (401/403)")
                 elif r.status_code != 200:
+                    status = "errore"
+                    errors.append(f"HTTP {r.status_code}")
+            elif provider_id == "claude_api":
+                r = requests.get(
+                    "https://api.anthropic.com/v1/models",
+                    headers={
+                        "x-api-key": key,
+                        "anthropic-version": "2023-06-01",
+                    },
+                    timeout=8,
+                )
+                if r.status_code in (401, 403):
+                    status = "errore"
+                    errors.append("ANTHROPIC_API_KEY non valida (401/403)")
+                elif r.status_code == 200:
+                    quota = "Attivo (pay-per-use)"
+                else:
                     status = "errore"
                     errors.append(f"HTTP {r.status_code}")
         except Exception as exc:

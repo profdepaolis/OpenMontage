@@ -241,6 +241,41 @@ class VoiceDirector:
             voice.synthesize_wav(text, wf)
         return dest
 
+    def _synthesize_qwen3_tts_local(
+        self, voice_id: str, text: str, dest: Path
+    ) -> Optional[Path]:
+        """Optional local Qwen3-TTS (github.com/profdepaolis/Qwen3-TTS) voice cloning."""
+        try:
+            import soundfile as sf  # type: ignore
+            import torch  # type: ignore
+            from qwen_tts import Qwen3TTSModel  # type: ignore
+        except Exception:
+            return None
+
+        vault_voice = self._find_vault_voice_asset(voice_id)
+        if not vault_voice:
+            return None
+        ref_path = vault_voice.get("working_path") or vault_voice.get("original_path")
+        if not ref_path or not Path(ref_path).is_file():
+            return None
+
+        device = "cuda:0" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")
+        dtype = torch.float16 if device != "cpu" else torch.float32
+        model = Qwen3TTSModel.from_pretrained(
+            "Qwen/Qwen3-TTS-12Hz-0.6B-Base",
+            device_map=device,
+            dtype=dtype,
+        )
+        wavs, sr = model.generate_voice_clone(
+            text=text,
+            language="Italian",
+            ref_audio=str(ref_path),
+            x_vector_only_mode=True,
+        )
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        sf.write(str(dest), wavs[0], sr)
+        return dest if dest.is_file() else None
+
     def _synthesize_edge_tts(
         self, voice_id: str, text: str, dest: Path
     ) -> Optional[Path]:
@@ -377,7 +412,18 @@ class VoiceDirector:
                 )
                 source_used = f"kora_vault_asset:{vault_voice['filename']}"
 
-        # 3. OpenAI TTS (synthesizes the new script if authorized; explicitly marked as substitute voice)
+        # 3. Optional local Qwen3-TTS voice cloning (if qwen-tts package is installed locally)
+        if not source_used:
+            try:
+                qwen_wav = work_dir / f"voice_{voice_id}_qwen3.wav"
+                qwen_res = self._synthesize_qwen3_tts_local(voice_id, full_text, qwen_wav)
+                if qwen_res and qwen_res.is_file():
+                    self.normalize_audio(qwen_res, norm_out)
+                    source_used = "qwen3_tts_local"
+            except Exception:
+                pass
+
+        # 4. OpenAI TTS (synthesizes the new script if authorized; explicitly marked as substitute voice)
         if not source_used and self.providers.get_decrypted_key("openai_api"):
             auth = self.providers.cost_guard.check_authorization(
                 0.02, explicit_user_authorization=explicit_paid_authorization

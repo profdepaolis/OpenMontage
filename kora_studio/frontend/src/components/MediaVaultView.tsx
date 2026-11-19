@@ -179,6 +179,22 @@ export function MediaVaultView({ assets, onRefresh }: MediaVaultViewProps) {
     }
   };
 
+  const handleCopyFlowPrompt = async () => {
+    const selectedAsset = imageAssets.find((a) => a.id === (veoAssetId || imageAssets[0]?.id));
+    const built =
+      veoMode === "image_to_video" && selectedAsset
+        ? `Photorealistic slow subtle animation of the exact reference photograph (${selectedAsset.filename}). Camera motion: ${veoMotion}. Keep architecture, pergola geometry, fixed furniture placement, signs, and horizon strictly unchanged. Only gentle breeze on fabric/foliage, soft water ripples, and natural Mediterranean light. Do not invent pools, buildings, terraces, or extra objects. ${veoPrompt}`.trim()
+        : `Mediterranean luxury coastal atmosphere, natural sunlight, calm sea breeze, warm sand and neutral linen tones, photorealistic cinematic 9:16 video. Non-documentary atmospheric scene. ${veoPrompt}`.trim();
+    try {
+      await navigator.clipboard.writeText(built);
+      setStatusMsg(
+        "Prompt KORA copiato! Incollalo su Google Flow (labs.google/fx/tools/flow) con i tuoi crediti Gemini Plus, scarica l'MP4 e caricalo qui con 'Carica media'."
+      );
+    } catch {
+      setStatusMsg(`Prompt KORA pronto da copiare: ${built}`);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-4">
@@ -353,13 +369,22 @@ export function MediaVaultView({ assets, onRefresh }: MediaVaultViewProps) {
                 Autorizzo la chiamata al motore selezionato ({currentEngineMeta.costLabel}) nel rispetto del budget impostato.
               </span>
             </label>
-            <button
-              type="submit"
-              disabled={veoBusy}
-              className="rounded-xl bg-[#224C66] px-4 py-2 text-xs font-medium text-white hover:bg-[#1D1B18] disabled:opacity-50"
-            >
-              {veoBusy ? "Generazione video in corso (1–3 min)..." : "Genera Clip AI"}
-            </button>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={handleCopyFlowPrompt}
+                className="rounded-xl border border-[#DDD4C4] bg-[#FAF7F2] px-3.5 py-2 text-xs font-medium text-[#1D1B18] hover:border-[#9A8052]"
+              >
+                Copia prompt per Google Flow web (0 €)
+              </button>
+              <button
+                type="submit"
+                disabled={veoBusy}
+                className="rounded-xl bg-[#224C66] px-4 py-2 text-xs font-medium text-white hover:bg-[#1D1B18] disabled:opacity-50"
+              >
+                {veoBusy ? "Generazione video in corso (1–3 min)..." : "Genera Clip AI"}
+              </button>
+            </div>
           </div>
         </form>
       )}
