@@ -364,19 +364,54 @@ class AIMediaLab:
             b64 = base64.b64encode(img_path.read_bytes()).decode("ascii")
             instance["image"] = {"bytesBase64Encoded": b64, "mimeType": mime}
 
-        payload = {
-            "instances": [instance],
-            "parameters": {
-                "aspectRatio": "9:16",
-                "durationSeconds": min(8, max(5, duration_sec)),
-            },
-        }
+        # Discover available Veo models dynamically from Gemini ListModels
+        discovered_veo: list[str] = []
+        all_veo_names: list[str] = []
+        try:
+            mr = requests.get(
+                "https://generativelanguage.googleapis.com/v1beta/models?pageSize=200",
+                headers={"x-goog-api-key": key},
+                timeout=12,
+            )
+            if mr.status_code == 200:
+                for m in mr.json().get("models", []):
+                    raw_name = str(m.get("name", ""))
+                    short_name = raw_name.split("/")[-1]
+                    methods = m.get("supportedGenerationMethods") or []
+                    if "veo" in short_name.lower():
+                        all_veo_names.append(f"{short_name} ({','.join(methods)})")
+                        if "predictLongRunning" in methods:
+                            discovered_veo.append(short_name)
+        except Exception:
+            pass
 
-        models_to_try = ["veo-2.0-generate-001", "veo-3.0-generate-preview"]
+        fallback_veo = [
+            "veo-3.1-generate-preview",
+            "veo-3.1-fast-generate-preview",
+            "veo-3.0-generate-001",
+            "veo-3.0-fast-generate-001",
+            "veo-2.0-generate-001",
+        ]
+        models_to_try: list[str] = []
+        for m in discovered_veo + fallback_veo:
+            if m not in models_to_try:
+                models_to_try.append(m)
+
         op_name: Optional[str] = None
-        last_err = ""
+        model_errors: list[str] = []
         used_model = models_to_try[0]
         for model in models_to_try:
+            # Veo 3/3.1 only accepts 4, 6, or 8 seconds; Veo 2 accepts 5..8 seconds
+            dur = min(8, max(5, duration_sec))
+            if model.startswith("veo-3"):
+                dur = 4 if duration_sec <= 4 else (6 if duration_sec <= 6 else 8)
+            payload = {
+                "instances": [instance],
+                "parameters": {
+                    "aspectRatio": "9:16",
+                    "durationSeconds": dur,
+                },
+            }
             url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:predictLongRunning"
             r = requests.post(
                 url,
@@ -388,13 +423,23 @@ class AIMediaLab:
                 op_name = r.json().get("name")
                 used_model = model
                 break
-            last_err = f"{model} HTTP {r.status_code}: {r.text[:240]}"
+            model_errors.append(f"{model} -> HTTP {r.status_code}: {r.text[:200]}")
 
         if not op_name:
+            summary = " | ".join(model_errors[:3])
+            if not all_veo_names:
+                hint = (
+                    "La tua chiave Gemini non elenca alcun modello 'veo-*' in ListModels "
+                    "(di solito succede quando il progetto Google AI Studio è su piano gratuito senza Billing collegato: "
+                    "Google Veo API richiede fatturazione attiva su Google Cloud / AI Studio). "
+                )
+            else:
+                hint = f"Modelli Veo visti dalla tua chiave: {', '.join(all_veo_names)}. "
+            full_err = f"{hint}Dettaglio tentativi: {summary}"
             self.providers.cost_guard.record_usage(
-                "google_veo_api", mode, est_eur, 0.0, True, "error", detail=last_err
+                "google_veo_api", mode, est_eur, 0.0, True, "error", detail=full_err[:400]
             )
-            raise RuntimeError(f"Google Veo API non ha avviato la generazione: {last_err}")
+            raise RuntimeError(f"Google Veo API non ha avviato la generazione: {full_err}")
 
         # Poll operation up to 180s
         video_uri: Optional[str] = None

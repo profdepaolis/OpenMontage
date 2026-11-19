@@ -78,12 +78,12 @@ DEFAULT_PROVIDERS: list[dict[str, Any]] = [
         "id": "google_veo_api",
         "name": "Google Veo / Flow API (Ufficiale)",
         "capabilities": ["image_to_video", "text_to_video"],
-        "endpoint": "https://generativelanguage.googleapis.com/v1beta/models/veo-3.0-generate-preview",
-        "auth_type": "API Key / Vertex AI OAuth",
-        "models": ["veo-3.0-generate-preview", "veo-2.0-generate-001"],
+        "endpoint": "https://generativelanguage.googleapis.com/v1beta/models",
+        "auth_type": "API Key Gemini / Cloud Billing",
+        "models": ["veo-3.1-generate-preview", "veo-3.0-generate-001", "veo-2.0-generate-001"],
         "declared_costs": {"per_second_eur": 0.35},
         "quota_status": "Non verificabile",
-        "limits_doc": "Generazione video a pagamento; richiede autorizzazione esplicita.",
+        "limits_doc": "Generazione video a pagamento; riutilizza la chiave Gemini API ma richiede Billing attivo su Google AI Studio / Cloud.",
         "is_free_local": False,
         "env_var": "GEMINI_API_KEY",
     },
@@ -405,9 +405,9 @@ class ProviderManager:
                     errors.append(f"HTTP {r.status_code}")
             elif provider_id in ("gemini_api", "google_veo_api"):
                 r = requests.get(
-                    "https://generativelanguage.googleapis.com/v1beta/models",
+                    "https://generativelanguage.googleapis.com/v1beta/models?pageSize=200",
                     headers={"x-goog-api-key": key},
-                    timeout=8,
+                    timeout=10,
                 )
                 if r.status_code in (401, 403):
                     status = "errore"
@@ -415,6 +415,21 @@ class ProviderManager:
                 elif r.status_code != 200:
                     status = "errore"
                     errors.append(f"HTTP {r.status_code}")
+                elif provider_id == "google_veo_api":
+                    veo_models = [
+                        str(m.get("name", "")).split("/")[-1]
+                        for m in r.json().get("models", [])
+                        if "veo" in str(m.get("name", "")).lower()
+                        and "predictLongRunning" in (m.get("supportedGenerationMethods") or [])
+                    ]
+                    if veo_models:
+                        quota = f"Attivi: {', '.join(veo_models[:4])}"
+                    else:
+                        status = "errore"
+                        quota = "Nessun modello Veo abilitato"
+                        errors.append(
+                            "Chiave Gemini valida, ma nessun modello Veo supportato su questo progetto (Google Veo API richiede Billing attivo su Google AI Studio / Google Cloud)."
+                        )
             elif provider_id == "huggingface_api":
                 r = requests.get(
                     "https://huggingface.co/api/whoami-v2",
