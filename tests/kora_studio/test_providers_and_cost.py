@@ -172,3 +172,14 @@ def test_gemini_key_shared_with_veo_and_health_route(isolated_env):
     health_res = client.get("/health")
     assert health_res.status_code == 200
     assert health_res.json()["ok"] is True
+
+    # Verify new multi-engine providers (fal_ai, qwen_wan_api, deepseek_api) and gating
+    provider_ids = {p["id"] for p in pm.list_providers()}
+    assert {"fal_ai", "qwen_wan_api", "deepseek_api", "huggingface_api"}.issubset(provider_ids)
+    fal_res = lab.execute_ai_video(
+        engine="fal_ai",
+        mode="text_to_video",
+        prompt="Onde calme sullo Ionio all'alba",
+        explicit_authorization=False,
+    )
+    assert fal_res["status"] == "requires_authorization"

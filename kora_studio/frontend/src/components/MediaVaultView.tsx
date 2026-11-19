@@ -45,8 +45,10 @@ export function MediaVaultView({ assets, onRefresh }: MediaVaultViewProps) {
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
 
-  // Google Veo / Flow AI Video Lab state
+  // Multi-engine AI Video Lab state (Google Veo / Flow, fal.ai Wan/Kling/LTX, Qwen/Wan, HuggingFace)
   const [showVeoLab, setShowVeoLab] = useState(false);
+  const [videoEngine, setVideoEngine] = useState<string>("google_veo_api");
+  const [videoModel, setVideoModel] = useState<string>("");
   const [veoMode, setVeoMode] = useState<"image_to_video" | "text_to_video">("image_to_video");
   const [veoAssetId, setVeoAssetId] = useState("");
   const [veoDuration, setVeoDuration] = useState(5);
@@ -54,6 +56,47 @@ export function MediaVaultView({ assets, onRefresh }: MediaVaultViewProps) {
   const [veoPrompt, setVeoPrompt] = useState("");
   const [veoAuthorized, setVeoAuthorized] = useState(false);
   const [veoBusy, setVeoBusy] = useState(false);
+
+  const ENGINE_OPTIONS: Array<{
+    id: string;
+    label: string;
+    models: Array<{ id: string; label: string }>;
+    costLabel: string;
+  }> = [
+    {
+      id: "google_veo_api",
+      label: "Google Veo / Flow (API ufficiale Gemini)",
+      models: [{ id: "", label: "Veo 2.0 / Veo 3.0 (auto)" }],
+      costLabel: `~${(0.35 * veoDuration).toFixed(2)} € stimati`,
+    },
+    {
+      id: "fal_ai",
+      label: "fal.ai (Wan 2.1 · Kling 1.6 · LTX-Video)",
+      models: [
+        { id: "", label: "Alibaba Wan 2.1 (auto I2V/T2V · ~0.20 €)" },
+        { id: "fal-ai/ltx-video", label: "LTX-Video veloce (~0.05 €)" },
+        { id: "fal-ai/kling-video/v1.6/standard/image-to-video", label: "Kling 1.6 I2V (~0.30 €)" },
+        { id: "fal-ai/kling-video/v1.6/standard/text-to-video", label: "Kling 1.6 T2V (~0.30 €)" },
+      ],
+      costLabel: videoModel.includes("ltx") ? "~0.05 €" : videoModel.includes("kling") ? "~0.30 €" : "~0.20 €",
+    },
+    {
+      id: "qwen_wan_api",
+      label: "Alibaba Qwen / Wan 2.1 (DashScope)",
+      models: [{ id: "", label: "wan2.1-i2v/t2v-turbo (~0.22 €)" }],
+      costLabel: "~0.22 € stimati",
+    },
+    {
+      id: "huggingface_api",
+      label: "Hugging Face (Wan 2.1 · CogVideoX)",
+      models: [
+        { id: "", label: "Wan-AI/Wan2.1 (auto I2V/T2V)" },
+        { id: "THUDM/CogVideoX-5b", label: "CogVideoX-5b" },
+      ],
+      costLabel: "Quota HF (0 € se free tier)",
+    },
+  ];
+  const currentEngineMeta = ENGINE_OPTIONS.find((e) => e.id === videoEngine) || ENGINE_OPTIONS[0];
 
   const imageAssets = assets.filter((a) => a.media_type === "image" && a.category !== "Logo");
   const displayed = (searchResults ?? assets).filter((a) =>
@@ -106,7 +149,9 @@ export function MediaVaultView({ assets, onRefresh }: MediaVaultViewProps) {
     setStatusMsg(null);
     try {
       const targetId = veoAssetId || imageAssets[0]?.id || null;
-      const res = await koraApi.runVeoMediaLab({
+      const res = await koraApi.runAIVideoLab({
+        engine: videoEngine,
+        model: videoModel || null,
         mode: veoMode,
         prompt: veoPrompt,
         duration_sec: veoDuration,
@@ -116,7 +161,7 @@ export function MediaVaultView({ assets, onRefresh }: MediaVaultViewProps) {
       });
       if (res.status === "completed") {
         setStatusMsg(
-          `Clip Veo generata e salvata nel Media Vault (${String(res.authenticity_status)}) — verifica umana richiesta prima della pubblicazione.`
+          `Clip generata (${String(res.model || videoEngine)}) e salvata nel Media Vault (${String(res.authenticity_status)}) — verifica umana richiesta prima della pubblicazione.`
         );
         onRefresh();
       } else {
@@ -150,7 +195,7 @@ export function MediaVaultView({ assets, onRefresh }: MediaVaultViewProps) {
             className="flex items-center gap-2 rounded-xl border border-[#224C66] bg-white px-4 py-2.5 text-xs font-medium text-[#224C66] hover:bg-[#224C66]/5"
           >
             <Film className="h-4 w-4" />
-            AI Video Lab (Veo / Flow I2V &amp; T2V)
+            AI Video Lab (Veo / Wan / Kling / LTX)
           </button>
           <label className="flex cursor-pointer items-center gap-2 rounded-xl bg-[#1D1B18] px-4 py-2.5 text-xs font-medium text-white hover:bg-[#224C66]">
             <Upload className="h-4 w-4" />
@@ -176,10 +221,10 @@ export function MediaVaultView({ assets, onRefresh }: MediaVaultViewProps) {
             <div>
               <h3 className="flex items-center gap-2 text-sm font-semibold text-[#1D1B18]">
                 <Sparkles className="h-4 w-4 text-[#9A8052]" />
-                AI Media Lab · Google Veo / Flow (Modalità C &amp; D)
+                AI Media Lab · Clip Video Multi-Motore (Modalità C &amp; D)
               </h3>
               <p className="text-xs text-[#6C6459]">
-                Image-to-Video conserva geometria, pergolato e orizzonte reali; Text-to-Video crea solo atmosfere illustrative etichettate.
+                Google Flow usa sotto il cofano <strong>Google Veo</strong>. Puoi scegliere tra Veo, Alibaba Wan 2.1 (famiglia Qwen), Kling 1.6, LTX-Video o Hugging Face.
               </p>
             </div>
             <div className="flex rounded-xl border border-[#DDD4C4] p-0.5 text-xs">
@@ -202,6 +247,40 @@ export function MediaVaultView({ assets, onRefresh }: MediaVaultViewProps) {
                 Text-to-Video (Mod. D)
               </button>
             </div>
+          </div>
+
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            <label className="block text-xs text-[#6C6459]">
+              Motore Video AI
+              <select
+                value={videoEngine}
+                onChange={(e) => {
+                  setVideoEngine(e.target.value);
+                  setVideoModel("");
+                }}
+                className="mt-1 w-full rounded-lg border border-[#DDD4C4] bg-[#FAF7F2] px-3 py-2 text-xs text-[#1D1B18]"
+              >
+                {ENGINE_OPTIONS.map((eng) => (
+                  <option key={eng.id} value={eng.id}>
+                    {eng.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="block text-xs text-[#6C6459]">
+              Modello
+              <select
+                value={videoModel}
+                onChange={(e) => setVideoModel(e.target.value)}
+                className="mt-1 w-full rounded-lg border border-[#DDD4C4] bg-[#FAF7F2] px-3 py-2 text-xs text-[#1D1B18]"
+              >
+                {currentEngineMeta.models.map((m) => (
+                  <option key={m.id || "auto"} value={m.id}>
+                    {m.label}
+                  </option>
+                ))}
+              </select>
+            </label>
           </div>
 
           <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
@@ -271,7 +350,7 @@ export function MediaVaultView({ assets, onRefresh }: MediaVaultViewProps) {
                 className="rounded border-[#DDD4C4]"
               />
               <span>
-                Autorizzo la chiamata a pagamento Google Veo (~{(0.35 * veoDuration).toFixed(2)} € stimati) usando la mia chiave Gemini/Veo.
+                Autorizzo la chiamata al motore selezionato ({currentEngineMeta.costLabel}) nel rispetto del budget impostato.
               </span>
             </label>
             <button
@@ -279,7 +358,7 @@ export function MediaVaultView({ assets, onRefresh }: MediaVaultViewProps) {
               disabled={veoBusy}
               className="rounded-xl bg-[#224C66] px-4 py-2 text-xs font-medium text-white hover:bg-[#1D1B18] disabled:opacity-50"
             >
-              {veoBusy ? "Generazione Veo in corso (può richiedere 1–2 min)..." : "Genera Clip con Veo"}
+              {veoBusy ? "Generazione video in corso (1–3 min)..." : "Genera Clip AI"}
             </button>
           </div>
         </form>

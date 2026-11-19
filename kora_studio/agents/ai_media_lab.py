@@ -458,3 +458,236 @@ class AIMediaLab:
             "estimated_eur": est_eur,
             "asset": ingested,
         }
+
+    def execute_ai_video(
+        self,
+        engine: str,
+        mode: str,
+        prompt: str,
+        duration_sec: int = 5,
+        asset_id: Optional[str] = None,
+        camera_motion: str = "movimento lento e naturale",
+        model: Optional[str] = None,
+        explicit_authorization: bool = False,
+    ) -> dict[str, Any]:
+        """Unified Image-to-Video (Mode C) and Text-to-Video (Mode D) executor across
+        Google Veo/Flow, fal.ai (Wan 2.1 / Kling / LTX-Video), Alibaba Qwen/Wan, and Hugging Face.
+        """
+        if engine == "google_veo_api":
+            return self.execute_veo_video(
+                mode=mode,
+                prompt=prompt,
+                duration_sec=duration_sec,
+                asset_id=asset_id,
+                camera_motion=camera_motion,
+                explicit_authorization=explicit_authorization,
+            )
+
+        is_i2v = mode == "image_to_video"
+        if is_i2v and not asset_id:
+            raise ValueError("Seleziona una fotografia reale dal Media Vault per Image-to-Video.")
+        asset = self.vault.get_asset(asset_id) if asset_id else None
+        if is_i2v and (not asset or asset["media_type"] != "image"):
+            raise ValueError("Image-to-Video richiede un'immagine valida nel Media Vault.")
+
+        final_prompt = (
+            (
+                f"Photorealistic slow subtle animation of the exact reference photograph ({asset['filename']}). "
+                f"Camera motion: {camera_motion}. "
+                "Keep architecture, pergola geometry, fixed furniture placement, signs, and horizon strictly unchanged. "
+                "Only gentle breeze on fabric/foliage, soft water ripples, and natural Mediterranean light. "
+                "Do not invent pools, buildings, terraces, or extra objects. "
+                f"Extra direction: {prompt}".strip()
+            )
+            if is_i2v and asset
+            else (
+                "Mediterranean luxury coastal atmosphere, natural sunlight, calm sea breeze, "
+                "warm sand and neutral linen tones, photorealistic cinematic 9:16 video. "
+                "Non-documentary atmospheric scene (do not depict specific invented club structures). "
+                f"{prompt}".strip()
+            )
+        )
+
+        guard = self.guardian.validate_generation_prompt(final_prompt, is_real_location=is_i2v)
+        if not guard["approved"]:
+            return {"status": "blocked", "violations": guard["violations"]}
+
+        est_by_engine = {
+            "fal_ai": 0.05 if (model and "ltx" in model) else (0.30 if (model and "kling" in model) else 0.20),
+            "qwen_wan_api": 0.22,
+            "huggingface_api": 0.0,
+        }
+        if engine not in est_by_engine:
+            raise ValueError(f"Motore video non supportato: {engine}")
+
+        est_eur = est_by_engine[engine]
+        auth = self.providers.cost_guard.check_authorization(
+            est_eur, explicit_user_authorization=explicit_authorization
+        )
+        if not auth["authorized"]:
+            return {
+                "status": "requires_authorization",
+                "reason": auth["reason"],
+                "estimated_eur": est_eur,
+                "prompt": final_prompt,
+            }
+
+        key = self.providers.get_decrypted_key(engine)
+        if not key:
+            return {
+                "status": "missing_credentials",
+                "reason": f"Chiave API per '{engine}' non configurata in Provider AI.",
+            }
+
+        img_data_uri: Optional[str] = None
+        img_bytes: Optional[bytes] = None
+        if is_i2v and asset:
+            img_path = Path(asset["working_path"] or asset["original_path"])
+            mime = "image/png" if img_path.suffix.lower() == ".png" else "image/jpeg"
+            img_bytes = img_path.read_bytes()
+            img_data_uri = f"data:{mime};base64,{base64.b64encode(img_bytes).decode('ascii')}"
+
+        video_bytes: Optional[bytes] = None
+        used_model = model or ""
+
+        if engine == "fal_ai":
+            if not used_model:
+                used_model = "fal-ai/wan-i2v" if is_i2v else "fal-ai/wan-t2v"
+            payload: dict[str, Any] = {
+                "prompt": final_prompt,
+                "aspect_ratio": "9:16",
+            }
+            if is_i2v and img_data_uri:
+                payload["image_url"] = img_data_uri
+            if "kling" in used_model:
+                payload["duration"] = "5" if duration_sec <= 5 else "10"
+            submit = requests.post(
+                f"https://queue.fal.run/{used_model}",
+                headers={"Authorization": f"Key {key}", "Content-Type": "application/json"},
+                json=payload,
+                timeout=30,
+            )
+            if submit.status_code not in (200, 201, 202):
+                raise RuntimeError(f"fal.ai errore avvio ({submit.status_code}): {submit.text[:220]}")
+            sdata = submit.json()
+            status_url = sdata.get("status_url")
+            response_url = sdata.get("response_url")
+            video_url = (sdata.get("video") or {}).get("url")
+            deadline = time.monotonic() + 240
+            while not video_url and status_url and time.monotonic() < deadline:
+                time.sleep(4)
+                st = requests.get(status_url, headers={"Authorization": f"Key {key}"}, timeout=20)
+                if st.status_code == 200 and st.json().get("status") == "COMPLETED":
+                    rr = requests.get(response_url, headers={"Authorization": f"Key {key}"}, timeout=20)
+                    if rr.status_code == 200:
+                        video_url = (rr.json().get("video") or {}).get("url")
+                    break
+                if st.status_code == 200 and st.json().get("status") == "FAILED":
+                    raise RuntimeError(f"fal.ai generazione fallita: {st.text[:200]}")
+            if not video_url:
+                raise RuntimeError("Timeout o nessun URL video restituito da fal.ai.")
+            dl = requests.get(video_url, timeout=90)
+            if dl.status_code != 200:
+                raise RuntimeError(f"Download video fal.ai fallito ({dl.status_code}).")
+            video_bytes = dl.content
+
+        elif engine == "qwen_wan_api":
+            used_model = model or ("wan2.1-i2v-turbo" if is_i2v else "wan2.1-t2v-turbo")
+            inp: dict[str, Any] = {"prompt": final_prompt}
+            if is_i2v and img_data_uri:
+                inp["img_url"] = img_data_uri
+            submit = requests.post(
+                "https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/video-generation/video-synthesis",
+                headers={
+                    "Authorization": f"Bearer {key}",
+                    "Content-Type": "application/json",
+                    "X-DashScope-Async": "enable",
+                },
+                json={
+                    "model": used_model,
+                    "input": inp,
+                    "parameters": {"size": "720*1280" if "t2v" in used_model else "720P", "duration": 5},
+                },
+                timeout=30,
+            )
+            if submit.status_code != 200:
+                raise RuntimeError(f"Alibaba Qwen/Wan errore ({submit.status_code}): {submit.text[:220]}")
+            task_id = (submit.json().get("output") or {}).get("task_id")
+            if not task_id:
+                raise RuntimeError(f"Task ID mancante da DashScope: {submit.text[:200]}")
+            video_url = None
+            deadline = time.monotonic() + 240
+            while time.monotonic() < deadline:
+                time.sleep(5)
+                tr = requests.get(
+                    f"https://dashscope-intl.aliyuncs.com/api/v1/tasks/{task_id}",
+                    headers={"Authorization": f"Bearer {key}"},
+                    timeout=20,
+                )
+                if tr.status_code != 200:
+                    continue
+                out = tr.json().get("output") or {}
+                if out.get("task_status") == "SUCCEEDED":
+                    video_url = out.get("video_url")
+                    break
+                if out.get("task_status") in ("FAILED", "CANCELED"):
+                    raise RuntimeError(f"DashScope task fallito: {out}")
+            if not video_url:
+                raise RuntimeError("Timeout Alibaba Qwen/Wan Video.")
+            dl = requests.get(video_url, timeout=90)
+            if dl.status_code != 200:
+                raise RuntimeError(f"Download video Alibaba Wan fallito ({dl.status_code}).")
+            video_bytes = dl.content
+
+        elif engine == "huggingface_api":
+            used_model = model or ("Wan-AI/Wan2.1-I2V-14B-480P" if is_i2v else "Wan-AI/Wan2.1-T2V-14B")
+            hf_payload: dict[str, Any] = {"inputs": final_prompt}
+            if is_i2v and img_bytes:
+                hf_payload["inputs"] = base64.b64encode(img_bytes).decode("ascii")
+                hf_payload["parameters"] = {"prompt": final_prompt}
+            r = requests.post(
+                f"https://router.huggingface.co/hf-inference/models/{used_model}",
+                headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                json=hf_payload,
+                timeout=180,
+            )
+            if r.status_code != 200:
+                raise RuntimeError(f"Hugging Face errore ({r.status_code}): {r.text[:220]}")
+            if not r.headers.get("content-type", "").startswith(("video/", "application/octet-stream")):
+                raise RuntimeError(f"Hugging Face ha risposto senza file video: {r.text[:200]}")
+            video_bytes = r.content
+
+        if not video_bytes:
+            raise RuntimeError("Nessun contenuto video restituito dal provider selezionato.")
+
+        out_mp4 = CACHE_DIR / f"{engine}_{mode}_{uuid.uuid4().hex[:8]}.mp4"
+        out_mp4.parent.mkdir(parents=True, exist_ok=True)
+        out_mp4.write_bytes(video_bytes)
+
+        self.providers.cost_guard.record_usage(
+            engine, mode, est_eur, est_eur, True, "completed", detail=used_model
+        )
+        auth_status = (
+            AuthenticityStatus.GENERATIVO_CONTROLLATO.value
+            if is_i2v
+            else AuthenticityStatus.ILLUSTRATIVO_SINTETICO.value
+        )
+        ingested = self.vault.ingest_file(
+            out_mp4,
+            origin=f"{engine}:{used_model}" + (f":{asset_id}" if asset_id else ""),
+            authenticity_status=auth_status,
+            usage_rights="autorizzato_kora",
+            category="Mare" if not is_i2v else (asset["category"] if asset else "Ospitalità"),
+            tags=[engine, mode, "da_verificare_umano"] + ([asset["category"].lower()] if asset else ["illustrativo"]),
+            original_filename=f"{engine}_{mode}_{uuid.uuid4().hex[:4]}.mp4",
+        )
+        return {
+            "status": "completed",
+            "engine": engine,
+            "model": used_model,
+            "mode": mode,
+            "authenticity_status": auth_status,
+            "requires_human_review": True,
+            "estimated_eur": est_eur,
+            "asset": ingested,
+        }

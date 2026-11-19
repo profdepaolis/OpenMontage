@@ -129,15 +129,67 @@ DEFAULT_PROVIDERS: list[dict[str, Any]] = [
     {
         "id": "huggingface_api",
         "name": "Hugging Face Inference API (Ufficiale)",
-        "capabilities": ["image_generation", "llm", "transcription"],
-        "endpoint": "https://api-inference.huggingface.co",
+        "capabilities": ["image_generation", "image_to_video", "text_to_video", "llm", "transcription"],
+        "endpoint": "https://router.huggingface.co/hf-inference",
         "auth_type": "Bearer Token (HF_TOKEN)",
-        "models": ["FLUX.1-schnell", "whisper-large-v3"],
-        "declared_costs": {"free_tier_eur": 0.0, "pro_rate_note": "Quota gratuita limitata su Inference API"},
+        "models": [
+            "Wan-AI/Wan2.1-T2V-14B",
+            "Wan-AI/Wan2.1-I2V-14B-480P",
+            "THUDM/CogVideoX-5b",
+            "Qwen/Qwen2.5-72B-Instruct",
+            "FLUX.1-schnell",
+            "whisper-large-v3",
+        ],
+        "declared_costs": {"free_tier_eur": 0.0, "pro_rate_note": "Quota gratuita limitata su Inference API / PRO"},
         "quota_status": "Non verificabile",
-        "limits_doc": "Rispetta i rate limit ufficiali; nessun aggiramento.",
+        "limits_doc": "Supporta anche modelli video open (Wan 2.1 di Alibaba/Qwen, CogVideoX) con HF_TOKEN.",
         "is_free_local": False,
         "env_var": "HF_TOKEN",
+    },
+    {
+        "id": "fal_ai",
+        "name": "fal.ai Video Hub (Wan 2.1 · Kling · LTX-Video)",
+        "capabilities": ["image_to_video", "text_to_video", "image_generation"],
+        "endpoint": "https://queue.fal.run",
+        "auth_type": "API Key (FAL_KEY)",
+        "models": [
+            "fal-ai/wan-i2v",
+            "fal-ai/wan-t2v",
+            "fal-ai/ltx-video",
+            "fal-ai/kling-video/v1.6/standard/image-to-video",
+            "fal-ai/kling-video/v1.6/standard/text-to-video",
+        ],
+        "declared_costs": {"wan_per_clip_eur": 0.20, "ltx_per_clip_eur": 0.05, "kling_per_clip_eur": 0.30},
+        "quota_status": "Non verificabile",
+        "limits_doc": "Motore multi-modello pay-per-use su fal.ai (include Alibaba Wan 2.1, Kling 1.6, LTX-Video).",
+        "is_free_local": False,
+        "env_var": "FAL_KEY",
+    },
+    {
+        "id": "qwen_wan_api",
+        "name": "Alibaba Qwen & Wan Video (DashScope Ufficiale)",
+        "capabilities": ["image_to_video", "text_to_video", "llm", "visual_analysis"],
+        "endpoint": "https://dashscope-intl.aliyuncs.com/api/v1",
+        "auth_type": "Bearer API Key (DASHSCOPE_API_KEY)",
+        "models": ["wan2.1-i2v-turbo", "wan2.1-t2v-turbo", "qwen-plus", "qwen-vl-max"],
+        "declared_costs": {"video_per_clip_eur": 0.22, "llm_per_call_eur": 0.005},
+        "quota_status": "Non verificabile",
+        "limits_doc": "API ufficiale Alibaba Cloud Model Studio (Qwen per testi/analisi + Wan 2.1 per clip video I2V/T2V).",
+        "is_free_local": False,
+        "env_var": "DASHSCOPE_API_KEY",
+    },
+    {
+        "id": "deepseek_api",
+        "name": "DeepSeek API (Solo Testo / Copy / Regia)",
+        "capabilities": ["llm"],
+        "endpoint": "https://api.deepseek.com/v1",
+        "auth_type": "Bearer API Key (DEEPSEEK_API_KEY)",
+        "models": ["deepseek-chat", "deepseek-reasoner"],
+        "declared_costs": {"llm_per_call_eur": 0.002},
+        "quota_status": "Non verificabile",
+        "limits_doc": "Modello testuale (copy, script e storyboard); non genera file video MP4.",
+        "is_free_local": False,
+        "env_var": "DEEPSEEK_API_KEY",
     },
 ]
 
@@ -178,6 +230,25 @@ class ProviderManager:
                             p["limits_doc"],
                             1 if p["is_free_local"] else 0,
                             now,
+                        ),
+                    )
+                else:
+                    conn.execute(
+                        """
+                        UPDATE providers
+                        SET name = ?, capabilities_json = ?, endpoint = ?, auth_type = ?,
+                            models_json = ?, declared_costs_json = ?, limits_doc = ?
+                        WHERE id = ?
+                        """,
+                        (
+                            p["name"],
+                            json.dumps(p["capabilities"]),
+                            p["endpoint"],
+                            p["auth_type"],
+                            json.dumps(p["models"]),
+                            json.dumps(p["declared_costs"], ensure_ascii=False),
+                            p["limits_doc"],
+                            p["id"],
                         ),
                     )
         self.refresh_local_statuses()
@@ -353,6 +424,50 @@ class ProviderManager:
                 if r.status_code in (401, 403):
                     status = "errore"
                     errors.append("Token Hugging Face non valido (401/403)")
+                elif r.status_code != 200:
+                    status = "errore"
+                    errors.append(f"HTTP {r.status_code}")
+            elif provider_id == "fal_ai":
+                # Probe a lightweight status/models check on fal.ai queue API
+                r = requests.get(
+                    "https://rest.alpha.fal.ai/tokens/current",
+                    headers={"Authorization": f"Key {key}"},
+                    timeout=8,
+                )
+                if r.status_code in (401, 403):
+                    status = "errore"
+                    errors.append("FAL_KEY non valida (401/403)")
+                elif r.status_code in (200, 404):
+                    status = "operativo"
+                    quota = "Attivo (pay-per-use)"
+                else:
+                    status = "errore"
+                    errors.append(f"HTTP {r.status_code}")
+            elif provider_id == "qwen_wan_api":
+                r = requests.get(
+                    "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models",
+                    headers={"Authorization": f"Bearer {key}"},
+                    timeout=8,
+                )
+                if r.status_code in (401, 403):
+                    status = "errore"
+                    errors.append("DASHSCOPE_API_KEY non valida (401/403)")
+                elif r.status_code != 200:
+                    status = "errore"
+                    errors.append(f"HTTP {r.status_code}")
+            elif provider_id == "deepseek_api":
+                r = requests.get(
+                    "https://api.deepseek.com/v1/user/balance",
+                    headers={"Authorization": f"Bearer {key}"},
+                    timeout=8,
+                )
+                if r.status_code == 200:
+                    b = r.json().get("balance_infos", [])
+                    if b:
+                        quota = f"{b[0].get('total_balance', '?')} {b[0].get('currency', '')}".strip()
+                elif r.status_code in (401, 403):
+                    status = "errore"
+                    errors.append("DEEPSEEK_API_KEY non valida (401/403)")
                 elif r.status_code != 200:
                     status = "errore"
                     errors.append(f"HTTP {r.status_code}")

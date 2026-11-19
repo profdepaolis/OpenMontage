@@ -193,6 +193,20 @@ export const koraApi = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+  runAIVideoLab: (payload: {
+    engine: string;
+    model?: string | null;
+    mode: "image_to_video" | "text_to_video";
+    prompt: string;
+    duration_sec: number;
+    asset_id?: string | null;
+    camera_motion?: string;
+    explicit_authorization: boolean;
+  }) =>
+    apiFetch<Record<string, unknown>>("/api/media-lab/video", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
   setupRemotion: () =>
     apiFetch<{
       remotion: {

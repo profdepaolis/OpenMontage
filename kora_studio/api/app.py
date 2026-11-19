@@ -99,6 +99,17 @@ class VeoVideoRequest(BaseModel):
     explicit_authorization: bool = False
 
 
+class AIVideoRequest(BaseModel):
+    engine: str = "google_veo_api"  # google_veo_api | fal_ai | qwen_wan_api | huggingface_api
+    model: Optional[str] = None
+    mode: str = "image_to_video"
+    prompt: str = ""
+    duration_sec: int = 5
+    asset_id: Optional[str] = None
+    camera_motion: str = "movimento lento e naturale"
+    explicit_authorization: bool = False
+
+
 def create_app(db_path: Optional[Path] = None, auto_seed: bool = True) -> FastAPI:
     db = Database(db_path=db_path)
     director = KoraDirector(db=db)
@@ -505,6 +516,22 @@ def create_app(db_path: Optional[Path] = None, auto_seed: bool = True) -> FastAP
     def run_veo_media_lab(req: VeoVideoRequest) -> dict[str, Any]:
         try:
             return director.media_lab.execute_veo_video(
+                mode=req.mode,
+                prompt=req.prompt,
+                duration_sec=req.duration_sec,
+                asset_id=req.asset_id,
+                camera_motion=req.camera_motion,
+                explicit_authorization=req.explicit_authorization,
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+    @app.post("/api/media-lab/video")
+    def run_ai_video_media_lab(req: AIVideoRequest) -> dict[str, Any]:
+        try:
+            return director.media_lab.execute_ai_video(
+                engine=req.engine,
+                model=req.model,
                 mode=req.mode,
                 prompt=req.prompt,
                 duration_sec=req.duration_sec,
