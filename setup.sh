@@ -20,10 +20,13 @@ if [ ! -d ".venv" ]; then
   python3 -m venv .venv
 fi
 
-# 3. Install Python dependencies
-echo "[..] Installazione/verifica dipendenze Python..."
+# 3. Install core KORA STUDIO Python dependencies (prebuilt wheels, no Rust compiler needed)
+echo "[..] Installazione/verifica dipendenze Python core KORA STUDIO..."
 .venv/bin/python -m pip install --upgrade pip >/dev/null
-.venv/bin/pip install -r requirements.txt imageio-ffmpeg av piper-tts edge-tts gTTS fonttools brotli pytest httpx python-multipart >/dev/null
+.venv/bin/pip install --prefer-binary -r kora_studio/requirements_kora.txt >/dev/null
+
+# Optional extras (best-effort, never block setup on older macOS/Intel)
+.venv/bin/pip install --prefer-binary av piper-tts gTTS >/dev/null 2>&1 || true
 
 # 4. Ensure FFmpeg & FFprobe available in .venv/bin
 if [ ! -x ".venv/bin/ffmpeg" ]; then
@@ -36,8 +39,8 @@ if [ ! -x ".venv/bin/ffprobe" ]; then
   elif command -v npm >/dev/null 2>&1; then
     echo "[..] Installazione ffprobe-static locale..."
     mkdir -p .runtime/ffprobe
-    npm install --prefix .runtime/ffprobe ffprobe-static --no-audit --no-fund >/dev/null
-    FFPROBE_BIN="$(.runtime/ffprobe/node_modules/.bin/ffprobe-static 2>/dev/null || find .runtime/ffprobe -name ffprobe -type f | head -n 1)"
+    npm install --prefix .runtime/ffprobe ffprobe-static --no-audit --no-fund >/dev/null 2>&1 || true
+    FFPROBE_BIN="$(find .runtime/ffprobe -name ffprobe -type f 2>/dev/null | head -n 1 || true)"
     if [ -n "$FFPROBE_BIN" ]; then
       chmod +x "$FFPROBE_BIN"
       ln -sf "$ROOT_DIR/$FFPROBE_BIN" .venv/bin/ffprobe 2>/dev/null || ln -sf "$FFPROBE_BIN" .venv/bin/ffprobe
@@ -47,26 +50,32 @@ fi
 
 # 5. Build Frontend Static Bundle & Remotion Composer if Node/npm is present
 if command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then
-  echo "[..] Verifica e build frontend KORA STUDIO..."
-  (
-    cd kora_studio/frontend
-    if [ ! -d "node_modules" ]; then
-      npm install --no-audit --no-fund
-    fi
-    npm run build
-  )
+  if [ ! -f "kora_studio/frontend/out/index.html" ]; then
+    echo "[..] Build frontend KORA STUDIO..."
+    (
+      cd kora_studio/frontend
+      if [ ! -d "node_modules" ]; then
+        npm install --no-audit --no-fund
+      fi
+      npm run build
+    )
+  else
+    echo "[OK] Frontend statico KORA STUDIO già pronto."
+  fi
   if [ -d "remotion-composer" ]; then
     echo "[..] Preparazione Remotion Composer locale..."
     (
       cd remotion-composer
       if [ ! -d "node_modules" ]; then
-        npm install --no-audit --no-fund
+        npm install --no-audit --no-fund >/dev/null 2>&1 || true
       fi
-      ./node_modules/.bin/remotion browser ensure >/dev/null 2>&1 || echo "[INFO] Browser Chromium Remotion non scaricabile (o Chrome già presente): FFmpeg resterà il motore principale."
+      if [ -x "./node_modules/.bin/remotion" ]; then
+        ./node_modules/.bin/remotion browser ensure >/dev/null 2>&1 || echo "[INFO] Browser Remotion non scaricato (o Chrome già presente): FFmpeg resterà il motore principale."
+      fi
     )
   fi
 else
-  echo "[AVVISO] Node/npm non trovato: usa il bundle statico esistente se presente in kora_studio/frontend/out."
+  echo "[OK] Node/npm non richiesto: uso il bundle statico già incluso in kora_studio/frontend/out."
 fi
 
 # 6. Seed KORA assets & run diagnostics

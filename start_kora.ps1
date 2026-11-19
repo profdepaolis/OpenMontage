@@ -6,7 +6,7 @@ if (-not (Test-Path ".venv\Scripts\python.exe")) {
     Write-Host "Creazione ambiente virtuale .venv..."
     python -m venv .venv
     .venv\Scripts\python.exe -m pip install --upgrade pip
-    .venv\Scripts\pip.exe install -r requirements.txt imageio-ffmpeg av piper-tts edge-tts gTTS fonttools brotli pytest httpx python-multipart
+    .venv\Scripts\pip.exe install --prefer-binary -r kora_studio\requirements_kora.txt
 }
 
 if (-not (Test-Path "kora_studio\frontend\out\index.html")) {

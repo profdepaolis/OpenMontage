@@ -211,8 +211,54 @@ def probe_media(path: Path) -> dict[str, Any]:
                 "streams": streams_out,
                 "format": {"duration": str(dur), "size": str(path.stat().st_size)},
             }
-    except Exception as exc:
-        raise ValueError(f"Impossibile analizzare il file multimediale: {exc}") from exc
+    except Exception:
+        pass
+
+    # Fallback to `ffmpeg -i` stderr parsing if neither ffprobe nor PyAV is available
+    ffmpeg = find_ffmpeg()
+    if ffmpeg:
+        import re
+
+        proc = subprocess.run(
+            [ffmpeg, "-hide_banner", "-i", str(path)],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        info = proc.stderr or ""
+        streams_out = []
+        dur_sec = 0.0
+        dm = re.search(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)", info)
+        if dm:
+            dur_sec = int(dm.group(1)) * 3600 + int(dm.group(2)) * 60 + float(dm.group(3))
+        vm = re.search(r"Video:\s*([a-zA-Z0-9_]+).*?,\s*(\d{2,5})x(\d{2,5}).*?(?:,\s*([\d.]+)\s*fps)?", info)
+        if vm:
+            fps_val = vm.group(4) or "25"
+            streams_out.append(
+                {
+                    "codec_type": "video",
+                    "codec_name": vm.group(1).lower(),
+                    "width": int(vm.group(2)),
+                    "height": int(vm.group(3)),
+                    "r_frame_rate": f"{fps_val}/1" if "/" not in fps_val else fps_val,
+                }
+            )
+        am = re.search(r"Audio:\s*([a-zA-Z0-9_]+).*?,\s*(\d+)\s*Hz", info)
+        if am:
+            streams_out.append(
+                {
+                    "codec_type": "audio",
+                    "codec_name": am.group(1).lower(),
+                    "sample_rate": am.group(2),
+                    "channels": 2,
+                }
+            )
+        if streams_out:
+            return {
+                "streams": streams_out,
+                "format": {"duration": str(dur_sec), "size": str(path.stat().st_size)},
+            }
+    raise ValueError(f"Impossibile analizzare il file multimediale: {path.name}")
 
 
 def parse_fps(rate_str: str) -> float:
