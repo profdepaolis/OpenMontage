@@ -5,6 +5,7 @@ import {
   AlertTriangle,
   CheckCircle2,
   Cpu,
+  Download,
   KeyRound,
   Mic,
   RefreshCw,
@@ -26,6 +27,9 @@ interface ProvidersViewProps {
 export function ProvidersView({ providers, budget, voices, onRefresh }: ProvidersViewProps) {
   const [keyInputs, setKeyInputs] = useState<Record<string, string>>({});
   const [voiceIds, setVoiceIds] = useState<Record<string, string>>({});
+  const [accountVoices, setAccountVoices] = useState<
+    Array<{ voice_id: string; name: string; category: string }>
+  >([]);
   const [paidInput, setPaidInput] = useState<string>(
     budget ? String(budget.paid_budget_eur) : "0"
   );
@@ -147,6 +151,47 @@ export function ProvidersView({ providers, budget, voices, onRefresh }: Provider
     }
   };
 
+  const handleInstallPiper = async () => {
+    setBusyId("piper_tts_local");
+    setMsg(null);
+    try {
+      const res = await koraApi.installPiperModel();
+      setMsg(
+        `Modello vocale italiano Piper scaricato (${res.files.join(", ")}). Piper TTS Locale ora è operativo!`
+      );
+      onRefresh();
+    } catch (err) {
+      setMsg((err as Error).message);
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const handleFetchElevenLabsVoices = async () => {
+    setBusyId("fetch_el_voices");
+    setMsg(null);
+    try {
+      const list = await koraApi.fetchElevenLabsVoices();
+      setAccountVoices(list);
+      // Auto-match voices named Brando / Tiziana / Felice if present
+      const updates: Record<string, string> = { ...voiceIds };
+      for (const v of list) {
+        const low = v.name.toLowerCase();
+        if (low.includes("brando") && !updates["brando"]) updates["brando"] = v.voice_id;
+        if (low.includes("tiziana") && !updates["tiziana"]) updates["tiziana"] = v.voice_id;
+        if (low.includes("felice") && !updates["felice"]) updates["felice"] = v.voice_id;
+      }
+      setVoiceIds(updates);
+      setMsg(
+        `Caricate ${list.length} voci dal tuo account ElevenLabs. Selezionale qui sotto e clicca "Salva ID".`
+      );
+    } catch (err) {
+      setMsg((err as Error).message);
+    } finally {
+      setBusyId(null);
+    }
+  };
+
   const handleSaveVoiceId = async (voiceId: string) => {
     setBusyId(`voice_${voiceId}`);
     try {
@@ -219,7 +264,7 @@ export function ProvidersView({ providers, budget, voices, onRefresh }: Provider
           </div>
           <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
             <span className="text-xs text-[#6C6459]">
-              Nessun servizio a pagamento viene attivato senza autorizzazione esplicita.
+              Per usare ElevenLabs o Google Veo nei Reel, imposta il Budget autorizzato &gt; 0 € (es. 5 €) e salva.
             </span>
             <button
               type="submit"
@@ -292,12 +337,22 @@ export function ProvidersView({ providers, budget, voices, onRefresh }: Provider
         </div>
 
         <div className="rounded-2xl border border-[#DDD4C4] bg-white p-5 space-y-3">
-          <div className="flex items-center gap-2 text-sm font-medium text-[#1D1B18]">
-            <Mic className="h-4 w-4 text-[#9A8052]" />
-            Mappatura Voci ElevenLabs (Brando · Tiziana · Felice)
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2 text-sm font-medium text-[#1D1B18]">
+              <Mic className="h-4 w-4 text-[#9A8052]" />
+              Mappatura Voci ElevenLabs (Brando · Tiziana · Felice)
+            </div>
+            <button
+              type="button"
+              onClick={handleFetchElevenLabsVoices}
+              disabled={busyId === "fetch_el_voices"}
+              className="rounded-lg bg-[#1D1B18] px-3 py-1.5 text-[11px] font-medium text-white hover:bg-[#224C66] disabled:opacity-50"
+            >
+              {busyId === "fetch_el_voices" ? "Caricamento..." : "Carica voci da ElevenLabs"}
+            </button>
           </div>
           <p className="text-xs text-[#6C6459]">
-            Inserisci i Voice ID dal tuo account ElevenLabs per far leggere a Brando o Tiziana qualsiasi nuovo copione generato dall&apos;app.
+            Collega i Voice ID del tuo account ElevenLabs (e autorizza un budget &gt; 0 €) affinché Brando e Tiziana leggano ogni nuovo copione.
           </p>
           <div className="space-y-2">
             {voices
@@ -305,15 +360,32 @@ export function ProvidersView({ providers, budget, voices, onRefresh }: Provider
               .map((v) => (
                 <div key={v.id} className="flex items-center gap-2">
                   <span className="w-16 text-xs font-medium text-[#1D1B18]">{v.label}</span>
-                  <input
-                    type="text"
-                    value={voiceIds[v.id] || ""}
-                    onChange={(e) =>
-                      setVoiceIds((prev) => ({ ...prev, [v.id]: e.target.value }))
-                    }
-                    placeholder={`Voice ID ElevenLabs per ${v.label}`}
-                    className="flex-1 rounded-lg border border-[#DDD4C4] bg-[#FAF7F2] px-3 py-1.5 text-xs"
-                  />
+                  {accountVoices.length > 0 ? (
+                    <select
+                      value={voiceIds[v.id] || ""}
+                      onChange={(e) =>
+                        setVoiceIds((prev) => ({ ...prev, [v.id]: e.target.value }))
+                      }
+                      className="flex-1 rounded-lg border border-[#DDD4C4] bg-[#FAF7F2] px-2.5 py-1.5 text-xs"
+                    >
+                      <option value="">-- Seleziona voce ElevenLabs --</option>
+                      {accountVoices.map((av) => (
+                        <option key={av.voice_id} value={av.voice_id}>
+                          {av.name} ({av.category || "custom"})
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      type="text"
+                      value={voiceIds[v.id] || ""}
+                      onChange={(e) =>
+                        setVoiceIds((prev) => ({ ...prev, [v.id]: e.target.value }))
+                      }
+                      placeholder={`Voice ID ElevenLabs per ${v.label}`}
+                      className="flex-1 rounded-lg border border-[#DDD4C4] bg-[#FAF7F2] px-3 py-1.5 text-xs"
+                    />
+                  )}
                   <button
                     type="button"
                     onClick={() => handleSaveVoiceId(v.id)}
@@ -390,6 +462,20 @@ export function ProvidersView({ providers, budget, voices, onRefresh }: Provider
             )}
 
             <p className="text-[11px] text-[#6C6459]">{p.limits_doc}</p>
+
+            {p.id === "piper_tts_local" && p.operational_status !== "operativo" && (
+              <button
+                type="button"
+                disabled={busyId === "piper_tts_local"}
+                onClick={handleInstallPiper}
+                className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-[#224C66] px-3 py-2 text-xs font-medium text-white hover:bg-[#1D1B18] disabled:opacity-50"
+              >
+                <Download className="h-3.5 w-3.5" />
+                {busyId === "piper_tts_local"
+                  ? "Download voce italiana in corso..."
+                  : "Scarica voce italiana Piper offline (0 €)"}
+              </button>
+            )}
 
             {!p.is_free_local && (
               <div className="flex flex-col gap-2 sm:flex-row">

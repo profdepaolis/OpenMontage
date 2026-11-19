@@ -144,3 +144,31 @@ def test_voice_director_never_reuses_old_recording_for_new_script(isolated_env):
     assert res["audio_path"] is None
     assert res["status"] == "richiede_sintesi_o_registrazione"
     assert res["word_check"]["passed"] is False
+
+
+def test_gemini_key_shared_with_veo_and_health_route(isolated_env):
+    from fastapi.testclient import TestClient
+    from kora_studio.agents.ai_media_lab import AIMediaLab
+    from kora_studio.api.app import app
+
+    db = Database(isolated_env["db_path"])
+    vault = MediaVault(db)
+    brain = BrandBrain(db)
+    pm = ProviderManager(db)
+    pm.set_api_key("gemini_api", "AIzaSyTestFakeKeyForUnitTest0001")
+    assert pm.get_decrypted_key("google_veo_api") == "AIzaSyTestFakeKeyForUnitTest0001"
+
+    lab = AIMediaLab(vault, brain, pm)
+    # Without explicit paid authorization, Veo must pause safely under 0 EUR default budget
+    res = lab.execute_veo_video(
+        mode="text_to_video",
+        prompt="Onde calme sullo Ionio all'alba",
+        duration_sec=5,
+        explicit_authorization=False,
+    )
+    assert res["status"] == "requires_authorization"
+
+    client = TestClient(app)
+    health_res = client.get("/health")
+    assert health_res.status_code == 200
+    assert health_res.json()["ok"] is True

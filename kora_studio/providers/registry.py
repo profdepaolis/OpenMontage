@@ -109,7 +109,7 @@ DEFAULT_PROVIDERS: list[dict[str, Any]] = [
         "models": ["gpt-4.1-mini", "gpt-4o-mini-tts", "whisper-1", "gpt-image-1"],
         "declared_costs": {"llm_per_call_eur": 0.01, "tts_per_1k_chars_eur": 0.015, "image_per_gen_eur": 0.04},
         "quota_status": "Non verificabile",
-        "limits_doc": "L'abbonamento ChatGPT Plus non include crediti API.",
+        "limits_doc": "L'abbonamento ChatGPT Plus web non include crediti API; richiede credito prepagato su platform.openai.com.",
         "is_free_local": False,
         "env_var": "OPENAI_API_KEY",
     },
@@ -215,6 +215,8 @@ class ProviderManager:
         env_var = self._get_env_var_name(provider_id)
         if env_var and os.environ.get(env_var):
             return os.environ.get(env_var)
+        if provider_id == "google_veo_api":
+            return self.get_decrypted_key("gemini_api")
         return None
 
     def refresh_local_statuses(self) -> None:
@@ -432,6 +434,62 @@ class ProviderManager:
         final_rem = check_remotion_runtime()
         prov = self.get_provider("remotion_local")
         return {"remotion": final_rem, "provider": prov, "logs": logs}
+
+    def install_piper_italian_voice(self) -> dict[str, Any]:
+        """Download free offline Italian Piper TTS voice model (it_IT-paola-medium) into kora_data/voices/piper/."""
+        from kora_studio.config import VOICES_PIPER_DIR
+
+        VOICES_PIPER_DIR.mkdir(parents=True, exist_ok=True)
+        base_url = "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/it/it_IT/paola/medium"
+        files = {
+            "it_IT-paola-medium.onnx": f"{base_url}/it_IT-paola-medium.onnx",
+            "it_IT-paola-medium.onnx.json": f"{base_url}/it_IT-paola-medium.onnx.json",
+        }
+        downloaded: list[str] = []
+        for fname, url in files.items():
+            dest = VOICES_PIPER_DIR / fname
+            if dest.is_file() and dest.stat().st_size > 100:
+                downloaded.append(fname)
+                continue
+            r = requests.get(url, timeout=120, stream=True)
+            if r.status_code != 200:
+                raise RuntimeError(f"Download fallito ({r.status_code}) per {fname}")
+            with open(dest, "wb") as fh:
+                for chunk in r.iter_content(chunk_size=65536):
+                    if chunk:
+                        fh.write(chunk)
+            downloaded.append(fname)
+
+        self.refresh_local_statuses()
+        return {
+            "ok": True,
+            "files": downloaded,
+            "directory": str(VOICES_PIPER_DIR),
+            "provider": self.get_provider("piper_tts_local"),
+        }
+
+    def fetch_elevenlabs_voices(self) -> list[dict[str, Any]]:
+        """Fetch real voice list from user's configured ElevenLabs account."""
+        key = self.get_decrypted_key("elevenlabs_api")
+        if not key:
+            raise ValueError("Inserisci e salva prima la tua API key ElevenLabs.")
+        r = requests.get(
+            "https://api.elevenlabs.io/v1/voices",
+            headers={"xi-api-key": key},
+            timeout=15,
+        )
+        if r.status_code != 200:
+            raise RuntimeError(f"Errore ElevenLabs ({r.status_code}): impossibile leggere le voci.")
+        data = r.json()
+        return [
+            {
+                "voice_id": v.get("voice_id", ""),
+                "name": v.get("name", ""),
+                "category": v.get("category", ""),
+            }
+            for v in data.get("voices", [])
+            if v.get("voice_id")
+        ]
 
     def _row_to_dict(self, row: Any) -> dict[str, Any]:
         has_key = False

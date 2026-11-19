@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import base64
+import time
 import uuid
 from pathlib import Path
 from typing import Any, Optional
 
+import requests
 from PIL import Image, ImageOps
 
 from kora_studio.agents.brand_guardian import BrandGuardian
@@ -287,4 +290,171 @@ class AIMediaLab:
             "authenticity_status": AuthenticityStatus.ILLUSTRATIVO_SINTETICO.value,
             "disclosure": "Scena illustrativa non documentaria: non presentare come ripresa reale del locale KORA.",
             "reason": selection.get("reason", ""),
+        }
+
+    def execute_veo_video(
+        self,
+        mode: str,
+        prompt: str,
+        duration_sec: int = 5,
+        asset_id: Optional[str] = None,
+        camera_motion: str = "movimento lento e naturale",
+        explicit_authorization: bool = False,
+    ) -> dict[str, Any]:
+        """Execute real Google Veo / Flow Image-to-Video (Mode C) or Text-to-Video (Mode D)
+        using official Gemini/Veo REST API, with strict BrandGuardian & CostGuard checks.
+        """
+        if duration_sec not in (3, 4, 5, 6, 8):
+            raise ValueError("Durata consentita per Veo: 3, 4, 5, 6 o 8 secondi.")
+
+        is_i2v = mode == "image_to_video"
+        if is_i2v and not asset_id:
+            raise ValueError("Seleziona una fotografia reale dal Media Vault per Image-to-Video.")
+
+        asset = self.vault.get_asset(asset_id) if asset_id else None
+        if is_i2v and (not asset or asset["media_type"] != "image"):
+            raise ValueError("Image-to-Video richiede un'immagine valida nel Media Vault.")
+
+        final_prompt = (
+            (
+                f"Photorealistic slow subtle animation of the exact reference photograph ({asset['filename']}). "
+                f"Camera motion: {camera_motion}. "
+                "Keep architecture, pergola geometry, fixed furniture placement, signs, and horizon strictly unchanged. "
+                "Only gentle breeze on fabric/foliage, soft water ripples, and natural Mediterranean light. "
+                "Do not invent pools, buildings, terraces, or extra objects. "
+                f"Extra direction: {prompt}".strip()
+            )
+            if is_i2v and asset
+            else (
+                "Mediterranean luxury coastal atmosphere, natural sunlight, calm sea breeze, "
+                "warm sand and neutral linen tones, photorealistic cinematic 9:16 video. "
+                "Non-documentary atmospheric scene (do not depict specific invented club structures). "
+                f"{prompt}".strip()
+            )
+        )
+
+        guard = self.guardian.validate_generation_prompt(final_prompt, is_real_location=is_i2v)
+        if not guard["approved"]:
+            return {"status": "blocked", "violations": guard["violations"]}
+
+        est_eur = round(0.35 * duration_sec, 2)
+        auth = self.providers.cost_guard.check_authorization(
+            est_eur, explicit_user_authorization=explicit_authorization
+        )
+        if not auth["authorized"]:
+            return {
+                "status": "requires_authorization",
+                "reason": auth["reason"],
+                "estimated_eur": est_eur,
+                "prompt": final_prompt,
+            }
+
+        key = self.providers.get_decrypted_key("google_veo_api") or self.providers.get_decrypted_key("gemini_api")
+        if not key:
+            return {
+                "status": "missing_credentials",
+                "reason": "Chiave Google Gemini / Veo non configurata in AI Providers.",
+            }
+
+        # Build predictLongRunning payload for Google Veo API
+        instance: dict[str, Any] = {"prompt": final_prompt}
+        if is_i2v and asset:
+            img_path = Path(asset["working_path"] or asset["original_path"])
+            mime = "image/png" if img_path.suffix.lower() == ".png" else "image/jpeg"
+            b64 = base64.b64encode(img_path.read_bytes()).decode("ascii")
+            instance["image"] = {"bytesBase64Encoded": b64, "mimeType": mime}
+
+        payload = {
+            "instances": [instance],
+            "parameters": {
+                "aspectRatio": "9:16",
+                "durationSeconds": min(8, max(5, duration_sec)),
+            },
+        }
+
+        models_to_try = ["veo-2.0-generate-001", "veo-3.0-generate-preview"]
+        op_name: Optional[str] = None
+        last_err = ""
+        used_model = models_to_try[0]
+        for model in models_to_try:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:predictLongRunning"
+            r = requests.post(
+                url,
+                headers={"x-goog-api-key": key, "Content-Type": "application/json"},
+                json=payload,
+                timeout=30,
+            )
+            if r.status_code == 200:
+                op_name = r.json().get("name")
+                used_model = model
+                break
+            last_err = f"{model} HTTP {r.status_code}: {r.text[:240]}"
+
+        if not op_name:
+            self.providers.cost_guard.record_usage(
+                "google_veo_api", mode, est_eur, 0.0, True, "error", detail=last_err
+            )
+            raise RuntimeError(f"Google Veo API non ha avviato la generazione: {last_err}")
+
+        # Poll operation up to 180s
+        video_uri: Optional[str] = None
+        deadline = time.monotonic() + 180
+        op_url = f"https://generativelanguage.googleapis.com/v1beta/{op_name}"
+        while time.monotonic() < deadline:
+            time.sleep(5)
+            pr = requests.get(op_url, headers={"x-goog-api-key": key}, timeout=20)
+            if pr.status_code != 200:
+                continue
+            pdata = pr.json()
+            if pdata.get("done"):
+                if pdata.get("error"):
+                    raise RuntimeError(f"Veo error: {pdata['error']}")
+                resp = pdata.get("response", {})
+                samples = (
+                    resp.get("generateVideoResponse", {}).get("generatedSamples")
+                    or resp.get("predictions")
+                    or []
+                )
+                if samples:
+                    v_obj = samples[0].get("video") or samples[0]
+                    video_uri = v_obj.get("uri")
+                break
+
+        if not video_uri:
+            raise RuntimeError("Timeout o nessuna URI video restituita da Google Veo API.")
+
+        dl = requests.get(video_uri, headers={"x-goog-api-key": key}, timeout=90)
+        if dl.status_code != 200:
+            raise RuntimeError(f"Impossibile scaricare il video Veo generato ({dl.status_code}).")
+
+        out_mp4 = CACHE_DIR / f"veo_{mode}_{uuid.uuid4().hex[:8]}.mp4"
+        out_mp4.parent.mkdir(parents=True, exist_ok=True)
+        out_mp4.write_bytes(dl.content)
+
+        self.providers.cost_guard.record_usage(
+            "google_veo_api", mode, est_eur, est_eur, True, "completed", detail=used_model
+        )
+
+        auth_status = (
+            AuthenticityStatus.GENERATIVO_CONTROLLATO.value
+            if is_i2v
+            else AuthenticityStatus.ILLUSTRATIVO_SINTETICO.value
+        )
+        ingested = self.vault.ingest_file(
+            out_mp4,
+            origin=f"veo_flow:{used_model}" + (f":{asset_id}" if asset_id else ""),
+            authenticity_status=auth_status,
+            usage_rights="autorizzato_kora",
+            category="Mare" if not is_i2v else (asset["category"] if asset else "Ospitalità"),
+            tags=["veo", mode, "da_verificare_umano"] + ([asset["category"].lower()] if asset else ["illustrativo"]),
+            original_filename=f"veo_{mode}_{uuid.uuid4().hex[:4]}.mp4",
+        )
+        return {
+            "status": "completed",
+            "model": used_model,
+            "mode": mode,
+            "authenticity_status": auth_status,
+            "requires_human_review": True,
+            "estimated_eur": est_eur,
+            "asset": ingested,
         }

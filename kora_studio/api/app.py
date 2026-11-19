@@ -90,6 +90,15 @@ class StoryboardUpdateRequest(BaseModel):
     scenes: list[dict[str, Any]]
 
 
+class VeoVideoRequest(BaseModel):
+    mode: str = "image_to_video"  # image_to_video | text_to_video
+    prompt: str = ""
+    duration_sec: int = 5
+    asset_id: Optional[str] = None
+    camera_motion: str = "movimento lento e naturale"
+    explicit_authorization: bool = False
+
+
 def create_app(db_path: Optional[Path] = None, auto_seed: bool = True) -> FastAPI:
     db = Database(db_path=db_path)
     director = KoraDirector(db=db)
@@ -111,6 +120,7 @@ def create_app(db_path: Optional[Path] = None, auto_seed: bool = True) -> FastAP
 
     # ---- Health & Diagnostics --------------------------------------------
 
+    @app.get("/health")
     @app.get("/api/health")
     def health() -> dict[str, Any]:
         return {
@@ -476,6 +486,34 @@ def create_app(db_path: Optional[Path] = None, auto_seed: bool = True) -> FastAP
     @app.post("/api/providers/remotion_local/setup")
     def setup_remotion() -> dict[str, Any]:
         return director.providers.setup_remotion()
+
+    @app.post("/api/providers/piper_tts_local/install-model")
+    def install_piper_model() -> dict[str, Any]:
+        try:
+            return director.providers.install_piper_italian_voice()
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+    @app.get("/api/providers/elevenlabs_api/voices")
+    def list_elevenlabs_account_voices() -> list[dict[str, Any]]:
+        try:
+            return director.providers.fetch_elevenlabs_voices()
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+    @app.post("/api/media-lab/veo")
+    def run_veo_media_lab(req: VeoVideoRequest) -> dict[str, Any]:
+        try:
+            return director.media_lab.execute_veo_video(
+                mode=req.mode,
+                prompt=req.prompt,
+                duration_sec=req.duration_sec,
+                asset_id=req.asset_id,
+                camera_motion=req.camera_motion,
+                explicit_authorization=req.explicit_authorization,
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
 
     @app.post("/api/providers/{provider_id}/check")
     def check_provider(provider_id: str) -> dict[str, Any]:

@@ -172,6 +172,27 @@ export const koraApi = {
     }),
   checkProvider: (id: string) =>
     apiFetch<ProviderRecord>(`/api/providers/${id}/check`, { method: "POST" }),
+  installPiperModel: () =>
+    apiFetch<{ ok: boolean; files: string[]; directory: string; provider: ProviderRecord }>(
+      "/api/providers/piper_tts_local/install-model",
+      { method: "POST" }
+    ),
+  fetchElevenLabsVoices: () =>
+    apiFetch<Array<{ voice_id: string; name: string; category: string }>>(
+      "/api/providers/elevenlabs_api/voices"
+    ),
+  runVeoMediaLab: (payload: {
+    mode: "image_to_video" | "text_to_video";
+    prompt: string;
+    duration_sec: number;
+    asset_id?: string | null;
+    camera_motion?: string;
+    explicit_authorization: boolean;
+  }) =>
+    apiFetch<Record<string, unknown>>("/api/media-lab/veo", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
   setupRemotion: () =>
     apiFetch<{
       remotion: {

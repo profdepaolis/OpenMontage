@@ -78,6 +78,13 @@ export function PreviewView({ project, onRevisionStarted, onRestored, onGoExport
 
   const qc = project.qc_report || {};
   const checks = qc.checks || [];
+  const voiceInfo = (project.edit_plan?.voice || null) as {
+    voice_label?: string;
+    source_used?: string;
+    substituted?: boolean;
+    substitution_notice?: string | null;
+    status?: string;
+  } | null;
 
   return (
     <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
@@ -100,6 +107,21 @@ export function PreviewView({ project, onRevisionStarted, onRestored, onGoExport
           <span>1080×1920 · {project.fps} fps</span>
           <span>v{project.current_version}</span>
         </div>
+        {voiceInfo && (
+          <div className="mt-3 w-full max-w-[340px] rounded-xl border border-white/15 bg-white/5 p-3 text-[11px] text-[#EDE6D9]">
+            <div className="font-medium">
+              Voce: {voiceInfo.voice_label || project.voice_id} ·{" "}
+              <span className={voiceInfo.substituted ? "text-amber-300" : "text-emerald-300"}>
+                {voiceInfo.source_used || voiceInfo.status}
+              </span>
+            </div>
+            {voiceInfo.substitution_notice && (
+              <p className="mt-1 text-[10px] leading-snug text-amber-200/90">
+                {voiceInfo.substitution_notice}
+              </p>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Natural Language Revisions, QC, and Version History */}

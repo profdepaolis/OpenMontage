@@ -209,6 +209,13 @@ export function HomeHub({
                 {voices.map((v) => (
                   <option key={v.id} value={v.id}>
                     {v.label}
+                    {v.id !== "none"
+                      ? v.elevenlabs_configured
+                        ? " (ElevenLabs pronto)"
+                        : v.piper_local_available
+                          ? " (Piper/Fallback)"
+                          : " (Fallback per testi nuovi)"
+                      : ""}
                   </option>
                 ))}
               </select>
