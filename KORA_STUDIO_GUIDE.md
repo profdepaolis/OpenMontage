@@ -57,7 +57,7 @@ KORA STUDIO è un'applicazione web privata e modulare costruita sopra l'ecosiste
 ### Funzionalità già operative al 100% in locale (0 €)
 - **Media Vault**: ingestione con hash SHA-256, deduplicazione, copie originali immutabili, copie di lavoro, miniature e ricerca semantica in italiano/inglese.
 - **KORA Brand Brain & Brand Guardian**: palette estratta realmente dalle foto autentiche KORA, controllo anti-marketing aggressivo, protezione logo originale `LOGO KORA.PNG` + payoff `The Art of Being`.
-- **Ideazione, Anti-Ripetizione e Storyboard**: 3 concept distinti e storyboard frame-accurato (es. 20s = 500 frame a 25 fps).
+- **Ideazione, Anti-Ripetizione e Storyboard**: 4 proposte narrative originali selezionabili (o 3 concept da tema libero) con anti-ripetizione sullo storico e storyboard narrativo frame-accurato (es. 20s = 500 frame a 25 fps).
 - **AI Media Lab (Modi locali)**: ritaglio 9:16 ad alta risoluzione da dettagli reali, animazioni fotografiche deterministiche (*push-in*, *pull-out*, *pan*, *tilt*, *micro-parallax*) e scena illustrativa di apertura etichettata.
 - **Voice Studio (Tracce reali + fallback sicuro)**: riproduzione fedele delle registrazioni originali `voce_brando.mp3` e `voce_tiziana.mp3` sincronizzate e normalizzate (`loudnorm`); se vengono richiesti testi nuovi non coperti dalle registrazioni e nessun modello TTS è configurato, il sistema segnala esplicitamente la necessità di sintesi/registrazione senza sostituire silenziosamente la voce.
 - **Montaggio, Color Grading, Sottotitoli, Sound Design, Logo Outro ed Export**: rendering MP4 H.264 1080×1920 25 fps Rec.709 verificato tramite `ffprobe`, con copertina verticale, caption Instagram e report tecnico.
@@ -96,3 +96,19 @@ La suite verifica:
 5. Selezione a costo minimo nel Provider Manager e assenza di crediti inventati (`Non verificabile`).
 6. Generazione di 3 concept distinti e rilevamento ripetizioni (`AntiRepetitionEngine`).
 7. Ciclo API completo end-to-end: creazione progetto, produzione di un Reel reale `1080×1920`, `25 fps`, `20.0s`, revisione selettiva in linguaggio naturale, rollback e backup ZIP.
+8. Upgrade 2.0 — 11 scenari di accettazione (`tests/kora_studio/test_upgrade_2_acceptance.py`): 4 proposte originali + separazione Hyperframes, tema libero fuori template, Reel 20s brand identity con matematica dei frame, Reel 30s stagionale, due voci `brando_tiziana`, Reel senza media nuovi a budget 0 €, fallback offline con provider esterni indisponibili, revisione di una singola scena + restore di versione, export e verifica video reale (`ffprobe -count_frames`, QC 17/17), sicurezza endpoint sensibili + Vault multimodale.
+
+Risultato attuale: **22/22 test verdi** (~6 minuti).
+
+### Sicurezza degli endpoint sensibili
+Per impostazione predefinita KORA STUDIO ascolta solo su `127.0.0.1` e gli endpoint sensibili (credenziali, budget, backup, generazione) accettano esclusivamente client locali con `Host` `127.0.0.1`/`localhost`/`::1` e `Origin` locale (protezione anti-CSRF/anti-DNS-rebinding).
+
+Per esporre temporaneamente la UI su un tunnel o una preview remota, **senza indebolire il default**, esistono tre estensioni opt-in via ambiente:
+
+```bash
+KORA_TRUSTED_HOSTS="kora.miodominio.it"      # host esatti aggiuntivi
+KORA_TRUSTED_HOST_SUFFIXES=".e2b.app"        # suffissi di dominio fidati (preview)
+KORA_ALLOWED_ORIGIN="https://kora.miodominio.it"  # origini CORS aggiuntive
+```
+
+Senza queste variabili qualsiasi `Host`/`Origin` diverso dal locale resta bloccato con `403`.

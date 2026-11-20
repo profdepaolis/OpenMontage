@@ -40,27 +40,71 @@ ALLOWED_LOCAL_ORIGINS = [
 if os.environ.get("KORA_ALLOWED_ORIGIN"):
     ALLOWED_LOCAL_ORIGINS.append(os.environ["KORA_ALLOWED_ORIGIN"].strip())
 
+LOCAL_CLIENT_HOSTS = ("127.0.0.1", "::1", "localhost", "testclient")
+LOCAL_HOST_HEADERS = ("127.0.0.1", "localhost", "::1", "testserver")
+
+
+def _trusted_extra_hosts() -> set[str]:
+    """Host aggiuntivi esplicitamente autorizzati (es. tunnel/preview), opt-in via ambiente."""
+    raw = os.environ.get("KORA_TRUSTED_HOSTS", "")
+    return {h.strip().lower() for h in raw.split(",") if h.strip()}
+
+
+def _trusted_host_suffixes() -> tuple[str, ...]:
+    """Suffissi di dominio esplicitamente autorizzati (es. .e2b.app per una preview remota)."""
+    raw = os.environ.get("KORA_TRUSTED_HOST_SUFFIXES", "")
+    return tuple(h.strip().lower() for h in raw.split(",") if h.strip())
+
+
+def _host_is_trusted(hostname: str, extra: set[str], suffixes: tuple[str, ...]) -> bool:
+    host = (hostname or "").strip().lower()
+    if not host:
+        return False
+    if host in LOCAL_HOST_HEADERS or host in extra:
+        return True
+    return any(host == suf.lstrip(".") or host.endswith(suf) for suf in suffixes)
+
+
+def _cors_origin_regex() -> Optional[str]:
+    """Regex CORS per host/suffissi fidati opt-in (preview remota). None se non configurato."""
+    import re
+
+    parts = [re.escape(h) for h in sorted(_trusted_extra_hosts())]
+    parts += [rf"[A-Za-z0-9.-]*{re.escape(s)}" for s in _trusted_host_suffixes()]
+    if not parts:
+        return None
+    return r"^https?://(" + "|".join(parts) + r")(:\d+)?$"
+
 
 def _require_local_trust(request: Request) -> None:
     """Protect sensitive credential/budget/backup/generation endpoints against remote/CSRF access."""
+    extra_hosts = _trusted_extra_hosts()
+    suffixes = _trusted_host_suffixes()
+    # La modalità preview remota (opt-in) accetta proxy fidati: il vincolo passa sul Host header.
+    remote_mode = bool(extra_hosts or suffixes)
+
     client_host = (request.client.host if request.client else "") or ""
-    if client_host not in ("127.0.0.1", "::1", "localhost", "testclient"):
+    if client_host not in LOCAL_CLIENT_HOSTS and not remote_mode:
         raise HTTPException(
             status_code=403,
             detail="Accesso negato: endpoint sensibile riservato all'host locale 127.0.0.1.",
         )
     host_header = (request.headers.get("host") or "").split(":")[0].strip().lower()
-    if host_header and host_header not in ("127.0.0.1", "localhost", "::1", "testserver"):
+    if host_header and not _host_is_trusted(host_header, extra_hosts, suffixes):
         raise HTTPException(
             status_code=403,
             detail=f"Host header non autorizzato: {host_header}",
         )
     origin = request.headers.get("origin")
     if origin and origin not in ALLOWED_LOCAL_ORIGINS:
-        raise HTTPException(
-            status_code=403,
-            detail=f"Origine non autorizzata: {origin}",
-        )
+        from urllib.parse import urlparse
+
+        origin_host = (urlparse(origin).hostname or "").lower()
+        if not _host_is_trusted(origin_host, extra_hosts, suffixes):
+            raise HTTPException(
+                status_code=403,
+                detail=f"Origine non autorizzata: {origin}",
+            )
 
 
 def _safe_workspace_file(path: Path) -> Path:
@@ -187,6 +231,7 @@ def create_app(db_path: Optional[Path] = None, auto_seed: bool = True) -> FastAP
     app.add_middleware(
         CORSMiddleware,
         allow_origins=ALLOWED_LOCAL_ORIGINS,
+        allow_origin_regex=_cors_origin_regex(),
         allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         allow_headers=["Content-Type", "X-Kora-Local-Token"],
     )
