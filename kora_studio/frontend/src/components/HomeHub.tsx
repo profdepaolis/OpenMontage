@@ -26,6 +26,28 @@ import type {
 } from "@/lib/types";
 import { koraApi } from "@/lib/api";
 
+const IDEATION_ENGINE_LABELS: Record<string, string> = {
+  ollama_local: "Ollama locale · 0 €",
+  gemini_api: "Google Gemini",
+  openai_api: "OpenAI",
+  claude_api: "Anthropic Claude",
+  deepseek_api: "DeepSeek",
+  deterministic_offline_fallback: "Motore locale deterministico · 0 €",
+};
+
+const CLOUD_IDEATION_ENGINES = ["gemini_api", "openai_api", "claude_api", "deepseek_api"];
+
+function ideationEngineLabel(engine: string): string {
+  if (engine.startsWith("kora_deterministic")) {
+    return IDEATION_ENGINE_LABELS.deterministic_offline_fallback;
+  }
+  return IDEATION_ENGINE_LABELS[engine] ?? engine;
+}
+
+function isLocalFallbackEngine(engine: string): boolean {
+  return !CLOUD_IDEATION_ENGINES.includes(engine) && engine !== "ollama_local";
+}
+
 interface HomeHubProps {
   voices: VoiceOption[];
   recentProjects: ProjectRecord[];
@@ -654,11 +676,28 @@ export function HomeHub({
                 {proposals.length === 4 ? "4 Proposte Narrative KORA" : "Proposte Creative KORA"}
               </h2>
               {engineInfo?.engine && (
-                <p className="text-[11px] text-[#6C6459]">
-                  Motore ideazione:{" "}
-                  <span className="font-medium text-[#1D1B18]">{engineInfo.engine}</span>
-                  {engineInfo.fallback ? ` — ${engineInfo.fallback}` : ""}
-                </p>
+                <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-[#6C6459]">
+                  <span>Motore ideazione</span>
+                  <span
+                    className={`rounded-full border px-2 py-0.5 font-medium ${
+                      isLocalFallbackEngine(engineInfo.engine)
+                        ? "border-[#E4D3B4] bg-[#FBF4E6] text-[#7A5C2E]"
+                        : "border-[#C5D9C4] bg-[#F1F7EF] text-[#2F5D3A]"
+                    }`}
+                  >
+                    {ideationEngineLabel(engineInfo.engine)}
+                  </span>
+                  {engineInfo.fallback && (
+                    <details className="inline-block align-middle">
+                      <summary className="cursor-pointer select-none text-[#9A8052] underline decoration-dotted underline-offset-2">
+                        dettagli motore
+                      </summary>
+                      <p className="mt-1 max-w-3xl whitespace-pre-wrap leading-relaxed text-[#6C6459]">
+                        {engineInfo.fallback}
+                      </p>
+                    </details>
+                  )}
+                </div>
               )}
             </div>
             <button

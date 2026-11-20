@@ -695,6 +695,17 @@ class ProviderManager:
             row = conn.execute("SELECT * FROM providers WHERE id = ?", (provider_id,)).fetchone()
             return self._row_to_dict(row) if row else None
 
+    def update_provider_models(self, provider_id: str, models: list[str]) -> None:
+        """Memorizza i modelli realmente disponibili (es. scoperti via ListModels) per riuso immediato."""
+        cleaned = [str(m).strip() for m in models if str(m).strip()]
+        if not cleaned:
+            return
+        with self.db.session() as conn:
+            conn.execute(
+                "UPDATE providers SET models_json = ?, updated_at = ? WHERE id = ?",
+                (json.dumps(cleaned, ensure_ascii=False), utcnow_iso(), provider_id),
+            )
+
     def select_provider_for(
         self,
         capability: str,

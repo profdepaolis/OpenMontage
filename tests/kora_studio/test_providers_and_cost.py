@@ -316,3 +316,156 @@ def test_elevenlabs_reason_preservation_and_full_hyperframes_api(isolated_env):
     assert sample.status_code == 200
     assert len(sample.content) > 1000
 
+
+
+def test_gemini_model_resolution_survives_404_and_uses_available_model(isolated_env, monkeypatch):
+    """Se il modello configurato risponde 404, il resolver scopre via ListModels un modello valido e lo usa."""
+    import json as _json
+
+    import requests as _requests
+
+    from kora_studio.agents.creative_director import CreativeDirector
+    from kora_studio.db.database import Database
+    from kora_studio.db.models import CreativeRequestPayload
+    from kora_studio.providers.registry import ProviderManager
+
+    db = Database(isolated_env["db_path"])
+    brain = BrandBrain(db)
+    brain.ensure_initialized()
+    vault = MediaVault(db)
+    vault.seed_kora_authentic_assets()
+    pm = ProviderManager(db)
+    pm.ensure_seeded()
+    pm.set_api_key("gemini_api", "fake-gemini-key")
+    pm.cost_guard.update_budget_settings(paid_budget_eur=5.0, monthly_cap_eur=5.0)
+    director = CreativeDirector(db, brain, vault, pm)
+
+    concepts_payload = {
+        "concepts": [
+            {
+                "title": f"Proposta Gemini {i}",
+                "central_idea": f"Idea {i} sul mattino mediterraneo",
+                "message": "La luce che accarezza il pergolato.",
+                "primary_emotion": "Quietudine",
+                "hook": f"C'è un'ora in cui il mare tace ({i}).",
+                "narrative_arc": "Apertura, sviluppo, chiusura luminosa",
+                "ending": "Il payoff KORA.",
+                "voiceover_script": f"C'è un'ora, davanti al mare, in cui tutto rallenta. Silenzio numero {i}.",
+                "visual_mood": "Avorio, ombre lunghe sotto il pergolato",
+                "moodboard_tags": ["avorio", "mattino"],
+                "required_materials": [],
+                "available_asset_ids": [],
+                "missing_materials": [],
+                "objective": "Valorizzare l'identità KORA",
+                "recommended_voice_id": "brando",
+                "duration_sec": 20,
+                "feasibility_score": 95,
+                "originality_score": 40,
+                "preset": "KORA Cinematic Identity",
+            }
+            for i in range(4)
+        ]
+    }
+
+    calls: list[str] = []
+
+    class _Resp:
+        def __init__(self, status_code: int, payload: dict):
+            self.status_code = status_code
+            self._payload = payload
+
+        def json(self):
+            return self._payload
+
+    def _fake_get(url, params=None, headers=None, timeout=None):
+        assert "models" in url
+        return _Resp(
+            200,
+            {
+                "models": [
+                    {
+                        "name": "models/gemini-2.0-flash",
+                        "supportedGenerationMethods": ["generateContent"],
+                    },
+                    {
+                        "name": "models/gemini-2.5-flash-image",
+                        "supportedGenerationMethods": ["generateContent"],
+                    },
+                    {
+                        "name": "models/text-embedding-004",
+                        "supportedGenerationMethods": ["embedContent"],
+                    },
+                ]
+            },
+        )
+
+    def _fake_post(url, headers=None, json=None, timeout=None):
+        calls.append(url)
+        if "gemini-2.5-flash:" in url:
+            return _Resp(404, {"error": {"message": "models/gemini-2.5-flash is not found"}})
+        if "gemini-2.0-flash:" in url:
+            return _Resp(
+                200,
+                {"candidates": [{"content": {"parts": [{"text": _json.dumps(concepts_payload)}]}}]},
+            )
+        return _Resp(404, {"error": {"message": "not found"}})
+
+    monkeypatch.setattr(_requests, "get", _fake_get)
+    monkeypatch.setattr(_requests, "post", _fake_post)
+
+    req = CreativeRequestPayload(
+        theme="Il mattino sul mare di Policoro", duration_sec=20, budget_eur=1.0
+    )
+    env = director.ideate_from_request(req)
+
+    assert env.generation_engine == "gemini_api", env.fallback_reason
+    assert env.fallback_reason is None
+    assert len(env.concepts) == 3
+    assert any("gemini-2.5-flash:" in c for c in calls)
+    assert any("gemini-2.0-flash:" in c for c in calls)
+    # il modello funzionante viene memorizzato per i run successivi
+    assert pm.get_provider("gemini_api")["models"][0] == "gemini-2.0-flash"
+
+
+def test_gemini_invalid_key_produces_readable_fallback_reason(isolated_env, monkeypatch):
+    """Una chiave non autorizzata non espone traceback grezzi: messaggio leggibile + fallback locale."""
+    import requests as _requests
+
+    from kora_studio.agents.creative_director import CreativeDirector
+    from kora_studio.db.database import Database
+    from kora_studio.db.models import CreativeRequestPayload
+    from kora_studio.providers.registry import ProviderManager
+
+    db = Database(isolated_env["db_path"])
+    brain = BrandBrain(db)
+    brain.ensure_initialized()
+    vault = MediaVault(db)
+    vault.seed_kora_authentic_assets()
+    pm = ProviderManager(db)
+    pm.ensure_seeded()
+    pm.set_api_key("gemini_api", "fake-gemini-key")
+    pm.cost_guard.update_budget_settings(paid_budget_eur=5.0, monthly_cap_eur=5.0)
+    director = CreativeDirector(db, brain, vault, pm)
+
+    class _Resp:
+        def __init__(self, status_code: int, payload: dict):
+            self.status_code = status_code
+            self._payload = payload
+
+        def json(self):
+            return self._payload
+
+    monkeypatch.setattr(_requests, "get", lambda *a, **k: _Resp(403, {"error": {"message": "PERMISSION_DENIED"}}))
+    monkeypatch.setattr(
+        _requests,
+        "post",
+        lambda *a, **k: _Resp(403, {"error": {"message": "API key not valid. Please pass a valid API key."}}),
+    )
+
+    env = director.ideate_from_request(CreativeRequestPayload(theme="Aperitivo al tramonto", duration_sec=20, budget_eur=1.0))
+    assert env.generation_engine == "deterministic_offline_fallback"
+    assert env.concepts
+    reason = env.fallback_reason or ""
+    assert "Motore deterministico locale KORA attivo" in reason
+    assert "Google Gemini" in reason
+    assert "non autorizzata" in reason

@@ -28,6 +28,39 @@ from kora_studio.db.models import (
 from kora_studio.providers.registry import ProviderManager
 from kora_studio.vault.media_vault import MediaVault
 
+GEMINI_API_ROOT = "https://generativelanguage.googleapis.com"
+# Ordine di preferenza: modelli veloci/economici prima, "pro" solo come ultima risorsa.
+GEMINI_TEXT_FALLBACK_MODELS = (
+    "gemini-2.5-flash",
+    "gemini-2.0-flash",
+    "gemini-flash-latest",
+    "gemini-2.0-flash-lite",
+    "gemini-1.5-flash",
+    "gemini-1.5-flash-8b",
+    "gemini-2.5-pro",
+    "gemini-1.5-pro",
+)
+# Modelli non testuali che non devono essere usati per l'ideazione copy.
+GEMINI_NON_TEXT_TOKENS = (
+    "image",
+    "embedding",
+    "embed",
+    "tts",
+    "audio",
+    "live",
+    "veo",
+    "aqa",
+    "learnlm",
+    "vision",
+)
+LLM_PROVIDER_LABELS = {
+    "gemini_api": "Google Gemini",
+    "openai_api": "OpenAI",
+    "claude_api": "Anthropic Claude",
+    "deepseek_api": "DeepSeek",
+    "ollama_local": "Ollama locale",
+}
+
 # Curated diverse Mediterranean storytelling angles so concepts never repeat mechanically
 STORY_ANGLES = [
     {
@@ -311,7 +344,7 @@ class CreativeDirector:
                     if parsed:
                         return parsed, "ollama_local", None
             except Exception as exc:
-                errors.append(f"ollama_local: {exc}")
+                errors.append(f"{LLM_PROVIDER_LABELS['ollama_local']}: {exc}")
 
         # 2. Official Cloud LLMs (budget-gated via CostGuard)
         allow_paid = req.budget_eur > 0
@@ -333,34 +366,144 @@ class CreativeDirector:
                         )
                         return parsed, pid, None
                 except Exception as exc:
-                    errors.append(f"{pid}: {exc}")
+                    errors.append(f"{LLM_PROVIDER_LABELS.get(pid, pid)}: {exc}")
         else:
             errors.append(f"LLM cloud non autorizzati ({auth['reason']})")
 
         reason = (
-            "; ".join(errors)
+            self._fallback_reason(errors)
             if errors
-            else "Nessun LLM locale (Ollama) o cloud configurato: utilizzato motore deterministico offline KORA."
+            else "Nessun LLM locale (Ollama) o cloud configurato: utilizzato il motore deterministico offline KORA (0 €)."
         )
         return None, "deterministic_offline_fallback", reason
+
+    @staticmethod
+    def _fallback_reason(errors: list[str]) -> str:
+        """Messaggio leggibile: motore locale attivo + dettaglio tecnico compatto per provider."""
+        head = "Motore deterministico locale KORA attivo (0 €): nessun LLM esterno ha risposto."
+        return f"{head} Dettagli → " + " | ".join(errors)
+
+    def _gemini_available_models(self, key: str) -> list[str]:
+        """Chiede a Gemini quali modelli testuali sono realmente abilitati per questa chiave (0 €)."""
+        try:
+            r = requests.get(
+                f"{GEMINI_API_ROOT}/v1beta/models",
+                params={"pageSize": 200},
+                headers={"x-goog-api-key": key},
+                timeout=10,
+            )
+            if r.status_code != 200:
+                return []
+            flash, other, pro = [], [], []
+            for item in r.json().get("models") or []:
+                name = str(item.get("name", "")).split("/")[-1]
+                methods = item.get("supportedGenerationMethods") or []
+                if "generateContent" not in methods:
+                    continue
+                low = name.lower()
+                if any(tok in low for tok in GEMINI_NON_TEXT_TOKENS):
+                    continue
+                if "pro" in low:
+                    pro.append(name)
+                elif "flash" in low or "lite" in low:
+                    flash.append(name)
+                else:
+                    other.append(name)
+            return flash + other + pro
+        except requests.RequestException:
+            return []
+
+    @staticmethod
+    def _gemini_error_text(resp: Any) -> str:
+        try:
+            message = ((resp.json() or {}).get("error") or {}).get("message")
+            if message:
+                return str(message).strip()
+        except Exception:
+            pass
+        return f"HTTP {resp.status_code}"
+
+    def _invoke_gemini(
+        self, key: str, prov: dict[str, Any], system_prompt: str, user_prompt: str
+    ) -> str:
+        """Prova i modelli configurati, poi quelli realmente disponibili, poi i default noti."""
+        configured = [str(m).strip() for m in (prov.get("models") or []) if str(m).strip()]
+        candidates: list[str] = []
+        for candidate in (
+            configured + self._gemini_available_models(key) + list(GEMINI_TEXT_FALLBACK_MODELS)
+        ):
+            name = str(candidate).strip()
+            if name and name not in candidates:
+                candidates.append(name)
+        if not candidates:
+            raise RuntimeError("nessun modello Gemini candidato")
+
+        body = {
+            "contents": [{"parts": [{"text": f"{system_prompt}\n\nCONTESTO:\n{user_prompt}"}]}],
+            "generationConfig": {"responseMimeType": "application/json"},
+        }
+        attempted: list[str] = []
+        auth_error: Optional[str] = None
+        quota_error = False
+
+        # 1) v1beta su tutti i candidati; 2) v1 sui primi tre (alcune chiavi espongono i GA solo su v1).
+        for api_version, models_to_try in (("v1beta", candidates), ("v1", candidates[:3])):
+            for model_name in models_to_try:
+                try:
+                    resp = requests.post(
+                        f"{GEMINI_API_ROOT}/{api_version}/models/{model_name}:generateContent",
+                        headers={"x-goog-api-key": key, "Content-Type": "application/json"},
+                        json=body,
+                        timeout=25,
+                    )
+                except requests.RequestException as exc:
+                    raise RuntimeError(
+                        f"Gemini non raggiungibile dalla rete locale ({exc.__class__.__name__})"
+                    ) from exc
+                if resp.status_code == 200:
+                    try:
+                        parts = resp.json()["candidates"][0]["content"]["parts"]
+                        text = "".join(str(p.get("text", "")) for p in parts).strip()
+                    except (KeyError, IndexError, TypeError):
+                        attempted.append(f"{model_name}: risposta senza contenuto")
+                        continue
+                    if not text:
+                        attempted.append(f"{model_name}: risposta vuota (possibile filtro di sicurezza)")
+                        continue
+                    if model_name != (configured[0] if configured else ""):
+                        self.providers.update_provider_models(
+                            "gemini_api", [model_name] + [m for m in configured if m != model_name]
+                        )
+                    return text
+                if resp.status_code in (401, 403):
+                    auth_error = self._gemini_error_text(resp)
+                    break
+                if resp.status_code == 429:
+                    quota_error = True
+                    attempted.append(f"{model_name}: quota esaurita (429)")
+                    break
+                attempted.append(f"{model_name}: {self._gemini_error_text(resp)}")
+            if auth_error or quota_error:
+                break
+            if not attempted:
+                break
+
+        if auth_error:
+            raise RuntimeError(
+                "chiave Google non autorizzata o API 'Generative Language' non abilitata sul progetto "
+                f"Google Cloud/AI Studio ({auth_error})"
+            )
+        if quota_error:
+            raise RuntimeError("quota o rate limit Gemini raggiunto (HTTP 429): riprova più tardi")
+        detail = "; ".join(attempted[:4]) or "nessun modello testuale elencato per questa chiave"
+        raise RuntimeError(f"nessun modello di testo utilizzabile ({detail})")
 
     def _invoke_cloud_llm(
         self, pid: str, key: str, prov: dict[str, Any], system_prompt: str, user_prompt: str
     ) -> str:
         model = (prov.get("models") or [""])[0]
         if pid == "gemini_api":
-            m_name = model or "gemini-2.5-flash"
-            r = requests.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/{m_name}:generateContent",
-                headers={"x-goog-api-key": key, "Content-Type": "application/json"},
-                json={
-                    "contents": [{"parts": [{"text": f"{system_prompt}\n\nCONTESTO:\n{user_prompt}"}]}],
-                    "generationConfig": {"responseMimeType": "application/json"},
-                },
-                timeout=25,
-            )
-            r.raise_for_status()
-            return r.json()["candidates"][0]["content"]["parts"][0]["text"]
+            return self._invoke_gemini(key, prov, system_prompt, user_prompt)
         if pid == "claude_api":
             r = requests.post(
                 "https://api.anthropic.com/v1/messages",
