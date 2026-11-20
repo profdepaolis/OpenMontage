@@ -11,16 +11,16 @@
 KORA STUDIO è un'applicazione web privata e modulare costruita sopra l'ecosistema OpenMontage:
 
 - **Backend API & Orchestratore (`kora_studio/api/app.py`, `kora_studio/agents/director.py`)**: FastAPI su SQLite WAL con migrazioni versionate, gestione job osservabile passo-passo (nessuna percentuale inventata), streaming HTTP Range dei video MP4, revisioni in linguaggio naturale con anteprima diff e rigenerazione selettiva.
-- **Frontend Web (`kora_studio/frontend/`)**: Next.js 16 + React + TypeScript + Tailwind CSS v4 esportato staticamente (`output: "export"`) e servito direttamente dal server locale KORA STUDIO su `0.0.0.0:8000` (con 9 sezioni: *Home*, *Progetti*, *Media Vault*, *Creative Studio*, *Production*, *Preview*, *AI Providers*, *Brand Profile*, *Export*).
+- **Frontend Web (`kora_studio/frontend/`)**: Next.js 16 + React + TypeScript + Tailwind CSS v4 esportato staticamente (`output: "export"`) e servito direttamente dal server locale KORA STUDIO su `http://127.0.0.1:8000` (con Home conversazionale a 4 azioni, 4 proposte fotografiche selezionabili, parametri avanzati/Hyperframes espandibili e workflow *Suggerisci un tema → Progetta il nuovo Reel → Realizza Reel*).
 - **Motore Multi-Agente (`kora_studio/agents/`)**:
   1. `BrandGuardian` — valida testi, prompt e logo originale contro il *Brand Brain* versionato.
-  2. `CreativeDirector` + `AntiRepetitionEngine` — genera 3 concept distinti verificando lo storico dei Reel per evitare ripetizioni e costruisce storyboard frame-accurati (`25 fps`).
-  3. `MediaCurator` + `AIMediaLab` — rispetta rigorosamente la gerarchia di autenticità (*Originale reale → Ritaglio originale → Animazione conservativa → Elaborazione generativa controllata → Materiale illustrativo sintetico*).
-  4. `VoiceDirector` — gestisce voci approvate (`Brando`, `Tiziana`, `Felice`, `Nessun voiceover`) con normalizzazione EBU R128 (`loudnorm`), pause naturali e segnalazione esplicita in caso di fallback.
+  2. `CreativeDirector` + `AntiRepetitionEngine` — integra LLM Provider Manager (Ollama locale gratuito o provider cloud autorizzati, con fallback deterministico offline esplicitamente dichiarato), genera 4 proposte originali (`POST /api/creative/suggest`) o 3 concept da tema libero (`POST /api/creative/from-theme`) e costruisce storyboard narrativi 2.0 frame-accurati (`25 fps`).
+  3. `MediaCurator` + `AIMediaLab` — rispetta rigorosamente la cascata di autenticità (*Originale reale → Ritaglio originale → Animazione conservativa → Generazione vincolata → Image-to-Video*), con tracciamento dell'asset di riferimento e budget predefinito `0 €`.
+  4. `VoiceDirector` — gestisce voci approvate (`Brando`, `Tiziana`, `Felice`, `Brando & Tiziana` a due voci con assegnazione per scena, `Nessun voiceover`) con normalizzazione EBU R128 (`loudnorm`), pause naturali e sintesi voice-first per allineamento esatto alla timeline.
   5. `Colorist` — preset `KORA Cinematic Identity`, `KORA Experience`, `KORA Seasonal`, `KORA Editorial`, `KORA Custom`, con normalizzazione per clip.
   6. `SoundDesigner` — libreria categorizzata (`kora_studio/vault/sound_library.py`) con traccia CC0 *Next to You — Joth* + 11 SFX costieri/ambient sincronizzati e ducking dinamico sotto la voce.
   7. `CinematicEditor` — composizione deterministica FFmpeg + Pillow + NumPy (con esportazione simultanea della specifica `remotion_composition.json` per Remotion).
-  8. `QualityController` — controlli tecnici, visivi e narrativi automatici + segnalazione mirata all'utente in caso di dubbi di autenticità.
+  8. `QualityController` — verifica decodifica completa FFmpeg, conteggio reale fotogrammi (`ffprobe -count_frames`), assenza di clipping, coerenza voiceover/sottotitoli, validità temporale, logo originale e payoff esatto `"The Art of Being"`, attivando revisione umana mirata per materiali generativi o `da_verificare`.
   9. `ExportManager` — produce MP4 finale, copertina verticale PNG, caption Instagram + hashtag, report tecnico JSON/Markdown, progetto modificabile JSON e varianti opzionali senza sottotitoli o senza musica.
 
 ---
@@ -32,7 +32,7 @@ KORA STUDIO è un'applicazione web privata e modulare costruita sopra l'ecosiste
 # Setup completo (venv Python, FFmpeg/FFprobe statici, build UI, seed asset KORA, diagnostica)
 ./setup.sh
 
-# Avvio server web + API su http://0.0.0.0:8000
+# Avvio server web + API su http://127.0.0.1:8000 (bind sicuro locale)
 ./start.sh
 ```
 
@@ -45,7 +45,7 @@ KORA STUDIO è un'applicazione web privata e modulare costruita sopra l'ecosiste
 ```bash
 .venv/bin/python -m kora_studio doctor   # Diagnostica FFmpeg, FFprobe, Remotion, SQLite, Provider
 .venv/bin/python -m kora_studio seed     # Carica gli asset autentici KORA nel Vault e aggiorna la palette
-.venv/bin/python -m kora_studio serve    # Avvia KORA STUDIO (default 0.0.0.0:8000)
+.venv/bin/python -m kora_studio serve    # Avvia KORA STUDIO (default 127.0.0.1:8000; --host 0.0.0.0 opzionale)
 .venv/bin/python -m kora_studio backup   # Crea backup ZIP completo (DB, progetti, export, originali)
 .venv/bin/python -m kora_studio e2e --theme "Il piacere di stare insieme davanti al mare." --voice brando --duration 20
 ```

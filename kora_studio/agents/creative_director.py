@@ -1,24 +1,31 @@
-"""Creative Director agent — Sorprendimi, Free Theme ideation, Anti-Repetition, and 25fps Storyboard."""
+"""Creative Director agent — LLM Provider Manager + Offline Fallback, 4-theme ideation, Anti-Repetition, and Storyboard 2.0."""
 
 from __future__ import annotations
 
 import json
+import random
 import re
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
+
+import requests
 
 from kora_studio.agents.brand_guardian import BrandGuardian
 from kora_studio.brand.brand_brain import BrandBrain
 from kora_studio.config import DEFAULT_FPS
 from kora_studio.db.database import Database, utcnow_iso
 from kora_studio.db.models import (
+    AuthenticityStatus,
     CameraMotion,
     CreativeConcept,
+    CreativeProposalsEnvelope,
+    CreativeRequestPayload,
     EditingPreset,
     SceneTransition,
     StoryboardScene,
 )
+from kora_studio.providers.registry import ProviderManager
 from kora_studio.vault.media_vault import MediaVault
 
 # Curated diverse Mediterranean storytelling angles so concepts never repeat mechanically
@@ -175,19 +182,260 @@ class AntiRepetitionEngine:
 
 
 class CreativeDirector:
-    """Generates 3 distinct KORA-aligned concepts and exact 25fps storyboards."""
+    """Generates KORA-aligned concepts via LLM Provider Manager (with explicit deterministic offline fallback) and Storyboard 2.0."""
 
     def __init__(
         self,
         db: Database,
         brand_brain: BrandBrain,
         vault: MediaVault,
+        providers: Optional[ProviderManager] = None,
     ) -> None:
         self.db = db
         self.brand_brain = brand_brain
         self.guardian = BrandGuardian(brand_brain)
         self.vault = vault
+        self.providers = providers
         self.anti_rep = AntiRepetitionEngine(db)
+
+    def _build_llm_context(self, req: CreativeRequestPayload) -> dict[str, Any]:
+        """Assemble full KORA context: versioned brand profile, history, season, semantic vault, user request."""
+        profile = self.brand_brain.get_current()
+        if req.brand_profile_version:
+            for h in self.brand_brain.get_history():
+                if int(h.get("version", 0)) == int(req.brand_profile_version):
+                    profile = h
+                    break
+        history = self.anti_rep.get_history(limit=15)
+        if req.previous_production_ids:
+            history = [h for h in history if h["project_id"] in req.previous_production_ids] or history
+
+        visual_assets = [
+            a
+            for a in self.vault.list_assets()
+            if a["media_type"] in ("image", "video") and a["category"] != "Logo"
+        ]
+        inventory = [
+            {
+                "id": a["id"],
+                "filename": a["filename"],
+                "category": a["category"],
+                "media_type": a["media_type"],
+                "tags": a["tags"][:8],
+                "quality": a["technical_quality"],
+                "authenticity": a["authenticity_status"],
+                "multimodal": a.get("analysis", {}).get("multimodal", {}),
+            }
+            for a in visual_assets[:24]
+        ]
+        return {
+            "brand_profile": {
+                "version": profile.get("version"),
+                "brand_name": profile.get("brand_name"),
+                "location": profile.get("location"),
+                "payoff": profile.get("payoff"),
+                "philosophy": profile.get("philosophy", ""),
+                "vision": profile.get("vision", ""),
+                "mission": profile.get("mission", ""),
+                "tone_of_voice": profile.get("tone_of_voice", []),
+                "values": profile.get("values", []),
+                "forbidden_claims": profile.get("forbidden_claims", []),
+            },
+            "season": self._season_context(),
+            "past_productions": [
+                {"title": h["title"], "hook": h["hook"], "preset": h["preset"], "theme": h["theme"]}
+                for h in history[:8]
+            ],
+            "vault_inventory": inventory,
+            "request": req.model_dump(),
+        }
+
+    def _extract_json_block(self, raw_text: str) -> dict[str, Any]:
+        cleaned = raw_text.strip()
+        m = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", cleaned, re.DOTALL)
+        if m:
+            cleaned = m.group(1)
+        else:
+            start = cleaned.find("{")
+            end = cleaned.rfind("}")
+            if start >= 0 and end > start:
+                cleaned = cleaned[start : end + 1]
+        return json.loads(cleaned)
+
+    def _call_llm_proposals(
+        self, req: CreativeRequestPayload, count: int = 3
+    ) -> tuple[Optional[list[CreativeConcept]], str, Optional[str]]:
+        """Try configured LLM providers (Ollama local first, then authorized cloud APIs) and validate via Pydantic."""
+        if not self.providers:
+            return None, "deterministic_offline_fallback", "ProviderManager non collegato."
+
+        ctx = self._build_llm_context(req)
+        system_prompt = (
+            "Sei il Direttore Creativo di KORA Beach Club (Policoro). Rispetta rigorosamente l'identità luxury "
+            "mediterranea, calma, evocativa ('The Art of Being'). Niente slogan aggressivi, niente sconti o prezzi. "
+            "Usa SOLO gli ID asset reali presenti in vault_inventory. Restituisci SOLO JSON valido conforme allo schema "
+            "{\"concepts\": [{\"id\", \"title\", \"central_idea\", \"message\", \"primary_emotion\", \"hook\", "
+            "\"narrative_arc\", \"ending\", \"voiceover_script\", \"visual_mood\", \"moodboard_tags\", "
+            "\"required_materials\", \"available_asset_ids\", \"missing_materials\", \"objective\", "
+            "\"recommended_voice_id\", \"duration_sec\", \"feasibility_score\", \"originality_score\", \"preset\"}]}. "
+            f"Genera esattamente {count} proposte originali e diverse tra loro e dalle past_productions."
+        )
+        user_prompt = json.dumps(ctx, ensure_ascii=False)
+
+        errors: list[str] = []
+        valid_ids = {a["id"] for a in ctx["vault_inventory"]}
+
+        # 1. Free Local Ollama (0 EUR)
+        ollama = self.providers.get_provider("ollama_local")
+        if ollama and ollama.get("operational_status") == "operativo" and ollama.get("enabled"):
+            try:
+                model = (ollama.get("models") or ["llama3.1"])[0]
+                r = requests.post(
+                    f"{ollama['endpoint'].rstrip('/')}/api/chat",
+                    json={
+                        "model": model,
+                        "stream": False,
+                        "format": "json",
+                        "messages": [
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_prompt},
+                        ],
+                    },
+                    timeout=20,
+                )
+                if r.status_code == 200:
+                    txt = r.json().get("message", {}).get("content", "")
+                    parsed = self._parse_and_validate_llm_concepts(
+                        txt, req, valid_ids, "ollama_local"
+                    )
+                    if parsed:
+                        return parsed, "ollama_local", None
+            except Exception as exc:
+                errors.append(f"ollama_local: {exc}")
+
+        # 2. Official Cloud LLMs (budget-gated via CostGuard)
+        allow_paid = req.budget_eur > 0
+        auth = self.providers.cost_guard.check_authorization(
+            0.005, explicit_user_authorization=allow_paid
+        )
+        if auth["authorized"]:
+            for pid in ("gemini_api", "openai_api", "claude_api", "deepseek_api"):
+                key = self.providers.get_decrypted_key(pid)
+                prov = self.providers.get_provider(pid)
+                if not key or not prov or not prov.get("enabled"):
+                    continue
+                try:
+                    raw_txt = self._invoke_cloud_llm(pid, key, prov, system_prompt, user_prompt)
+                    parsed = self._parse_and_validate_llm_concepts(raw_txt, req, valid_ids, pid)
+                    if parsed:
+                        self.providers.cost_guard.record_usage(
+                            pid, "creative_ideation", 0.005, 0.005, True, "completed"
+                        )
+                        return parsed, pid, None
+                except Exception as exc:
+                    errors.append(f"{pid}: {exc}")
+        else:
+            errors.append(f"LLM cloud non autorizzati ({auth['reason']})")
+
+        reason = (
+            "; ".join(errors)
+            if errors
+            else "Nessun LLM locale (Ollama) o cloud configurato: utilizzato motore deterministico offline KORA."
+        )
+        return None, "deterministic_offline_fallback", reason
+
+    def _invoke_cloud_llm(
+        self, pid: str, key: str, prov: dict[str, Any], system_prompt: str, user_prompt: str
+    ) -> str:
+        model = (prov.get("models") or [""])[0]
+        if pid == "gemini_api":
+            m_name = model or "gemini-2.5-flash"
+            r = requests.post(
+                f"https://generativelanguage.googleapis.com/v1beta/models/{m_name}:generateContent",
+                headers={"x-goog-api-key": key, "Content-Type": "application/json"},
+                json={
+                    "contents": [{"parts": [{"text": f"{system_prompt}\n\nCONTESTO:\n{user_prompt}"}]}],
+                    "generationConfig": {"responseMimeType": "application/json"},
+                },
+                timeout=25,
+            )
+            r.raise_for_status()
+            return r.json()["candidates"][0]["content"]["parts"][0]["text"]
+        if pid == "claude_api":
+            r = requests.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "x-api-key": key,
+                    "anthropic-version": "2023-06-01",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": model or "claude-3-5-sonnet-latest",
+                    "max_tokens": 2000,
+                    "system": system_prompt,
+                    "messages": [{"role": "user", "content": user_prompt}],
+                },
+                timeout=25,
+            )
+            r.raise_for_status()
+            return r.json()["content"][0]["text"]
+        endpoint = (
+            "https://api.deepseek.com/v1/chat/completions"
+            if pid == "deepseek_api"
+            else "https://api.openai.com/v1/chat/completions"
+        )
+        r = requests.post(
+            endpoint,
+            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+            json={
+                "model": model or ("deepseek-chat" if pid == "deepseek_api" else "gpt-4o-mini"),
+                "response_format": {"type": "json_object"},
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+            },
+            timeout=25,
+        )
+        r.raise_for_status()
+        return r.json()["choices"][0]["message"]["content"]
+
+    def _parse_and_validate_llm_concepts(
+        self,
+        raw_txt: str,
+        req: CreativeRequestPayload,
+        valid_asset_ids: set[str],
+        engine_name: str,
+    ) -> Optional[list[CreativeConcept]]:
+        data = self._extract_json_block(raw_txt)
+        items = data.get("concepts") if isinstance(data, dict) else data
+        if not isinstance(items, list) or not items:
+            return None
+        out: list[CreativeConcept] = []
+        for idx, raw in enumerate(items):
+            if not isinstance(raw, dict):
+                continue
+            cleaned_ids = [aid for aid in (raw.get("available_asset_ids") or []) if aid in valid_asset_ids]
+            if not cleaned_ids:
+                cleaned_ids = list(valid_asset_ids)[:6]
+            raw.setdefault("id", f"cnc_{uuid.uuid4().hex[:10]}")
+            raw["available_asset_ids"] = cleaned_ids
+            raw["duration_sec"] = req.duration_sec
+            raw["generation_engine"] = engine_name
+            raw["fallback_reason"] = None
+            raw["creative_request"] = req.model_dump()
+            raw.setdefault("objective", req.objective or "Valorizzare l'identità KORA")
+            raw.setdefault("recommended_voice_id", req.voice_id or "brando")
+            concept = CreativeConcept(**raw)
+            if not self.guardian.validate_copy(concept.voiceover_script)["approved"]:
+                continue
+            orig, notes = self.anti_rep.evaluate_originality(
+                concept.title, concept.hook, [concept.message]
+            )
+            concept.originality_score = orig
+            concept.anti_repetition_notes = notes
+            out.append(concept)
+        return out or None
 
     def _season_context(self) -> str:
         month = datetime.now(timezone.utc).month
@@ -388,6 +636,11 @@ class CreativeDirector:
             ending=phrases[-1],
             voiceover_script=vo_script,
             visual_mood=angle["visual_mood"],
+            moodboard_tags=[
+                angle["angle"].replace("_", " "),
+                preset.replace("KORA ", ""),
+                *(a["category"].lower() for a in candidate_assets[:4]),
+            ],
             required_materials=[
                 "Ripresa o foto reale del mare/orizzonte",
                 "Ambiente pergolato o tavolo preparato",
@@ -396,32 +649,124 @@ class CreativeDirector:
             ],
             available_asset_ids=available_ids,
             missing_materials=missing,
+            objective=f"Valorizzare l'identità KORA ({angle['emotion'].lower()})",
+            recommended_voice_id="tiziana" if angle_idx % 2 == 1 else "brando",
             duration_sec=duration_sec,
             feasibility_score=feasibility,
             originality_score=originality,
             preset=preset,
+            generation_engine="deterministic_offline_fallback",
+            fallback_reason=None,
             anti_repetition_notes=anti_notes,
+        )
+
+    def suggest_four_themes(
+        self, req: Optional[CreativeRequestPayload] = None
+    ) -> CreativeProposalsEnvelope:
+        """Generate 4 original, non-fixed narrative proposals using LLM Provider Manager or declared offline fallback."""
+        req = req or CreativeRequestPayload()
+        llm_concepts, engine, fallback_reason = self._call_llm_proposals(req, count=4)
+        if llm_concepts and len(llm_concepts) >= 4:
+            return CreativeProposalsEnvelope(
+                concepts=llm_concepts[:4],
+                generation_engine=engine,
+                fallback_reason=None,
+            )
+
+        # Declared deterministic offline fallback: dynamically synthesize 4 distinct narratives from live Vault + season + history
+        history = self.anti_rep.get_history(limit=20)
+        used_titles = {h["title"].strip().lower() for h in history}
+        used_presets = {h["preset"] for h in history[:3]}
+        vault_visuals = [
+            a
+            for a in self.vault.list_assets()
+            if a["media_type"] in ("image", "video") and a["category"] != "Logo"
+        ]
+        # Build dynamic theme seeds from actual media categories & user context (never a fixed 4-item ceiling)
+        cat_pool = sorted({a["category"] for a in vault_visuals}) or ["Mare", "Pergolato", "Colazione", "Aperitivo"]
+        season = self._season_context()
+        dynamic_prompts = [
+            f"{cat_pool[0 % len(cat_pool)]} e luce naturale: {req.objective or 'respiro autentico al KORA'} ({season})",
+            f"Ospitalità condivisa tra {cat_pool[1 % len(cat_pool)]} e {cat_pool[2 % len(cat_pool)]} a Policoro",
+            f"Dettagli tattili e silenzio sul mare: focus {cat_pool[3 % len(cat_pool)]} con poche parole",
+            f"{(req.theme.strip() + ' — ') if req.theme.strip() else ''}Dialogo a due voci tra mattina e tramonto vista Ionio",
+        ]
+        voice_recs = ["brando", "tiziana", "brando_tiziana", "none"]
+        objectives = [
+            req.objective or "Identità di marca & atmosfera mediterranea",
+            req.objective or "Esperienza conviviale & ospitalità vista mare",
+            req.objective or "Estetica editoriale & cura dei dettagli reali",
+            req.objective or "Racconto stagionale a due voci Brando & Tiziana",
+        ]
+
+        concepts: list[CreativeConcept] = []
+        for idx in range(4):
+            c = self._build_concept_for_theme(
+                dynamic_prompts[idx],
+                angle_idx=idx,
+                duration_sec=req.duration_sec,
+                preferred_asset_ids=req.asset_ids or None,
+            )
+            if c.title.lower() in used_titles:
+                c.title = f"{c.title} · Ed. {len(history) + idx + 1}"
+            penalty = 0.12 if c.preset in used_presets else 0.0
+            c.originality_score = round(max(0.15, c.originality_score - penalty), 2)
+            c.objective = objectives[idx]
+            c.recommended_voice_id = req.voice_id if req.voice_id and idx == 0 else voice_recs[idx]
+            c.generation_engine = "deterministic_offline_fallback"
+            c.fallback_reason = fallback_reason
+            c.creative_request = req.model_dump()
+            concepts.append(c)
+        return CreativeProposalsEnvelope(
+            concepts=concepts,
+            generation_engine="deterministic_offline_fallback",
+            fallback_reason=fallback_reason,
+        )
+
+    def ideate_from_request(self, req: CreativeRequestPayload) -> CreativeProposalsEnvelope:
+        """Ideate 3 concepts for a structured CreativeRequestPayload using LLM or declared fallback."""
+        if not req.theme.strip():
+            env = self.suggest_four_themes(req)
+            return CreativeProposalsEnvelope(
+                concepts=env.concepts[:3],
+                generation_engine=env.generation_engine,
+                fallback_reason=env.fallback_reason,
+            )
+        llm_concepts, engine, fallback_reason = self._call_llm_proposals(req, count=3)
+        if llm_concepts:
+            return CreativeProposalsEnvelope(
+                concepts=llm_concepts[:3],
+                generation_engine=engine,
+                fallback_reason=None,
+            )
+        concepts = []
+        for i in range(3):
+            c = self._build_concept_for_theme(
+                req.theme,
+                angle_idx=i,
+                duration_sec=req.duration_sec,
+                preferred_asset_ids=req.asset_ids or None,
+            )
+            c.objective = req.objective or c.objective
+            c.recommended_voice_id = req.voice_id or c.recommended_voice_id
+            c.generation_engine = "deterministic_offline_fallback"
+            c.fallback_reason = fallback_reason
+            c.creative_request = req.model_dump()
+            concepts.append(c)
+        return CreativeProposalsEnvelope(
+            concepts=concepts,
+            generation_engine="deterministic_offline_fallback",
+            fallback_reason=fallback_reason,
         )
 
     def surprise_me(self, duration_sec: float = 20.0) -> list[CreativeConcept]:
         """Modalità Sorprendimi: proposes 3 original, vault-backed concepts avoiding past repetitions."""
-        history = self.anti_rep.get_history()
-        used_presets = {h["preset"] for h in history[:3]}
-        themes = [
-            "Luce morbida del mattino tra pergolato e mare a Policoro",
-            "Il piacere di condividere un aperitivo al tramonto davanti al mare",
-            "La quiete autentica del mare fuori stagione: poche parole, dettagli reali",
-            "Ospitalità semplice e curata: dal caffè del mattino all'orizzonte",
-        ]
-        concepts: list[CreativeConcept] = []
-        for idx in range(4):
-            c = self._build_concept_for_theme(themes[idx], angle_idx=idx, duration_sec=duration_sec)
-            # Prioritize concepts whose preset/hook hasn't just been used
-            penalty = 0.15 if c.preset in used_presets else 0.0
-            c.originality_score = round(max(0.1, c.originality_score - penalty), 2)
-            concepts.append(c)
-        concepts.sort(key=lambda x: (x.originality_score, x.feasibility_score), reverse=True)
-        return concepts[:3]
+        env = self.suggest_four_themes(CreativeRequestPayload(duration_sec=duration_sec))
+        return sorted(
+            env.concepts,
+            key=lambda x: (x.originality_score, x.feasibility_score),
+            reverse=True,
+        )[:3]
 
     def ideate_from_theme(
         self,
@@ -430,18 +775,14 @@ class CreativeDirector:
         preferred_asset_ids: Optional[list[str]] = None,
     ) -> list[CreativeConcept]:
         """Modalità Tema libero / Materiali caricati: returns 3 distinct concepts."""
-        if not theme or not theme.strip():
-            return self.surprise_me(duration_sec=duration_sec)
-        concepts = [
-            self._build_concept_for_theme(
-                theme,
-                angle_idx=i,
+        env = self.ideate_from_request(
+            CreativeRequestPayload(
+                theme=theme,
                 duration_sec=duration_sec,
-                preferred_asset_ids=preferred_asset_ids,
+                asset_ids=preferred_asset_ids or [],
             )
-            for i in range(3)
-        ]
-        return concepts
+        )
+        return env.concepts
 
     def build_storyboard(
         self,
@@ -449,7 +790,7 @@ class CreativeDirector:
         voice_id: str = "brando",
         fps: int = DEFAULT_FPS,
     ) -> list[StoryboardScene]:
-        """Build a frame-exact storyboard summing precisely to round(duration_sec * fps) frames."""
+        """Storyboard Engine 2.0: narrative-driven asset planning & exact 25fps frame math."""
         total_frames = int(round(concept.duration_sec * fps))
         outro_frames = min(int(round(3.0 * fps)), max(fps * 2, total_frames // 6))
         content_frames = total_frames - outro_frames
@@ -467,24 +808,26 @@ class CreativeDirector:
         if raw_phrases and raw_phrases[-1].strip().rstrip(".").upper() == "KORA":
             outro_phrase = f"{raw_phrases.pop()} {outro_phrase}"
 
-        # Gather visual assets from concept
-        assets: list[dict[str, Any]] = []
+        # Gather visual assets from concept + full vault pool
+        preferred_assets: list[dict[str, Any]] = []
         for aid in concept.available_asset_ids:
             a = self.vault.get_asset(aid)
             if a and a["category"] != "Logo" and a["media_type"] in ("image", "video"):
-                assets.append(a)
-        if not assets:
-            assets = [
-                a
-                for a in self.vault.list_assets()
-                if a["category"] != "Logo" and a["media_type"] in ("image", "video")
-            ]
+                preferred_assets.append(a)
+        all_visuals = [
+            a
+            for a in self.vault.list_assets()
+            if a["category"] != "Logo" and a["media_type"] in ("image", "video")
+        ]
+        assets_pool = preferred_assets + [
+            a for a in all_visuals if a["id"] not in {p["id"] for p in preferred_assets}
+        ]
 
         # Auto-scale scene count by duration (~3.2s per visual scene) and provided media assets
         content_sec = max(4.0, content_frames / fps)
         max_feasible_by_time = max(3, int(content_sec // 1.8))
         desired_by_duration = max(3, min(14, int(round(content_sec / 3.2))))
-        desired_by_assets = min(14, len(assets)) if len(assets) > 0 else 4
+        desired_by_assets = min(14, len(preferred_assets)) if preferred_assets else 4
         num_visual_scenes = max(
             3,
             min(max_feasible_by_time, max(desired_by_duration, desired_by_assets, len(raw_phrases))),
@@ -492,7 +835,6 @@ class CreativeDirector:
         if len(raw_phrases) == 0:
             raw_phrases = [""] * num_visual_scenes
         elif len(raw_phrases) < num_visual_scenes:
-            # Spread phrases across scenes so breathing shots sit naturally between spoken lines
             spread = [""] * num_visual_scenes
             for p_idx, phrase in enumerate(raw_phrases):
                 slot = min(
@@ -504,15 +846,25 @@ class CreativeDirector:
                 spread[slot] = phrase
             raw_phrases = spread
         elif len(raw_phrases) > num_visual_scenes:
-            # Merge trailing phrases cleanly
             merged = raw_phrases[: num_visual_scenes - 1]
             merged.append(" ".join(raw_phrases[num_visual_scenes - 1 :]))
             raw_phrases = merged
 
-        # Distribute content_frames deterministically across visual scenes
-        base = content_frames // num_visual_scenes
-        rem = content_frames % num_visual_scenes
-        durations = [base + (1 if i < rem else 0) for i in range(num_visual_scenes)]
+        # Narrative phase pacing: weight spoken scenes slightly longer than silent breath shots
+        weights = [1.25 if raw_phrases[i].strip() else 0.85 for i in range(num_visual_scenes)]
+        w_sum = sum(weights) or 1.0
+        durations = [max(fps, int(round(content_frames * (w / w_sum)))) for w in weights]
+        diff = content_frames - sum(durations)
+        d_idx = 0
+        while diff != 0 and num_visual_scenes > 0:
+            pos = d_idx % num_visual_scenes
+            if diff > 0:
+                durations[pos] += 1
+                diff -= 1
+            elif durations[pos] > fps:
+                durations[pos] -= 1
+                diff += 1
+            d_idx += 1
 
         motions_by_preset = {
             EditingPreset.CINEMATIC_IDENTITY.value: [
@@ -541,14 +893,52 @@ class CreativeDirector:
         logo = self.vault.get_logo_asset()
         scenes: list[StoryboardScene] = []
         cursor = 0
-        goals = ["Hook atmosferico", "Dettaglio e luce", "Esperienza autentica", "Respiro sul mare", "Chiusura emotiva"]
+        goals = [
+            "Hook atmosferico (apertura)",
+            "Ambiente & architettura naturale",
+            "Dettaglio tattile reale",
+            "Esperienza conviviale KORA",
+            "Respiro visivo sul mare",
+            "Chiusura emotiva",
+        ]
+        used_asset_ids: list[str] = []
 
         for idx in range(num_visual_scenes):
             dur_f = durations[idx]
-            asset = assets[idx % len(assets)] if assets else None
-            alt_asset = assets[(idx + 1) % len(assets)] if len(assets) > 1 else None
+            goal = goals[idx % len(goals)]
             spoken = raw_phrases[idx] if voice_id != "none" else ""
             sub = raw_phrases[idx]
+            phase_query = f"{goal} {sub} {concept.visual_mood}".strip()
+
+            # Narrative semantic asset selection avoiding consecutive duplicates
+            sem_matches = self.vault.semantic_search(phase_query, limit=8)
+            candidates = sem_matches + [
+                a for a in assets_pool if a["id"] not in {m["id"] for m in sem_matches}
+            ]
+            last_id = used_asset_ids[-1] if used_asset_ids else None
+            unused = [a for a in candidates if a["id"] not in used_asset_ids]
+            non_repeat = [a for a in candidates if a["id"] != last_id]
+            asset = (unused[0] if unused else (non_repeat[0] if non_repeat else (candidates[0] if candidates else None)))
+            alt_pool = [a for a in candidates if asset and a["id"] != asset["id"]]
+            alt_asset = alt_pool[0] if alt_pool else None
+            if asset:
+                used_asset_ids.append(asset["id"])
+
+            mm = (asset or {}).get("analysis", {}).get("multimodal", {})
+            framing = mm.get("framing") or (
+                "campo_ampio" if idx == 0 else ("dettaglio_ravvicinato" if "Dettaglio" in goal else "piano_medio")
+            )
+            rationale = (
+                f"Scelto '{asset['filename']}' ({asset['category']}, {mm.get('lighting', 'luce naturale')}) "
+                f"per sostenere '{goal}' senza alterare l'ambiente reale."
+                if asset
+                else "Nessun asset reale disponibile: richiesto caricamento o ritaglio conservativo."
+            )
+
+            # Assign speaker in dual-voice mode (Brando & Tiziana alternating per spoken line)
+            scene_voice = voice_id
+            if voice_id == "brando_tiziana":
+                scene_voice = "brando" if idx % 2 == 0 else "tiziana"
 
             # Infer authentic SFX matching only what's in the scene
             sfx_cat = "ambiente_spiaggia"
@@ -564,6 +954,13 @@ class CreativeDirector:
                 elif "pergolato" in cat_l or "ombre" in name_l:
                     sfx_cat = "vento"
 
+            gen_prompt = None
+            if not asset:
+                gen_prompt = (
+                    f"Generazione vincolata KORA Beach Club Policoro per '{goal}': {concept.visual_mood}. "
+                    "Non alterare architettura o arredi reali."
+                )
+
             scenes.append(
                 StoryboardScene(
                     scene_number=idx + 1,
@@ -573,11 +970,13 @@ class CreativeDirector:
                     start_sec=round(cursor / fps, 3),
                     end_sec=round((cursor + dur_f) / fps, 3),
                     duration_sec=round(dur_f / fps, 3),
-                    narrative_goal=goals[idx % len(goals)],
+                    narrative_goal=goal,
                     spoken_text=spoken,
-                    voice_id=voice_id,
+                    voice_id=scene_voice,
                     selected_asset_id=asset["id"] if asset else None,
                     alternative_asset_id=alt_asset["id"] if alt_asset else None,
+                    visual_rationale=rationale,
+                    shot_framing=framing,
                     asset_mode="video_clip" if (asset and asset["media_type"] == "video") else "animated_photo",
                     camera_motion=motions[idx % len(motions)],
                     transition=SceneTransition.CROSS_DISSOLVE.value
@@ -586,6 +985,10 @@ class CreativeDirector:
                     sfx_category=sfx_cat,
                     music_cue="musica_cinematic" if "cinematic" in concept.preset.lower() else "musica_ambient",
                     subtitle_text=sub,
+                    generative_prompt=gen_prompt,
+                    authenticity_status=(
+                        asset["authenticity_status"] if asset else AuthenticityStatus.DA_VERIFICARE.value
+                    ),
                     production_status="pianificata",
                     approval_status="approvata",
                     is_outro=False,
@@ -594,6 +997,7 @@ class CreativeDirector:
             cursor += dur_f
 
         # Final Logo Outro (exact remaining frames so total == total_frames)
+        outro_voice = "tiziana" if voice_id == "brando_tiziana" else voice_id
         scenes.append(
             StoryboardScene(
                 scene_number=num_visual_scenes + 1,
@@ -605,14 +1009,17 @@ class CreativeDirector:
                 duration_sec=round((total_frames - cursor) / fps, 3),
                 narrative_goal="Logo Outro KORA — The Art of Being",
                 spoken_text=outro_phrase if voice_id != "none" else "",
-                voice_id=voice_id,
+                voice_id=outro_voice,
                 selected_asset_id=logo["id"] if logo else None,
+                visual_rationale="Chiusura istituzionale con logo originale e payoff esatto 'The Art of Being'.",
+                shot_framing="outro_logo",
                 asset_mode="logo_outro",
                 camera_motion=CameraMotion.STATIC_BREATHE.value,
                 transition=SceneTransition.FADE_BLACK.value,
                 sfx_category="transizioni",
                 music_cue="fade_out",
                 subtitle_text="The Art of Being",
+                authenticity_status=AuthenticityStatus.AUTENTICO.value,
                 production_status="pianificata",
                 approval_status="approvata",
                 is_outro=True,

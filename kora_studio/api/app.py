@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import tempfile
 import threading
 from pathlib import Path
 from typing import Any, Optional
 
-from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -23,21 +24,61 @@ from kora_studio.agents.hyperframes_captions import (
     recommend_hyperframes_for_theme,
 )
 from kora_studio.backup.backup_manager import BackupManager
-from kora_studio.config import BACKUPS_DIR, REPO_ROOT
+from kora_studio.config import BACKUPS_DIR, DATA_DIR as KORA_DATA_DIR, REPO_ROOT
 from kora_studio.db.database import Database, utcnow_iso
-from kora_studio.db.models import CreativeConcept, StoryboardScene
+from kora_studio.db.models import CreativeConcept, CreativeRequestPayload, StoryboardScene
 from kora_studio.media_tools import check_remotion_runtime, find_ffmpeg, find_ffprobe
 
 FRONTEND_OUT_DIR = REPO_ROOT / "kora_studio" / "frontend" / "out"
+MAX_UPLOAD_BYTES = 150 * 1024 * 1024
+ALLOWED_LOCAL_ORIGINS = [
+    "http://127.0.0.1:8000",
+    "http://localhost:8000",
+    "http://127.0.0.1:3000",
+    "http://localhost:3000",
+]
+if os.environ.get("KORA_ALLOWED_ORIGIN"):
+    ALLOWED_LOCAL_ORIGINS.append(os.environ["KORA_ALLOWED_ORIGIN"].strip())
+
+
+def _require_local_trust(request: Request) -> None:
+    """Protect sensitive credential/budget/backup/generation endpoints against remote/CSRF access."""
+    client_host = (request.client.host if request.client else "") or ""
+    if client_host not in ("127.0.0.1", "::1", "localhost", "testclient"):
+        raise HTTPException(
+            status_code=403,
+            detail="Accesso negato: endpoint sensibile riservato all'host locale 127.0.0.1.",
+        )
+    host_header = (request.headers.get("host") or "").split(":")[0].strip().lower()
+    if host_header and host_header not in ("127.0.0.1", "localhost", "::1", "testserver"):
+        raise HTTPException(
+            status_code=403,
+            detail=f"Host header non autorizzato: {host_header}",
+        )
+    origin = request.headers.get("origin")
+    if origin and origin not in ALLOWED_LOCAL_ORIGINS:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Origine non autorizzata: {origin}",
+        )
+
+
+def _safe_workspace_file(path: Path) -> Path:
+    import kora_studio.config as cfg
+
+    resolved = path.resolve()
+    allowed_roots = [cfg.DATA_DIR.resolve(), cfg.REPO_ROOT.resolve()]
+    if not any(resolved.is_relative_to(r) for r in allowed_roots):
+        raise HTTPException(status_code=403, detail="Percorso file non consentito.")
+    if not resolved.is_file():
+        raise HTTPException(status_code=404, detail="File non trovato su disco.")
+    return resolved
 
 
 # ---- Request Schemas ------------------------------------------------------
 
 
-class ThemeRequest(BaseModel):
-    theme: str = ""
-    duration_sec: float = Field(default=20.0, ge=8.0, le=90.0)
-    asset_ids: list[str] = Field(default_factory=list)
+ThemeRequest = CreativeRequestPayload
 
 
 class CreateProjectRequest(BaseModel):
@@ -51,6 +92,7 @@ class CreateProjectRequest(BaseModel):
     concept: Optional[dict[str, Any]] = None
     caption_style: Optional[str] = None
     hyperframes: Optional[dict[str, Any]] = None
+    creative_request: Optional[dict[str, Any]] = None
     auto_start: bool = True
 
 
@@ -144,9 +186,9 @@ def create_app(db_path: Optional[Path] = None, auto_seed: bool = True) -> FastAP
 
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_origins=ALLOWED_LOCAL_ORIGINS,
+        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        allow_headers=["Content-Type", "X-Kora-Local-Token"],
     )
 
     # ---- Health & Diagnostics --------------------------------------------
@@ -217,6 +259,8 @@ def create_app(db_path: Optional[Path] = None, auto_seed: bool = True) -> FastAP
                 dest = Path(tmp) / fname
                 try:
                     content = await f.read()
+                    if len(content) > MAX_UPLOAD_BYTES:
+                        raise ValueError(f"File troppo grande (> {MAX_UPLOAD_BYTES // (1024 * 1024)} MB)")
                     dest.write_bytes(content)
                     item = director.vault.ingest_file(
                         dest,
@@ -244,9 +288,7 @@ def create_app(db_path: Optional[Path] = None, auto_seed: bool = True) -> FastAP
         asset = director.vault.get_asset(asset_id)
         if not asset:
             raise HTTPException(status_code=404, detail="Asset non trovato")
-        p = Path(asset["working_path"] or asset["original_path"])
-        if not p.is_file():
-            raise HTTPException(status_code=404, detail="File asset non presente su disco")
+        p = _safe_workspace_file(Path(asset["working_path"] or asset["original_path"]))
         return FileResponse(p)
 
     @app.get("/api/vault/{asset_id}/thumb")
@@ -256,7 +298,7 @@ def create_app(db_path: Optional[Path] = None, auto_seed: bool = True) -> FastAP
             raise HTTPException(status_code=404, detail="Asset non trovato")
         for cand in (asset.get("thumbnail_path"), asset.get("working_path"), asset.get("original_path")):
             if cand and Path(cand).is_file():
-                return FileResponse(Path(cand))
+                return FileResponse(_safe_workspace_file(Path(cand)))
         raise HTTPException(status_code=404, detail="Anteprima non disponibile")
 
     @app.post("/api/vault/{asset_id}/detail-crop")
@@ -281,24 +323,37 @@ def create_app(db_path: Optional[Path] = None, auto_seed: bool = True) -> FastAP
 
     @app.post("/api/creative/surprise")
     def creative_surprise(req: ThemeRequest) -> dict[str, Any]:
-        concepts = director.creative.surprise_me(duration_sec=req.duration_sec)
-        return {"concepts": [c.model_dump() for c in concepts]}
+        env = director.creative.suggest_four_themes(req)
+        return {
+            "concepts": [c.model_dump() for c in env.concepts[:3]],
+            "generation_engine": env.generation_engine,
+            "fallback_reason": env.fallback_reason,
+        }
 
     @app.post("/api/creative/from-theme")
     def creative_from_theme(req: ThemeRequest) -> dict[str, Any]:
-        concepts = director.creative.ideate_from_theme(
-            req.theme,
-            duration_sec=req.duration_sec,
-            preferred_asset_ids=req.asset_ids or None,
-        )
+        env = director.creative.ideate_from_request(req)
         suggestion = recommend_hyperframes_for_theme(req.theme)
         return {
-            "concepts": [c.model_dump() for c in concepts],
+            "concepts": [c.model_dump() for c in env.concepts],
+            "generation_engine": env.generation_engine,
+            "fallback_reason": env.fallback_reason,
             "recommendation": suggestion,
         }
 
     @app.post("/api/creative/suggest")
     def creative_suggest(req: ThemeRequest) -> dict[str, Any]:
+        """Genera 4 nuove proposte narrative originali KORA (non raccomandazioni Hyperframes)."""
+        env = director.creative.suggest_four_themes(req)
+        return {
+            "concepts": [c.model_dump() for c in env.concepts],
+            "generation_engine": env.generation_engine,
+            "fallback_reason": env.fallback_reason,
+        }
+
+    @app.post("/api/hyperframes/recommend")
+    def hyperframes_recommend(req: ThemeRequest) -> dict[str, Any]:
+        """Endpoint dedicato alle raccomandazioni HyperFrames (stile, grana, title card, motion)."""
         return recommend_hyperframes_for_theme(req.theme)
 
     @app.get("/api/voices")
@@ -337,6 +392,9 @@ def create_app(db_path: Optional[Path] = None, auto_seed: bool = True) -> FastAP
     @app.post("/api/projects")
     def create_project(req: CreateProjectRequest) -> dict[str, Any]:
         concept = CreativeConcept(**req.concept) if req.concept else None
+        prefs = {}
+        if req.creative_request:
+            prefs["creative_request"] = req.creative_request
         proj = director.create_project(
             title=req.title,
             theme=req.theme,
@@ -346,6 +404,7 @@ def create_app(db_path: Optional[Path] = None, auto_seed: bool = True) -> FastAP
             voice_id=req.voice_id,
             target_duration_sec=req.target_duration_sec,
             concept=concept,
+            preferences=prefs,
         )
         if req.caption_style or req.hyperframes:
             proj = director.sync_project_audio_and_caption(
@@ -443,7 +502,10 @@ def create_app(db_path: Optional[Path] = None, auto_seed: bool = True) -> FastAP
         proj = director.get_project(project_id)
         if not proj:
             raise HTTPException(status_code=404, detail="Progetto non trovato")
-        job = director.create_job(project_id, "full_production")
+        try:
+            job = director.create_job(project_id, "full_production")
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
         if req.sync:
             return director.run_production_pipeline(
                 project_id=project_id,
@@ -536,9 +598,7 @@ def create_app(db_path: Optional[Path] = None, auto_seed: bool = True) -> FastAP
         proj = director.get_project(project_id)
         if not proj or not proj.get("output_video_path"):
             raise HTTPException(status_code=404, detail="Video non ancora renderizzato")
-        p = Path(proj["output_video_path"])
-        if not p.is_file():
-            raise HTTPException(status_code=404, detail="File video non trovato su disco")
+        p = _safe_workspace_file(Path(proj["output_video_path"]))
         return FileResponse(p, media_type="video/mp4", filename=p.name)
 
     @app.get("/api/projects/{project_id}/download/{kind}")
@@ -558,9 +618,10 @@ def create_app(db_path: Optional[Path] = None, auto_seed: bool = True) -> FastAP
             "report_md": bundle.get("report_md"),
         }
         target = mapping.get(kind)
-        if not target or not Path(target).is_file():
+        if not target:
             raise HTTPException(status_code=404, detail=f"Artefatto '{kind}' non disponibile")
-        return FileResponse(Path(target), filename=Path(target).name)
+        p = _safe_workspace_file(Path(target))
+        return FileResponse(p, filename=p.name)
 
     # ---- Jobs ------------------------------------------------------------
 
@@ -595,36 +656,36 @@ def create_app(db_path: Optional[Path] = None, auto_seed: bool = True) -> FastAP
 
     # ---- AI Providers & Budget -------------------------------------------
 
-    @app.get("/api/providers")
+    @app.get("/api/providers", dependencies=[Depends(_require_local_trust)])
     def list_providers() -> list[dict[str, Any]]:
         return director.providers.list_providers()
 
-    @app.post("/api/providers/{provider_id}/key")
+    @app.post("/api/providers/{provider_id}/key", dependencies=[Depends(_require_local_trust)])
     def set_provider_key(provider_id: str, req: ProviderKeyRequest) -> dict[str, Any]:
         try:
             return director.providers.set_api_key(provider_id, req.api_key)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc))
 
-    @app.post("/api/providers/remotion_local/setup")
+    @app.post("/api/providers/remotion_local/setup", dependencies=[Depends(_require_local_trust)])
     def setup_remotion() -> dict[str, Any]:
         return director.providers.setup_remotion()
 
-    @app.post("/api/providers/piper_tts_local/install-model")
+    @app.post("/api/providers/piper_tts_local/install-model", dependencies=[Depends(_require_local_trust)])
     def install_piper_model() -> dict[str, Any]:
         try:
             return director.providers.install_piper_italian_voice()
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc))
 
-    @app.get("/api/providers/elevenlabs_api/voices")
+    @app.get("/api/providers/elevenlabs_api/voices", dependencies=[Depends(_require_local_trust)])
     def list_elevenlabs_account_voices() -> list[dict[str, Any]]:
         try:
             return director.providers.fetch_elevenlabs_voices()
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc))
 
-    @app.post("/api/media-lab/veo")
+    @app.post("/api/media-lab/veo", dependencies=[Depends(_require_local_trust)])
     def run_veo_media_lab(req: VeoVideoRequest) -> dict[str, Any]:
         try:
             return director.media_lab.execute_veo_video(
@@ -638,7 +699,7 @@ def create_app(db_path: Optional[Path] = None, auto_seed: bool = True) -> FastAP
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc))
 
-    @app.post("/api/media-lab/video")
+    @app.post("/api/media-lab/video", dependencies=[Depends(_require_local_trust)])
     def run_ai_video_media_lab(req: AIVideoRequest) -> dict[str, Any]:
         try:
             return director.media_lab.execute_ai_video(
@@ -654,25 +715,25 @@ def create_app(db_path: Optional[Path] = None, auto_seed: bool = True) -> FastAP
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc))
 
-    @app.post("/api/providers/{provider_id}/check")
+    @app.post("/api/providers/{provider_id}/check", dependencies=[Depends(_require_local_trust)])
     def check_provider(provider_id: str) -> dict[str, Any]:
         try:
             return director.providers.check_provider(provider_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc))
 
-    @app.put("/api/voices/{voice_id}/elevenlabs-id")
+    @app.put("/api/voices/{voice_id}/elevenlabs-id", dependencies=[Depends(_require_local_trust)])
     def set_voice_elevenlabs_id(voice_id: str, req: VoiceIdMappingRequest) -> dict[str, Any]:
         try:
             return director.voice_director.set_elevenlabs_voice_id(voice_id, req.elevenlabs_voice_id)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
 
-    @app.get("/api/budget")
+    @app.get("/api/budget", dependencies=[Depends(_require_local_trust)])
     def get_budget() -> dict[str, Any]:
         return director.providers.cost_guard.get_budget_settings()
 
-    @app.put("/api/budget")
+    @app.put("/api/budget", dependencies=[Depends(_require_local_trust)])
     def update_budget(req: BudgetUpdateRequest) -> dict[str, Any]:
         try:
             return director.providers.cost_guard.update_budget_settings(
@@ -682,25 +743,25 @@ def create_app(db_path: Optional[Path] = None, auto_seed: bool = True) -> FastAP
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
 
-    @app.get("/api/budget/history")
+    @app.get("/api/budget/history", dependencies=[Depends(_require_local_trust)])
     def budget_history() -> list[dict[str, Any]]:
         return director.providers.cost_guard.get_usage_history()
 
     # ---- Backup & Maintenance --------------------------------------------
 
-    @app.get("/api/backup/integrity")
+    @app.get("/api/backup/integrity", dependencies=[Depends(_require_local_trust)])
     def check_integrity() -> dict[str, Any]:
         return backup_mgr.check_integrity()
 
-    @app.post("/api/backup/create")
+    @app.post("/api/backup/create", dependencies=[Depends(_require_local_trust)])
     def create_backup() -> dict[str, Any]:
         return backup_mgr.create_backup(include_originals=True)
 
-    @app.post("/api/backup/clean-cache")
+    @app.post("/api/backup/clean-cache", dependencies=[Depends(_require_local_trust)])
     def clean_cache() -> dict[str, Any]:
         return backup_mgr.clean_cache()
 
-    @app.get("/api/backup/list")
+    @app.get("/api/backup/list", dependencies=[Depends(_require_local_trust)])
     def list_backups() -> list[dict[str, Any]]:
         if not BACKUPS_DIR.is_dir():
             return []

@@ -11,9 +11,12 @@ import {
   AlertCircle,
   Volume2,
   Wand2,
+  ChevronDown,
+  ChevronUp,
 } from "lucide-react";
 import type {
   CreativeConcept,
+  CreativeRequestPayload,
   HyperframesConfig,
   MediaAsset,
   ProductionMode,
@@ -53,10 +56,23 @@ export function HomeHub({
   onOpenProject,
   onVaultUpdated,
 }: HomeHubProps) {
-  const [activeAction, setActiveAction] = useState<"surprise" | "theme" | "photos" | "resume" | null>(null);
+  const [activeAction, setActiveAction] = useState<"suggest" | "idea" | "media" | "resume" | null>(
+    null
+  );
   const [themeText, setThemeText] = useState("");
+  const [objective, setObjective] = useState("Valorizzare l'identità e l'ospitalità KORA");
   const [durationSec, setDurationSec] = useState(20);
+  const [voiceId, setVoiceId] = useState("brando");
+  const [voicePreviewUrl, setVoicePreviewUrl] = useState<string | null>(null);
+
+  // Advanced / Technical controls (collapsed by default per Section 8 UX)
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [prodMode, setProdMode] = useState<ProductionMode>("AUTO");
   const [presetOverride, setPresetOverride] = useState("AUTO_CONCEPT");
+  const [mediaSelection, setMediaSelection] = useState("vault_auto");
+  const [generationPolicy, setGenerationPolicy] = useState("authentic_first");
+  const [budgetEur, setBudgetEur] = useState(0);
+  const [customInstructions, setCustomInstructions] = useState("");
   const [hyperframes, setHyperframes] = useState<HyperframesConfig>({
     caption_style: "serif_ivory",
     title_card_intro: "none",
@@ -65,25 +81,43 @@ export function HomeHub({
     letterbox: "none",
     motion_pace: "balanced",
   });
-  const [showHyperframesDrawer, setShowHyperframesDrawer] = useState(false);
+
   const [recommendation, setRecommendation] = useState<ThemeSuggestionResponse | null>(null);
-  const [voicePreviewUrl, setVoicePreviewUrl] = useState<string | null>(null);
+  const [engineInfo, setEngineInfo] = useState<{ engine?: string; fallback?: string | null } | null>(
+    null
+  );
+  const [selectedConceptId, setSelectedConceptId] = useState<string | null>(null);
   const [dragActive, setDragActive] = useState(false);
-  const [voiceId, setVoiceId] = useState("brando");
-  const [prodMode, setProdMode] = useState<ProductionMode>("AUTO");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [proposals, setProposals] = useState<CreativeConcept[]>([]);
   const [uploadedInfo, setUploadedInfo] = useState<MediaAsset[]>([]);
 
-  const handleSurprise = async () => {
-    setActiveAction("surprise");
+  const buildRequestPayload = (overrideTheme?: string): Partial<CreativeRequestPayload> => ({
+    theme: (overrideTheme ?? themeText).trim(),
+    objective: objective.trim(),
+    duration_sec: durationSec,
+    voice_id: voiceId,
+    media_selection: mediaSelection,
+    generation_policy: generationPolicy,
+    budget_eur: budgetEur,
+    custom_instructions: customInstructions.trim(),
+  });
+
+  const handleSuggestThemes = async () => {
+    setActiveAction("suggest");
     setLoading(true);
     setError(null);
     try {
-      const res = await koraApi.surpriseMe(durationSec);
+      const res = await koraApi.suggestThemes(buildRequestPayload(""));
       setProposals(res.concepts);
-      onConceptsReady(res.concepts, "Sorprendimi · Proposta KORA", "surprise");
+      setEngineInfo({ engine: res.generation_engine, fallback: res.fallback_reason });
+      if (res.concepts[0]) {
+        setSelectedConceptId(res.concepts[0].id);
+        if (res.concepts[0].objective) setObjective(res.concepts[0].objective);
+        if (res.concepts[0].recommended_voice_id) setVoiceId(res.concepts[0].recommended_voice_id);
+      }
+      onConceptsReady(res.concepts, "Suggerisci un tema · Proposte KORA", "suggest");
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -91,16 +125,20 @@ export function HomeHub({
     }
   };
 
-  const handleThemeSubmit = async (e: React.FormEvent) => {
+  const handleIdeaSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!themeText.trim()) return;
     setLoading(true);
     setError(null);
     try {
-      const res = await koraApi.fromTheme(themeText.trim(), durationSec);
+      const res = await koraApi.fromTheme(buildRequestPayload());
       setProposals(res.concepts);
+      setEngineInfo({ engine: res.generation_engine, fallback: res.fallback_reason });
       if (res.recommendation) {
         setRecommendation(res.recommendation);
+      }
+      if (res.concepts[0]) {
+        setSelectedConceptId(res.concepts[0].id);
       }
       onConceptsReady(res.concepts, themeText.trim(), "theme");
     } catch (err) {
@@ -110,11 +148,14 @@ export function HomeHub({
     }
   };
 
-  const handleGetSuggestions = async () => {
+  const handleRecommendHyperframes = async () => {
     setLoading(true);
     setError(null);
     try {
-      const rec = await koraApi.suggestTheme(themeText.trim() || "mare e ospitalità a Policoro", durationSec);
+      const rec = await koraApi.recommendHyperframes(
+        themeText.trim() || objective || "mare e ospitalità a Policoro",
+        durationSec
+      );
       setRecommendation(rec);
     } catch (err) {
       setError((err as Error).message);
@@ -135,7 +176,7 @@ export function HomeHub({
       if (res.errors.length > 0) {
         setError(res.errors.map((x) => `${x.filename}: ${x.error}`).join(" · "));
       }
-      onConceptsReady(res.suggested_concepts, "Creazione dai materiali caricati", "photos");
+      onConceptsReady(res.suggested_concepts, "Creazione dai media caricati", "photos");
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -143,10 +184,17 @@ export function HomeHub({
     }
   };
 
+  const selectConceptAndPrefill = (c: CreativeConcept) => {
+    setSelectedConceptId(c.id);
+    if (c.objective) setObjective(c.objective);
+    if (c.recommended_voice_id) setVoiceId(c.recommended_voice_id);
+    if (c.duration_sec) setDurationSec(c.duration_sec);
+  };
+
   return (
-    <div className="mx-auto max-w-5xl space-y-10 py-6">
-      {/* Zero-Friction Central Prompt */}
-      <section className="rounded-3xl border border-[#DDD4C4] bg-white/80 p-8 shadow-sm backdrop-blur-sm md:p-12">
+    <div className="mx-auto max-w-6xl space-y-8 py-4">
+      {/* Conversational Prompt Hub */}
+      <section className="rounded-3xl border border-[#DDD4C4] bg-white/85 p-7 shadow-sm backdrop-blur-sm md:p-10">
         <div className="mx-auto max-w-2xl text-center">
           <p className="text-xs font-medium uppercase tracking-[0.22em] text-[#9A8052]">
             KORA Beach Club · Policoro · The Art of Being
@@ -154,58 +202,58 @@ export function HomeHub({
           <h1 className="font-editorial mt-3 text-3xl font-normal text-[#1D1B18] md:text-5xl">
             Che storia raccontiamo oggi?
           </h1>
-          <p className="mt-3 text-sm text-[#6C6459]">
-            Descrivi l&apos;idea o scegli un punto di partenza. KORA STUDIO cura regia, materiali autentici, voce, montaggio 9:16 e controllo qualità.
+          <p className="mt-2.5 text-sm text-[#6C6459]">
+            Scegli come iniziare: <strong>Suggerisci un tema → Progetta il nuovo Reel → Realizza Reel</strong>.
           </p>
         </div>
 
-        {/* 4 Primary Actions */}
-        <div className="mt-9 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        {/* 4 Primary Conversational Actions */}
+        <div className="mt-8 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <button
             type="button"
-            onClick={handleSurprise}
+            onClick={handleSuggestThemes}
             className={`group rounded-2xl border p-5 text-left transition ${
-              activeAction === "surprise"
+              activeAction === "suggest"
                 ? "border-[#224C66] bg-[#224C66]/5"
                 : "border-[#DDD4C4] bg-[#FAF7F2] hover:border-[#9A8052]"
             }`}
           >
             <Sparkles className="h-5 w-5 text-[#9A8052]" />
-            <div className="mt-3 font-medium text-[#1D1B18]">1. Sorprendimi</div>
+            <div className="mt-3 font-medium text-[#1D1B18]">1. Suggerisci un tema</div>
             <div className="mt-1 text-xs text-[#6C6459]">
-              3 idee originali basate su archivio, stagione e identità KORA.
+              4 proposte originali dal Media Vault, stagione e storico KORA.
             </div>
           </button>
 
           <button
             type="button"
-            onClick={() => setActiveAction("theme")}
+            onClick={() => setActiveAction("idea")}
             className={`group rounded-2xl border p-5 text-left transition ${
-              activeAction === "theme"
+              activeAction === "idea"
                 ? "border-[#224C66] bg-[#224C66]/5"
                 : "border-[#DDD4C4] bg-[#FAF7F2] hover:border-[#9A8052]"
             }`}
           >
             <PenLine className="h-5 w-5 text-[#224C66]" />
-            <div className="mt-3 font-medium text-[#1D1B18]">2. Crea da un tema</div>
+            <div className="mt-3 font-medium text-[#1D1B18]">2. Parti dalla mia idea</div>
             <div className="mt-1 text-xs text-[#6C6459]">
-              Anche una sola frase libera diventa un Reel completo.
+              Inserisci un tema libero, obiettivo e durata desiderata.
             </div>
           </button>
 
           <button
             type="button"
-            onClick={() => setActiveAction("photos")}
+            onClick={() => setActiveAction("media")}
             className={`group rounded-2xl border p-5 text-left transition ${
-              activeAction === "photos"
+              activeAction === "media"
                 ? "border-[#224C66] bg-[#224C66]/5"
                 : "border-[#DDD4C4] bg-[#FAF7F2] hover:border-[#9A8052]"
             }`}
           >
             <ImagePlus className="h-5 w-5 text-[#9A8052]" />
-            <div className="mt-3 font-medium text-[#1D1B18]">3. Crea dalle mie foto</div>
+            <div className="mt-3 font-medium text-[#1D1B18]">3. Crea dai miei media</div>
             <div className="mt-1 text-xs text-[#6C6459]">
-              Trascina foto o video: analisi qualità e concept automatici.
+              Trascina foto o clip: analisi multimodale e concept immediati.
             </div>
           </button>
 
@@ -219,37 +267,35 @@ export function HomeHub({
             }`}
           >
             <History className="h-5 w-5 text-[#224C66]" />
-            <div className="mt-3 font-medium text-[#1D1B18]">4. Riprendi un progetto</div>
+            <div className="mt-3 font-medium text-[#1D1B18]">4. Riprendi una produzione</div>
             <div className="mt-1 text-xs text-[#6C6459]">
-              Continua una bozza o rivedi un Reel già prodotto.
+              Continua una bozza o rivedi un Reel con revisione conversazionale.
             </div>
           </button>
         </div>
 
-        {/* Minimal Production Controls */}
-        <div className="mt-6 flex flex-wrap items-center justify-between gap-4 border-t border-[#EDE6D9] pt-5 text-xs text-[#6C6459]">
-          <div className="flex flex-wrap items-center gap-3">
-            <label className="flex items-center gap-2">
-              <span className="font-medium text-[#1D1B18]">Modalità:</span>
-              <select
-                value={prodMode}
-                onChange={(e) => setProdMode(e.target.value as ProductionMode)}
-                className="rounded-lg border border-[#DDD4C4] bg-white px-2.5 py-1.5 text-xs text-[#1D1B18]"
-              >
-                <option value="AUTO">AUTO (predefinita — fino all&apos;anteprima)</option>
-                <option value="GUIDATA">GUIDATA (approvazione per fasi)</option>
-                <option value="REGIA_COMPLETA">REGIA COMPLETA (controllo scene)</option>
-              </select>
-            </label>
-            <label className="flex items-center gap-2">
-              <span className="font-medium text-[#1D1B18]">Voce:</span>
+        {/* Essential Decisions Only (Objective, Voice + Preview, Duration) */}
+        <div className="mt-6 grid grid-cols-1 gap-3 border-t border-[#EDE6D9] pt-5 md:grid-cols-12 text-xs">
+          <label className="md:col-span-5 space-y-1">
+            <span className="font-medium text-[#1D1B18]">Obiettivo narrativo</span>
+            <input
+              type="text"
+              value={objective}
+              onChange={(e) => setObjective(e.target.value)}
+              placeholder="Es. Raccontare il mattino lento o l'aperitivo vista mare"
+              className="w-full rounded-xl border border-[#DDD4C4] bg-[#FAF7F2] px-3 py-2 text-xs text-[#1D1B18]"
+            />
+          </label>
+          <div className="md:col-span-4 space-y-1">
+            <span className="font-medium text-[#1D1B18]">Voce narrante</span>
+            <div className="flex items-center gap-2">
               <select
                 value={voiceId}
                 onChange={(e) => {
                   setVoiceId(e.target.value);
                   setVoicePreviewUrl(null);
                 }}
-                className="rounded-lg border border-[#DDD4C4] bg-white px-2.5 py-1.5 text-xs text-[#1D1B18]"
+                className="flex-1 rounded-xl border border-[#DDD4C4] bg-[#FAF7F2] px-2.5 py-2 text-xs text-[#1D1B18]"
               >
                 {voices.map((v) => (
                   <option key={v.id} value={v.id}>
@@ -259,7 +305,7 @@ export function HomeHub({
                         ? " (ElevenLabs pronto)"
                         : v.piper_local_available
                           ? " (Piper/Fallback)"
-                          : " (Fallback per testi nuovi)"
+                          : " (Fallback)"
                       : ""}
                   </option>
                 ))}
@@ -270,56 +316,28 @@ export function HomeHub({
                   onClick={() =>
                     setVoicePreviewUrl(`/api/voices/${voiceId}/sample?engine=auto&t=${Date.now()}`)
                   }
-                  className="inline-flex items-center gap-1 rounded-lg border border-[#DDD4C4] bg-[#FAF7F2] px-2.5 py-1.5 text-[11px] font-medium text-[#1D1B18] hover:border-[#9A8052]"
-                  title="Ascolta una breve anteprima della voce selezionata"
+                  className="inline-flex items-center gap-1 rounded-xl border border-[#DDD4C4] bg-white px-2.5 py-2 text-[11px] font-medium hover:border-[#9A8052]"
                 >
                   <Volume2 className="h-3.5 w-3.5 text-[#9A8052]" /> Ascolta
                 </button>
               )}
-            </label>
-            <label className="flex items-center gap-2">
-              <span className="font-medium text-[#1D1B18]">Durata:</span>
-              <select
-                value={durationSec}
-                onChange={(e) => setDurationSec(Number(e.target.value))}
-                className="rounded-lg border border-[#DDD4C4] bg-white px-2.5 py-1.5 text-xs text-[#1D1B18]"
-              >
-                <option value={12}>12 s (4–5 scene auto)</option>
-                <option value={15}>15 s (5–6 scene auto)</option>
-                <option value={20}>20 s (6–7 scene auto)</option>
-                <option value={30}>30 s (9–10 scene auto)</option>
-                <option value={45}>45 s (12–13 scene auto)</option>
-                <option value={60}>60 s (14–15 scene auto)</option>
-              </select>
-            </label>
-            <label className="flex items-center gap-2">
-              <span className="font-medium text-[#1D1B18]">Stile:</span>
-              <select
-                value={presetOverride}
-                onChange={(e) => setPresetOverride(e.target.value)}
-                className="rounded-lg border border-[#DDD4C4] bg-white px-2.5 py-1.5 text-xs text-[#1D1B18]"
-              >
-                <option value="AUTO_CONCEPT">Automatico (dal concept)</option>
-                <option value="KORA Cinematic Identity">KORA Cinematic Identity</option>
-                <option value="KORA Experience">KORA Experience</option>
-                <option value="KORA Seasonal">KORA Seasonal</option>
-                <option value="KORA Editorial">KORA Editorial</option>
-              </select>
-            </label>
-            <button
-              type="button"
-              onClick={() => setShowHyperframesDrawer((prev) => !prev)}
-              className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium transition ${
-                showHyperframesDrawer
-                  ? "border-[#224C66] bg-[#224C66]/10 text-[#224C66]"
-                  : "border-[#DDD4C4] bg-[#FAF7F2] text-[#1D1B18] hover:border-[#9A8052]"
-              }`}
-            >
-              <Wand2 className="h-3.5 w-3.5 text-[#9A8052]" />
-              Opzioni Hyperframes ({hyperframes.caption_style.replace("hyperframes_", "HF ")})
-            </button>
+            </div>
           </div>
-          <span>1080×1920 · 9:16 · 25 fps · Rec.709</span>
+          <label className="md:col-span-3 space-y-1">
+            <span className="font-medium text-[#1D1B18]">Durata target</span>
+            <select
+              value={durationSec}
+              onChange={(e) => setDurationSec(Number(e.target.value))}
+              className="w-full rounded-xl border border-[#DDD4C4] bg-[#FAF7F2] px-2.5 py-2 text-xs text-[#1D1B18]"
+            >
+              <option value={12}>12 s (ritmo rapido)</option>
+              <option value={15}>15 s (compatto)</option>
+              <option value={20}>20 s (standard KORA)</option>
+              <option value={30}>30 s (racconto esteso)</option>
+              <option value={45}>45 s (editoriale)</option>
+              <option value={60}>60 s (documentario breve)</option>
+            </select>
+          </label>
         </div>
 
         {voicePreviewUrl && (
@@ -329,122 +347,209 @@ export function HomeHub({
           </div>
         )}
 
-        {showHyperframesDrawer && (
-          <div className="mt-4 rounded-2xl border border-[#DDD4C4] bg-[#FAF7F2] p-4 space-y-3 text-xs">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="font-medium text-[#1D1B18]">
-                Configurazione completa Motore Hyperframes (Testi, Title Card, Grana, Vignettatura, Cornice, Ritmo)
+        {/* Collapsible Technical & Hyperframes Advanced Section */}
+        <div className="mt-4">
+          <button
+            type="button"
+            onClick={() => setShowAdvanced((v) => !v)}
+            className="inline-flex items-center gap-1.5 text-xs font-medium text-[#6C6459] hover:text-[#1D1B18]"
+          >
+            <Wand2 className="h-3.5 w-3.5 text-[#9A8052]" />
+            Parametri avanzati &amp; Hyperframes ({hyperframes.caption_style.replace("hyperframes_", "HF ")})
+            {showAdvanced ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+          </button>
+
+          {showAdvanced && (
+            <div className="mt-3 rounded-2xl border border-[#DDD4C4] bg-[#FAF7F2] p-4 space-y-4 text-xs">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                <label className="space-y-1">
+                  <span className="text-[11px] text-[#6C6459]">Modalità produzione</span>
+                  <select
+                    value={prodMode}
+                    onChange={(e) => setProdMode(e.target.value as ProductionMode)}
+                    className="w-full rounded-lg border border-[#DDD4C4] bg-white px-2.5 py-1.5 text-xs"
+                  >
+                    <option value="AUTO">AUTO (fino al rendering)</option>
+                    <option value="GUIDATA">GUIDATA (approvazione scene)</option>
+                    <option value="REGIA_COMPLETA">REGIA COMPLETA</option>
+                  </select>
+                </label>
+                <label className="space-y-1">
+                  <span className="text-[11px] text-[#6C6459]">Preset KORA</span>
+                  <select
+                    value={presetOverride}
+                    onChange={(e) => setPresetOverride(e.target.value)}
+                    className="w-full rounded-lg border border-[#DDD4C4] bg-white px-2.5 py-1.5 text-xs"
+                  >
+                    <option value="AUTO_CONCEPT">Automatico (dal concept)</option>
+                    <option value="KORA Cinematic Identity">KORA Cinematic Identity</option>
+                    <option value="KORA Experience">KORA Experience</option>
+                    <option value="KORA Seasonal">KORA Seasonal</option>
+                    <option value="KORA Editorial">KORA Editorial</option>
+                  </select>
+                </label>
+                <label className="space-y-1">
+                  <span className="text-[11px] text-[#6C6459]">Politica generazione media</span>
+                  <select
+                    value={generationPolicy}
+                    onChange={(e) => {
+                      setGenerationPolicy(e.target.value);
+                      setMediaSelection(e.target.value === "conservative_only" ? "allow_crops" : "vault_auto");
+                    }}
+                    className="w-full rounded-lg border border-[#DDD4C4] bg-white px-2.5 py-1.5 text-xs"
+                  >
+                    <option value="authentic_first">Solo autentici → crop → I2V</option>
+                    <option value="conservative_only">Solo originali + crop conservativi</option>
+                    <option value="controlled_i2v">Consenti I2V vincolato se necessario</option>
+                  </select>
+                </label>
+                <label className="space-y-1">
+                  <span className="text-[11px] text-[#6C6459]">Budget massimo richiesta (€)</span>
+                  <input
+                    type="number"
+                    min="0"
+                    max="20"
+                    step="0.5"
+                    value={budgetEur}
+                    onChange={(e) => setBudgetEur(Math.max(0, Number(e.target.value)))}
+                    className="w-full rounded-lg border border-[#DDD4C4] bg-white px-2.5 py-1.5 text-xs"
+                  />
+                </label>
               </div>
-              <button
-                type="button"
-                onClick={handleGetSuggestions}
-                className="inline-flex items-center gap-1 rounded-lg bg-[#9A8052] px-3 py-1 text-[11px] font-medium text-white hover:bg-[#7e673e]"
-              >
-                <Sparkles className="h-3 w-3" /> Suggerisci dal tema
-              </button>
+
+              <label className="block space-y-1">
+                <span className="text-[11px] text-[#6C6459]">Istruzioni creative personalizzate</span>
+                <input
+                  type="text"
+                  value={customInstructions}
+                  onChange={(e) => setCustomInstructions(e.target.value)}
+                  placeholder="Es. Evita primi piani sul tavolo, privilegia onde e luce radente."
+                  className="w-full rounded-lg border border-[#DDD4C4] bg-white px-3 py-1.5 text-xs"
+                />
+              </label>
+
+              <div className="border-t border-[#EDE6D9] pt-3 space-y-2.5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="font-medium text-[#1D1B18]">
+                    Opzioni Motore Hyperframes
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleRecommendHyperframes}
+                    className="inline-flex items-center gap-1 rounded-lg bg-[#9A8052] px-3 py-1 text-[11px] font-medium text-white hover:bg-[#7e673e]"
+                  >
+                    <Sparkles className="h-3 w-3" /> Consiglia opzioni Hyperframes
+                  </button>
+                </div>
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                  <label className="space-y-1">
+                    <span className="text-[11px] text-[#6C6459]">Stile Caption</span>
+                    <select
+                      value={hyperframes.caption_style}
+                      onChange={(e) => setHyperframes((h) => ({ ...h, caption_style: e.target.value }))}
+                      className="w-full rounded-lg border border-[#DDD4C4] bg-white px-2.5 py-1.5 text-xs"
+                    >
+                      <option value="serif_ivory">KORA Classic Serif</option>
+                      <option value="serif_minimal">Editorial Minimal</option>
+                      <option value="clean_sans">Space Grotesk Clean</option>
+                      <option value="hyperframes_kinetic">Hyperframes · Kinetic Gold</option>
+                      <option value="hyperframes_glass">Hyperframes · Mediterranean Glass</option>
+                      <option value="hyperframes_word_highlight">Hyperframes · Word Highlight</option>
+                    </select>
+                  </label>
+                  <label className="space-y-1">
+                    <span className="text-[11px] text-[#6C6459]">Title Card Apertura</span>
+                    <select
+                      value={hyperframes.title_card_intro}
+                      onChange={(e) => setHyperframes((h) => ({ ...h, title_card_intro: e.target.value }))}
+                      className="w-full rounded-lg border border-[#DDD4C4] bg-white px-2.5 py-1.5 text-xs"
+                    >
+                      <option value="none">Nessuna Title Card</option>
+                      <option value="editorial_serif">Editorial Serif Intro</option>
+                      <option value="hyperframes_gold_line">Hyperframes · Gold Line Title</option>
+                    </select>
+                  </label>
+                  <label className="space-y-1">
+                    <span className="text-[11px] text-[#6C6459]">Grana (grain-overlay)</span>
+                    <select
+                      value={hyperframes.grain_overlay}
+                      onChange={(e) => setHyperframes((h) => ({ ...h, grain_overlay: e.target.value }))}
+                      className="w-full rounded-lg border border-[#DDD4C4] bg-white px-2.5 py-1.5 text-xs"
+                    >
+                      <option value="none">Pulito</option>
+                      <option value="subtle_35mm">Grana 35mm leggera</option>
+                      <option value="warm_kodak">Pellicola calda Kodak</option>
+                    </select>
+                  </label>
+                  <label className="space-y-1">
+                    <span className="text-[11px] text-[#6C6459]">Vignettatura</span>
+                    <select
+                      value={hyperframes.vignette}
+                      onChange={(e) => setHyperframes((h) => ({ ...h, vignette: e.target.value }))}
+                      className="w-full rounded-lg border border-[#DDD4C4] bg-white px-2.5 py-1.5 text-xs"
+                    >
+                      <option value="none">Nessuna</option>
+                      <option value="soft_luxury">Luxury morbida</option>
+                      <option value="deep_cinematic">Cinema intensa</option>
+                    </select>
+                  </label>
+                  <label className="space-y-1">
+                    <span className="text-[11px] text-[#6C6459]">Cornice / Letterbox</span>
+                    <select
+                      value={hyperframes.letterbox}
+                      onChange={(e) => setHyperframes((h) => ({ ...h, letterbox: e.target.value }))}
+                      className="w-full rounded-lg border border-[#DDD4C4] bg-white px-2.5 py-1.5 text-xs"
+                    >
+                      <option value="none">Pieno 9:16</option>
+                      <option value="cinema_frame">Cornice Cinema</option>
+                      <option value="editorial_border">Passepartout Avorio</option>
+                    </select>
+                  </label>
+                  <label className="space-y-1">
+                    <span className="text-[11px] text-[#6C6459]">Ritmo Motion</span>
+                    <select
+                      value={hyperframes.motion_pace}
+                      onChange={(e) => setHyperframes((h) => ({ ...h, motion_pace: e.target.value }))}
+                      className="w-full rounded-lg border border-[#DDD4C4] bg-white px-2.5 py-1.5 text-xs"
+                    >
+                      <option value="slow_contemplative">Lento contemplativo</option>
+                      <option value="balanced">Equilibrato KORA</option>
+                      <option value="dynamic_experience">Dinamico Experience</option>
+                    </select>
+                  </label>
+                </div>
+                {recommendation && (
+                  <div className="rounded-xl border border-[#DDD4C4] bg-white p-3 flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-[#4A443C]">{recommendation.rationale}</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setHyperframes(recommendation.recommended_hyperframes);
+                        setPresetOverride(recommendation.recommended_preset);
+                      }}
+                      className="rounded-lg bg-[#224C66] px-3 py-1 text-[11px] font-medium text-white"
+                    >
+                      Applica Hyperframes consigliati
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              <label className="block space-y-1">
-                <span className="text-[11px] text-[#6C6459]">Stile Sottotitoli / Caption</span>
-                <select
-                  value={hyperframes.caption_style}
-                  onChange={(e) => setHyperframes((h) => ({ ...h, caption_style: e.target.value }))}
-                  className="w-full rounded-lg border border-[#DDD4C4] bg-white px-2.5 py-1.5 text-xs"
-                >
-                  <option value="serif_ivory">KORA Classic Serif</option>
-                  <option value="serif_minimal">Editorial Minimal</option>
-                  <option value="clean_sans">Space Grotesk Clean</option>
-                  <option value="hyperframes_kinetic">Hyperframes · Kinetic Gold</option>
-                  <option value="hyperframes_glass">Hyperframes · Mediterranean Glass</option>
-                  <option value="hyperframes_word_highlight">Hyperframes · Word Highlight</option>
-                </select>
-              </label>
-              <label className="block space-y-1">
-                <span className="text-[11px] text-[#6C6459]">Title Card Apertura (Scena 1)</span>
-                <select
-                  value={hyperframes.title_card_intro}
-                  onChange={(e) => setHyperframes((h) => ({ ...h, title_card_intro: e.target.value }))}
-                  className="w-full rounded-lg border border-[#DDD4C4] bg-white px-2.5 py-1.5 text-xs"
-                >
-                  <option value="none">Nessuna Title Card</option>
-                  <option value="editorial_serif">Editorial Serif Intro</option>
-                  <option value="hyperframes_gold_line">Hyperframes · Gold Line Title</option>
-                </select>
-              </label>
-              <label className="block space-y-1">
-                <span className="text-[11px] text-[#6C6459]">Grana Pellicola (grain-overlay)</span>
-                <select
-                  value={hyperframes.grain_overlay}
-                  onChange={(e) => setHyperframes((h) => ({ ...h, grain_overlay: e.target.value }))}
-                  className="w-full rounded-lg border border-[#DDD4C4] bg-white px-2.5 py-1.5 text-xs"
-                >
-                  <option value="none">Pulito (Nessuna grana)</option>
-                  <option value="subtle_35mm">Grana 35mm leggera</option>
-                  <option value="warm_kodak">Pellicola calda Kodak</option>
-                </select>
-              </label>
-              <label className="block space-y-1">
-                <span className="text-[11px] text-[#6C6459]">Vignettatura Ottica</span>
-                <select
-                  value={hyperframes.vignette}
-                  onChange={(e) => setHyperframes((h) => ({ ...h, vignette: e.target.value }))}
-                  className="w-full rounded-lg border border-[#DDD4C4] bg-white px-2.5 py-1.5 text-xs"
-                >
-                  <option value="none">Nessuna</option>
-                  <option value="soft_luxury">Vignettatura Luxury morbida</option>
-                  <option value="deep_cinematic">Vignettatura Cinema intensa</option>
-                </select>
-              </label>
-              <label className="block space-y-1">
-                <span className="text-[11px] text-[#6C6459]">Cornice / Letterbox</span>
-                <select
-                  value={hyperframes.letterbox}
-                  onChange={(e) => setHyperframes((h) => ({ ...h, letterbox: e.target.value }))}
-                  className="w-full rounded-lg border border-[#DDD4C4] bg-white px-2.5 py-1.5 text-xs"
-                >
-                  <option value="none">Schermo pieno 9:16</option>
-                  <option value="cinema_frame">Cornice Cinema leggera</option>
-                  <option value="editorial_border">Passepartout Avorio</option>
-                </select>
-              </label>
-              <label className="block space-y-1">
-                <span className="text-[11px] text-[#6C6459]">Ritmo Motion</span>
-                <select
-                  value={hyperframes.motion_pace}
-                  onChange={(e) => setHyperframes((h) => ({ ...h, motion_pace: e.target.value }))}
-                  className="w-full rounded-lg border border-[#DDD4C4] bg-white px-2.5 py-1.5 text-xs"
-                >
-                  <option value="slow_contemplative">Lento contemplativo</option>
-                  <option value="balanced">Equilibrato KORA</option>
-                  <option value="dynamic_experience">Dinamico Experience</option>
-                </select>
-              </label>
-            </div>
-          </div>
-        )}
+          )}
+        </div>
 
         {/* Action Drawers */}
-        {activeAction === "theme" && (
-          <form onSubmit={handleThemeSubmit} className="mt-6 space-y-3 rounded-2xl bg-[#FAF7F2] p-5 border border-[#DDD4C4]">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <label className="block text-xs font-medium uppercase tracking-wider text-[#6C6459]">
-                Tema libero
-              </label>
-              <button
-                type="button"
-                onClick={handleGetSuggestions}
-                disabled={loading}
-                className="inline-flex items-center gap-1 rounded-full border border-[#9A8052] bg-white px-3 py-1 text-[11px] font-medium text-[#1D1B18] hover:bg-[#EFE8DB]"
-              >
-                <Sparkles className="h-3 w-3 text-[#9A8052]" /> Suggerimenti intelligenti per il tema
-              </button>
-            </div>
+        {activeAction === "idea" && (
+          <form onSubmit={handleIdeaSubmit} className="mt-6 space-y-3 rounded-2xl bg-[#FAF7F2] p-5 border border-[#DDD4C4]">
+            <label className="block text-xs font-medium uppercase tracking-wider text-[#6C6459]">
+              Tema personalizzato
+            </label>
             <div className="flex flex-col gap-3 sm:flex-row">
               <input
                 type="text"
                 value={themeText}
                 onChange={(e) => setThemeText(e.target.value)}
-                placeholder='Es. "Il piacere di stare insieme davanti al mare." oppure "Più emozionante, con poche parole."'
+                placeholder='Es. "Un risveglio d&apos;autunno tra sabbia umida e caffè caldo a Policoro."'
                 className="flex-1 rounded-xl border border-[#DDD4C4] bg-white px-4 py-3 text-sm text-[#1D1B18] focus:border-[#224C66] focus:outline-none"
               />
               <button
@@ -452,51 +557,13 @@ export function HomeHub({
                 disabled={loading || !themeText.trim()}
                 className="rounded-xl bg-[#1D1B18] px-6 py-3 text-sm font-medium text-[#FAF7F2] transition hover:bg-[#224C66] disabled:opacity-50"
               >
-                {loading ? "Ideazione..." : "Crea Concept"}
+                {loading ? "Ideazione..." : "Progetta concept"}
               </button>
             </div>
-            <div className="flex flex-wrap gap-2">
-              {(recommendation?.theme_suggestions || [
-                "Il piacere di stare insieme davanti al mare.",
-                "Vorrei un Reel più emozionante, con poche parole.",
-                "La colazione lenta vista mare al KORA.",
-                "Aperitivo al tramonto a Policoro: ritmo caldo e calici.",
-              ]).map((sample) => (
-                <button
-                  key={sample}
-                  type="button"
-                  onClick={() => setThemeText(sample)}
-                  className="rounded-full border border-[#DDD4C4] bg-white px-3 py-1 text-xs text-[#6C6459] hover:border-[#9A8052] hover:text-[#1D1B18]"
-                >
-                  {sample}
-                </button>
-              ))}
-            </div>
-            {recommendation && (
-              <div className="rounded-xl border border-[#DDD4C4] bg-white p-3.5 text-xs space-y-2">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <span className="font-medium text-[#1D1B18]">
-                    Consiglio Regia &amp; Hyperframes ({recommendation.recommended_preset}):
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setHyperframes(recommendation.recommended_hyperframes);
-                      setPresetOverride(recommendation.recommended_preset);
-                      setShowHyperframesDrawer(true);
-                    }}
-                    className="rounded-lg bg-[#224C66] px-3 py-1 text-[11px] font-medium text-white hover:bg-[#1D1B18]"
-                  >
-                    Applica opzioni consigliate
-                  </button>
-                </div>
-                <p className="text-[#4A443C]">{recommendation.rationale}</p>
-              </div>
-            )}
           </form>
         )}
 
-        {activeAction === "photos" && (
+        {activeAction === "media" && (
           <div
             onDragOver={(e) => {
               e.preventDefault();
@@ -526,7 +593,7 @@ export function HomeHub({
                 Clicca o trascina qui foto e clip autentiche
               </p>
               <p className="mt-1 text-xs text-[#6C6459]">
-                Gli originali restano intatti. KORA STUDIO analizza qualità, orientamento, duplicati e propone i concept compatibili.
+                Analisi multimodale immediata (ambiente, luce, inquadratura, potenziale cinematografico) senza alterare gli originali.
               </p>
             </label>
             {uploadedInfo.length > 0 && (
@@ -546,7 +613,7 @@ export function HomeHub({
             {recentProjects.length === 0 ? (
               <p className="text-sm text-[#6C6459]">Nessun progetto ancora salvato.</p>
             ) : (
-              recentProjects.slice(0, 5).map((p) => (
+              recentProjects.slice(0, 6).map((p) => (
                 <div
                   key={p.id}
                   className="flex items-center justify-between rounded-xl border border-[#DDD4C4] bg-white px-4 py-3"
@@ -578,106 +645,143 @@ export function HomeHub({
         )}
       </section>
 
-      {/* 3 Proposals ready for 1-click Launch */}
+      {/* Selectable Photographic Concept Cards (up to 4) + Custom Theme */}
       {proposals.length > 0 && (
         <section className="space-y-4">
-          <div className="flex items-center justify-between">
-            <h2 className="font-editorial text-2xl text-[#1D1B18]">
-              Tre proposte creative KORA
-            </h2>
-            <span className="text-xs text-[#6C6459]">
-              Seleziona una proposta per avviare la produzione ({prodMode})
-            </span>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h2 className="font-editorial text-2xl text-[#1D1B18]">
+                {proposals.length === 4 ? "4 Proposte Narrative KORA" : "Proposte Creative KORA"}
+              </h2>
+              {engineInfo?.engine && (
+                <p className="text-[11px] text-[#6C6459]">
+                  Motore ideazione:{" "}
+                  <span className="font-medium text-[#1D1B18]">{engineInfo.engine}</span>
+                  {engineInfo.fallback ? ` — ${engineInfo.fallback}` : ""}
+                </p>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={() => setActiveAction("idea")}
+              className="rounded-xl border border-[#DDD4C4] bg-white px-3.5 py-1.5 text-xs font-medium text-[#1D1B18] hover:border-[#9A8052]"
+            >
+              + Scrivi un tema personalizzato
+            </button>
           </div>
-          <div className="grid grid-cols-1 gap-5 md:grid-cols-3">
-            {proposals.map((c) => (
-              <div
-                key={c.id}
-                className="flex flex-col justify-between rounded-2xl border border-[#DDD4C4] bg-white p-6 shadow-sm"
-              >
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between text-[11px] uppercase tracking-wider text-[#9A8052]">
-                    <span>{c.primary_emotion}</span>
-                    <span>{c.duration_sec}s</span>
-                  </div>
-                  <h3 className="font-editorial text-xl text-[#1D1B18]">{c.title}</h3>
-                  <p className="text-sm text-[#4A443C] leading-relaxed">{c.message}</p>
-                  <div className="rounded-xl bg-[#FAF7F2] p-3 text-xs text-[#6C6459]">
-                    <span className="font-medium text-[#1D1B18]">Hook:</span> {c.hook}
-                  </div>
-                  <div className="flex flex-wrap gap-2 text-[11px]">
-                    <span className="rounded-full bg-[#EFE8DB] px-2.5 py-0.5 text-[#1D1B18]">
-                      Fattibilità {Math.round(c.feasibility_score * 100)}%
-                    </span>
-                    <span className="rounded-full bg-[#224C66]/10 px-2.5 py-0.5 text-[#224C66]">
-                      Originalità {Math.round(c.originality_score * 100)}%
-                    </span>
-                    <span className="rounded-full bg-emerald-50 px-2.5 py-0.5 text-emerald-800">
-                      {c.available_asset_ids.length} asset reali pronti
-                    </span>
-                  </div>
-                  {c.missing_materials.length > 0 && (
-                    <div className="text-[11px] text-amber-700">
-                      Mancanti: {c.missing_materials.join(", ")}
+
+          <div
+            className={`grid grid-cols-1 gap-5 ${
+              proposals.length >= 4 ? "md:grid-cols-2 lg:grid-cols-4" : "md:grid-cols-3"
+            }`}
+          >
+            {proposals.map((c) => {
+              const coverId = c.available_asset_ids[0];
+              const isSelected = selectedConceptId === c.id;
+              return (
+                <div
+                  key={c.id}
+                  onClick={() => selectConceptAndPrefill(c)}
+                  className={`cursor-pointer flex flex-col justify-between rounded-2xl border bg-white p-4 shadow-sm transition ${
+                    isSelected
+                      ? "border-[#224C66] ring-2 ring-[#224C66]/20"
+                      : "border-[#DDD4C4] hover:border-[#9A8052]"
+                  }`}
+                >
+                  <div className="space-y-3">
+                    {coverId && (
+                      <div className="relative h-36 w-full overflow-hidden rounded-xl bg-[#EFE8DB]">
+                        <img
+                          src={`/api/vault/${coverId}/thumb`}
+                          alt={c.title}
+                          className="h-full w-full object-cover"
+                        />
+                        <span className="absolute bottom-2 left-2 rounded-full bg-black/60 px-2.5 py-0.5 text-[10px] text-[#FAF7F2]">
+                          {c.preset.replace("KORA ", "")} · {c.duration_sec}s
+                        </span>
+                      </div>
+                    )}
+                    <div className="flex items-center justify-between text-[11px] uppercase tracking-wider text-[#9A8052]">
+                      <span className="truncate">{c.primary_emotion}</span>
+                      <span>Voce: {c.recommended_voice_id || voiceId}</span>
                     </div>
-                  )}
+                    <h3 className="font-editorial text-lg text-[#1D1B18] leading-snug">{c.title}</h3>
+                    <p className="text-xs text-[#4A443C] leading-relaxed">{c.message}</p>
+                    <div className="rounded-xl bg-[#FAF7F2] p-2.5 text-[11px] text-[#6C6459]">
+                      <span className="font-medium text-[#1D1B18]">Hook:</span> {c.hook}
+                    </div>
+                    <div className="flex flex-wrap gap-1.5 text-[10px]">
+                      <span className="rounded-full bg-[#EFE8DB] px-2 py-0.5 text-[#1D1B18]">
+                        Fattibilità {Math.round(c.feasibility_score * 100)}%
+                      </span>
+                      <span className="rounded-full bg-[#224C66]/10 px-2 py-0.5 text-[#224C66]">
+                        Originalità {Math.round(c.originality_score * 100)}%
+                      </span>
+                      <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-emerald-800">
+                        {c.available_asset_ids.length} asset reali
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="mt-4 space-y-2">
+                    <button
+                      type="button"
+                      disabled={loading}
+                      onClick={async (e) => {
+                        e.stopPropagation();
+                        setLoading(true);
+                        try {
+                          await onStartProduction(
+                            presetOverride === "AUTO_CONCEPT"
+                              ? c
+                              : { ...c, preset: presetOverride },
+                            themeText.trim() || c.central_idea,
+                            activeAction || "theme",
+                            c.recommended_voice_id || voiceId,
+                            prodMode,
+                            hyperframes.caption_style,
+                            hyperframes,
+                            true
+                          );
+                        } finally {
+                          setLoading(false);
+                        }
+                      }}
+                      className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-[#224C66] bg-[#FAF7F2] px-3 py-2 text-xs font-medium text-[#224C66] transition hover:bg-[#224C66] hover:text-white"
+                    >
+                      <SlidersHorizontal className="h-3.5 w-3.5" /> Progetta il nuovo Reel
+                    </button>
+                    <button
+                      type="button"
+                      disabled={loading}
+                      onClick={async (e) => {
+                        e.stopPropagation();
+                        setLoading(true);
+                        try {
+                          await onStartProduction(
+                            presetOverride === "AUTO_CONCEPT"
+                              ? c
+                              : { ...c, preset: presetOverride },
+                            themeText.trim() || c.central_idea,
+                            activeAction || "theme",
+                            c.recommended_voice_id || voiceId,
+                            prodMode,
+                            hyperframes.caption_style,
+                            hyperframes,
+                            false
+                          );
+                        } finally {
+                          setLoading(false);
+                        }
+                      }}
+                      className="flex w-full items-center justify-center gap-1.5 rounded-xl bg-[#1D1B18] px-3 py-2 text-xs font-medium text-[#FAF7F2] transition hover:bg-[#224C66]"
+                    >
+                      <Play className="h-3.5 w-3.5" /> Realizza Reel
+                    </button>
+                  </div>
                 </div>
-                <div className="mt-5 space-y-2">
-                  <button
-                    type="button"
-                    disabled={loading}
-                    onClick={async () => {
-                      setLoading(true);
-                      try {
-                        await onStartProduction(
-                          presetOverride === "AUTO_CONCEPT"
-                            ? c
-                            : { ...c, preset: presetOverride },
-                          themeText.trim() || c.central_idea,
-                          activeAction || "theme",
-                          voiceId,
-                          prodMode,
-                          hyperframes.caption_style,
-                          hyperframes,
-                          true
-                        );
-                      } finally {
-                        setLoading(false);
-                      }
-                    }}
-                    className="flex w-full items-center justify-center gap-2 rounded-xl border border-[#224C66] bg-[#FAF7F2] px-4 py-2.5 text-xs font-medium text-[#224C66] transition hover:bg-[#224C66] hover:text-white"
-                  >
-                    <SlidersHorizontal className="h-3.5 w-3.5" /> Personalizza scene, foto e parametri
-                  </button>
-                  <button
-                    type="button"
-                    disabled={loading}
-                    onClick={async () => {
-                      setLoading(true);
-                      try {
-                        await onStartProduction(
-                          presetOverride === "AUTO_CONCEPT"
-                            ? c
-                            : { ...c, preset: presetOverride },
-                          themeText.trim() || c.central_idea,
-                          activeAction || "theme",
-                          voiceId,
-                          prodMode,
-                          hyperframes.caption_style,
-                          hyperframes,
-                          false
-                        );
-                      } finally {
-                        setLoading(false);
-                      }
-                    }}
-                    className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#1D1B18] px-4 py-2.5 text-sm font-medium text-[#FAF7F2] transition hover:bg-[#224C66]"
-                  >
-                    <Play className="h-4 w-4" /> Produci Reel ora
-                  </button>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </section>
       )}

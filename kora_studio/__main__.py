@@ -18,7 +18,7 @@ def main() -> int:
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     serve_p = sub.add_parser("serve", help="Avvia il server web KORA STUDIO")
-    serve_p.add_argument("--host", default="0.0.0.0")
+    serve_p.add_argument("--host", default="127.0.0.1")
     serve_p.add_argument("--port", type=int, default=8000)
 
     sub.add_parser("doctor", help="Diagnostica ambiente, FFmpeg, FFprobe, Remotion e provider")

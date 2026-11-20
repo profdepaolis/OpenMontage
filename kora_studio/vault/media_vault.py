@@ -101,6 +101,42 @@ def _compute_sha256(path: Path) -> str:
     return h.hexdigest()
 
 
+def _compute_multimodal_embedding(text: str, metrics: dict[str, Any], dim: int = 64) -> list[float]:
+    """Deterministic lightweight 64-dim multimodal (lexical + visual features) L2-normalized embedding."""
+    vec = np.zeros(dim, dtype=np.float32)
+    tokens = _expand_concepts(_tokenize(text))
+    for tok in tokens:
+        digest = hashlib.blake2b(tok.encode("utf-8"), digest_size=8).digest()
+        idx = int.from_bytes(digest[:4], "little") % 48
+        sign = 1.0 if (digest[4] & 1) == 0 else -1.0
+        vec[idx] += sign
+
+    # Slots 48..63 encode continuous visual descriptors (luma, contrast, warmth, blue, gold, interplay, etc.)
+    vec[48] = float(metrics.get("mean_luma", 128.0)) / 255.0
+    vec[49] = float(metrics.get("contrast_std", 40.0)) / 100.0
+    vec[50] = max(-1.0, min(1.0, float(metrics.get("warmth", 0.0)) / 60.0))
+    vec[51] = float(metrics.get("blue_ratio", 0.0)) * 2.5
+    vec[52] = float(metrics.get("gold_ratio", 0.0)) * 2.5
+    vec[53] = float(metrics.get("light_shadow_interplay", 0.0)) * 2.0
+    vec[54] = float(metrics.get("skin_ratio", 0.0)) * 2.5
+    vec[55] = float(metrics.get("green_wood_ratio", 0.0)) * 2.0
+    vec[56] = min(1.0, float(metrics.get("edge_density", 0.0)) * 2.0)
+
+    norm = float(np.linalg.norm(vec))
+    if norm > 1e-8:
+        vec = vec / norm
+    return [round(float(x), 5) for x in vec]
+
+
+def _cosine_sim(a: list[float], b: list[float]) -> float:
+    if not a or not b or len(a) != len(b):
+        return 0.0
+    va = np.asarray(a, dtype=np.float32)
+    vb = np.asarray(b, dtype=np.float32)
+    denom = float(np.linalg.norm(va) * np.linalg.norm(vb))
+    return float(np.dot(va, vb) / denom) if denom > 1e-8 else 0.0
+
+
 class MediaVault:
     """Intelligent, non-destructive media repository for KORA STUDIO."""
 
@@ -142,19 +178,35 @@ class MediaVault:
         else:
             sharpness = 0.0
 
-        # Shadow stripe / filtered light metric (high local mid-frequency contrast)
+        # Shadow stripe / filtered light metric + skin/wood/edge visual cues (independent of filename)
         warmth = float(np.mean(r - b))
         blue_ratio = float(np.mean((b > r + 14) & (b >= g)))
         gold_ratio = float(np.mean((r > 170) & (g > 110) & (b < g - 20)))
+        skin_ratio = float(np.mean((r > 95) & (g > 45) & (b > 25) & (r > g) & (g > b) & ((r - g) > 15)))
+        green_wood_ratio = float(np.mean((g >= r - 8) & (g > b + 10)))
         shadow_ratio = float(np.mean(luma < 75))
         bright_ratio = float(np.mean(luma > 185))
         light_shadow_interplay = float(min(1.0, shadow_ratio * bright_ratio * 12.0))
+        edge_density = float(np.mean(np.abs(np.diff(luma, axis=1)) > 18)) if luma.shape[1] > 2 else 0.0
 
-        # Quality score 0..100
+        # Quality score 0..100 & cinematic potential
         res_score = min(35.0, (min(width, height) / 1080.0) * 35.0)
         sharp_score = min(35.0, math.log1p(sharpness) / math.log1p(1200.0) * 35.0)
         exposure_score = max(0.0, 30.0 - abs(mean_luma - 132.0) * 0.25)
         quality = round(min(100.0, max(15.0, res_score + sharp_score + exposure_score)), 1)
+        cinematic_potential = round(
+            min(
+                100.0,
+                max(
+                    20.0,
+                    quality * 0.72
+                    + min(15.0, std_luma * 0.28)
+                    + (10.0 if min(width, height) >= 900 else 4.0)
+                    + light_shadow_interplay * 8.0,
+                ),
+            ),
+            1,
+        )
 
         if width > height * 1.05:
             orientation = "horizontal"
@@ -169,6 +221,7 @@ class MediaVault:
             "orientation": orientation,
             "has_alpha": has_alpha,
             "technical_quality": quality,
+            "cinematic_potential": cinematic_potential,
             "metrics": {
                 "mean_luma": round(mean_luma, 1),
                 "contrast_std": round(std_luma, 1),
@@ -176,6 +229,9 @@ class MediaVault:
                 "warmth": round(warmth, 1),
                 "blue_ratio": round(blue_ratio, 3),
                 "gold_ratio": round(gold_ratio, 3),
+                "skin_ratio": round(skin_ratio, 3),
+                "green_wood_ratio": round(green_wood_ratio, 3),
+                "edge_density": round(edge_density, 3),
                 "light_shadow_interplay": round(light_shadow_interplay, 3),
             },
         }
@@ -243,9 +299,75 @@ class MediaVault:
         if "persone" in name_l:
             tags.update(["persone", "ospiti", "condivisione", "stare insieme"])
 
+        # Multimodal structured metadata (content, environment, season, lighting, framing, materials, people, products)
+        skin_ratio = float(metrics.get("skin_ratio", 0.0))
+        edge_density = float(metrics.get("edge_density", 0.0))
+        people_present = ("persone" in tags or "ospiti" in tags or skin_ratio > 0.14) and category != "Logo"
+        if people_present:
+            tags.update(["persone", "ospitalità"])
+
+        if category in ("Mare", "Spiaggia") or blue_ratio > 0.18:
+            environment = "mare_spiaggia_policoro"
+        elif category in ("Pergolato", "Ombrelloni", "Arredi"):
+            environment = "architettura_esterna_kora"
+        elif category in ("Colazione", "Aperitivo", "Persone", "Ospitalità"):
+            environment = "esperienza_tavolo_ospitalita"
+        elif category == "Logo":
+            environment = "identita_logo"
+        else:
+            environment = "dettagli_atmosfera"
+
+        if gold_ratio > 0.12 or "tramonto" in name_l or "aperitivo" in name_l:
+            lighting = "luce_dorata_tramonto"
+            season = "estate_fine_estate"
+        elif interplay > 0.22 or "ombre" in name_l:
+            lighting = "ombre_filtrate_pergolato"
+            season = "primavera_estate"
+        elif blue_ratio > 0.16 and warmth < 10:
+            lighting = "luce_limpida_giorno"
+            season = "tutto_anno"
+        else:
+            lighting = "luce_naturale_morbida"
+            season = "tutto_anno"
+
+        framing = (
+            "dettaglio_ravvicinato"
+            if ("dettaglio" in name_l or "bicchiere" in name_l or "tazzina" in name_l or edge_density > 0.18)
+            else ("campo_ampio" if blue_ratio > 0.15 or analysis.get("orientation") == "horizontal" else "piano_medio")
+        )
+        materials: list[str] = []
+        if category in ("Pergolato", "Arredi", "Ombrelloni") or metrics.get("green_wood_ratio", 0.0) > 0.08:
+            materials.extend(["legno", "paglia_naturale"])
+        if blue_ratio > 0.12 or category in ("Mare", "Spiaggia"):
+            materials.extend(["acqua", "sabbia"])
+        if category in ("Aperitivo", "Colazione", "Dettagli"):
+            materials.extend(["vetro_ceramica", "lino"])
+        products = [c for c in ("colazione", "aperitivo", "caffè", "calice") if c in " ".join(tags)]
+
+        analysis["multimodal"] = {
+            "environment": environment,
+            "season": season,
+            "lighting": lighting,
+            "framing": framing,
+            "materials": sorted(set(materials)) or ["naturale"],
+            "people_present": people_present,
+            "products": products,
+            "cinematic_potential": analysis.get("cinematic_potential", analysis.get("technical_quality", 75.0)),
+        }
+
         category = category or "Ospitalità"
-        semantic_parts = [category, Path(filename).stem, " ".join(sorted(tags))]
+        semantic_parts = [
+            category,
+            environment,
+            lighting,
+            season,
+            framing,
+            " ".join(materials),
+            Path(filename).stem,
+            " ".join(sorted(tags)),
+        ]
         semantic_text = " ".join(semantic_parts).lower()
+        analysis["embedding"] = _compute_multimodal_embedding(semantic_text, metrics)
         return category, sorted(tags), semantic_text
 
     def _create_working_copy_and_thumb(
@@ -465,6 +587,12 @@ class MediaVault:
         inferred_cat, inferred_tags, semantic_text = self._infer_category_and_tags(
             display_name, media_type, analysis, explicit_category=category, extra_tags=tags
         )
+        # Unverified provenance rule (Section 5)
+        if (
+            usage_rights.lower() in ("non_verificato", "da_verificare", "unknown")
+            or origin.lower() in ("esterno_non_verificato", "sconosciuto")
+        ):
+            authenticity_status = AuthenticityStatus.DA_VERIFICARE.value
         now = utcnow_iso()
         with self.db.session() as conn:
             conn.execute(
@@ -596,6 +724,7 @@ class MediaVault:
         q_tokens = _tokenize(query)
         q_expanded = _expand_concepts(q_tokens)
         q_lower = query.lower()
+        q_vec = _compute_multimodal_embedding(query, {})
 
         scored: list[tuple[float, dict[str, Any]]] = []
         for asset in assets:
@@ -603,10 +732,13 @@ class MediaVault:
             if asset["category"] == "Logo" and "logo" not in q_lower and "brand" not in q_lower:
                 continue
 
+            mm = asset.get("analysis", {}).get("multimodal", {})
             doc_tokens = set(_tokenize(asset["filename"].replace("_", " "))) | set(
                 t.lower() for t in asset["tags"]
             )
             doc_tokens.add(asset["category"].lower())
+            if mm:
+                doc_tokens.update(_tokenize(f"{mm.get('environment','')} {mm.get('lighting','')} {mm.get('framing','')}"))
             doc_expanded = _expand_concepts(list(doc_tokens))
 
             direct_hits = len(set(q_tokens) & doc_tokens)
@@ -614,7 +746,15 @@ class MediaVault:
             union_size = max(1, len(q_expanded | doc_expanded))
             jaccard = concept_hits / union_size
 
-            score = direct_hits * 3.0 + jaccard * 8.0 + (asset["technical_quality"] / 100.0) * 0.6
+            doc_vec = asset.get("analysis", {}).get("embedding") or []
+            vec_sim = _cosine_sim(q_vec, doc_vec) if doc_vec else 0.0
+
+            score = (
+                direct_hits * 3.0
+                + jaccard * 7.5
+                + max(0.0, vec_sim) * 4.5
+                + (asset["technical_quality"] / 100.0) * 0.6
+            )
 
             # Visual feature boosts matching natural-language queries
             metrics = asset.get("analysis", {}).get("metrics", {})

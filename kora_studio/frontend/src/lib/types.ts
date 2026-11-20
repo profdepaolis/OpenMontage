@@ -35,6 +35,20 @@ export interface MediaAsset {
   duplicate?: boolean;
 }
 
+export interface CreativeRequestPayload {
+  theme: string;
+  objective: string;
+  duration_sec: number;
+  voice_id: string;
+  asset_ids: string[];
+  media_selection: string;
+  generation_policy: string;
+  budget_eur: number;
+  brand_profile_version?: number | null;
+  previous_production_ids: string[];
+  custom_instructions: string;
+}
+
 export interface CreativeConcept {
   id: string;
   title: string;
@@ -46,14 +60,20 @@ export interface CreativeConcept {
   ending: string;
   voiceover_script: string;
   visual_mood: string;
+  moodboard_tags?: string[];
   required_materials: string[];
   available_asset_ids: string[];
   missing_materials: string[];
+  objective?: string;
+  recommended_voice_id?: string;
   duration_sec: number;
   feasibility_score: number;
   originality_score: number;
   preset: string;
+  generation_engine?: string;
+  fallback_reason?: string | null;
   anti_repetition_notes: string[];
+  creative_request?: Partial<CreativeRequestPayload>;
 }
 
 export interface StoryboardScene {
@@ -69,12 +89,16 @@ export interface StoryboardScene {
   voice_id: string;
   selected_asset_id?: string | null;
   alternative_asset_id?: string | null;
+  visual_rationale?: string;
+  shot_framing?: string;
   asset_mode: string;
   camera_motion: string;
   transition: string;
   sfx_category?: string | null;
   music_cue?: string | null;
   subtitle_text: string;
+  generative_prompt?: string | null;
+  authenticity_status?: string;
   production_status: string;
   approval_status: string;
   is_outro: boolean;

@@ -45,7 +45,9 @@ class KoraDirector:
         self.sound_library = SoundLibrary(self.db)
         self.providers = ProviderManager(self.db)
 
-        self.creative = CreativeDirector(self.db, self.brand_brain, self.vault)
+        self.creative = CreativeDirector(
+            self.db, self.brand_brain, self.vault, providers=self.providers
+        )
         self.curator = MediaCurator(self.vault)
         self.media_lab = AIMediaLab(self.vault, self.brand_brain, self.providers)
         self.voice_director = VoiceDirector(self.vault, self.providers)
@@ -71,6 +73,7 @@ class KoraDirector:
         voice_id: str = "brando",
         target_duration_sec: float = 20.0,
         concept: Optional[CreativeConcept] = None,
+        preferences: Optional[dict[str, Any]] = None,
     ) -> dict[str, Any]:
         project_id = f"prj_{uuid.uuid4().hex[:10]}"
         fps = DEFAULT_FPS
@@ -82,6 +85,10 @@ class KoraDirector:
             scenes = self.creative.build_storyboard(concept, voice_id=voice_id, fps=fps)
             storyboard = [s.model_dump() for s in scenes]
 
+        prefs_payload = dict(preferences or {})
+        if concept is not None and concept.creative_request:
+            prefs_payload.setdefault("creative_request", concept.creative_request)
+
         with self.db.session() as conn:
             conn.execute(
                 """
@@ -91,7 +98,7 @@ class KoraDirector:
                     concept_json, storyboard_json, edit_plan_json, audio_plan_json,
                     qc_report_json, export_bundle_json, preferences_json, output_video_path,
                     created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, '{}', '{}', '{}', '{}', '{}', NULL, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, '{}', '{}', '{}', '{}', ?, NULL, ?, ?)
                 """,
                 (
                     project_id,
@@ -107,6 +114,7 @@ class KoraDirector:
                     JobState.IN_PREPARAZIONE.value,
                     json.dumps(concept.model_dump() if concept else {}, ensure_ascii=False),
                     json.dumps(storyboard, ensure_ascii=False),
+                    json.dumps(prefs_payload, ensure_ascii=False),
                     now,
                     now,
                 ),
@@ -236,19 +244,35 @@ class KoraDirector:
 
     # ---- Observable Job Runner -------------------------------------------
 
-    def create_job(self, project_id: str, job_type: str = "full_production") -> dict[str, Any]:
-        job_id = f"job_{uuid.uuid4().hex[:10]}"
-        now = utcnow_iso()
+    def has_active_job(self, project_id: str) -> bool:
+        terminal = (
+            JobState.COMPLETATO.value,
+            JobState.ERRORE.value,
+            JobState.RICHIEDE_INTERVENTO.value,
+        )
         with self.db.session() as conn:
-            conn.execute(
-                """
-                INSERT INTO jobs (
-                    id, project_id, job_type, state, current_step, completed_steps_json,
-                    total_steps, checkpoint_json, cancelled, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, 'Inizializzazione', '[]', 9, '{}', 0, ?, ?)
-                """,
-                (job_id, project_id, job_type, JobState.IN_PREPARAZIONE.value, now, now),
-            )
+            row = conn.execute(
+                "SELECT id FROM jobs WHERE project_id = ? AND cancelled = 0 AND state NOT IN (?, ?, ?) LIMIT 1",
+                (project_id, *terminal),
+            ).fetchone()
+            return row is not None
+
+    def create_job(self, project_id: str, job_type: str = "full_production") -> dict[str, Any]:
+        with self._lock:
+            if self.has_active_job(project_id):
+                raise RuntimeError(f"Un job di produzione è già attivo per il progetto {project_id}.")
+            job_id = f"job_{uuid.uuid4().hex[:10]}"
+            now = utcnow_iso()
+            with self.db.session() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO jobs (
+                        id, project_id, job_type, state, current_step, completed_steps_json,
+                        total_steps, checkpoint_json, cancelled, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, 'Inizializzazione', '[]', 9, '{}', 0, ?, ?)
+                    """,
+                    (job_id, project_id, job_type, JobState.IN_PREPARAZIONE.value, now, now),
+                )
         self.log_job(job_id, "INFO", "KoraDirector", f"Job '{job_type}' avviato per progetto {project_id}.")
         return self.get_job(job_id)  # type: ignore
 
@@ -436,7 +460,7 @@ class KoraDirector:
             self.log_job(job_id, "INFO", "MediaCurator", "Asset autentici assegnati a tutte le scene.")
             check_cancelled()
 
-            # 4. Voiceover
+            # 4. Voiceover FIRST -> measure real speech durations -> lock exact timeline before Sound/Edit
             self._update_job(job_id, JobState.VOICEOVER, f"Preparazione voce ({proj['voice_id']})", completed)
             voice_res = self.voice_director.prepare_voiceover(
                 scenes=scenes,
@@ -445,6 +469,30 @@ class KoraDirector:
                 explicit_paid_authorization=explicit_paid_authorization,
                 project_id=project_id,
             )
+            speech_durs = voice_res.get("speech_durations_by_scene") or {}
+            if speech_durs and proj.get("production_mode", "AUTO") == ProductionMode.AUTO.value:
+                target_frames = int(round(proj["target_duration_sec"] * proj["fps"]))
+                synced_scenes = self.voice_director.sync_scenes_to_speech_pacing(
+                    scenes,
+                    fps=proj["fps"],
+                    measured_durations=speech_durs,
+                    target_total_frames=target_frames,
+                )
+                if [s.duration_frames for s in synced_scenes] != [s.duration_frames for s in scenes]:
+                    scenes = synced_scenes
+                    voice_res = self.voice_director.prepare_voiceover(
+                        scenes=scenes,
+                        voice_id=proj["voice_id"],
+                        work_dir=project_dir,
+                        explicit_paid_authorization=explicit_paid_authorization,
+                        project_id=project_id,
+                    )
+                    self.log_job(
+                        job_id,
+                        "INFO",
+                        "VoiceDirector",
+                        f"Timeline riallineata alla durata vocale reale ({sum(s.duration_frames for s in scenes)} frame esatti).",
+                    )
             if voice_res.get("substitution_notice"):
                 self.log_job(job_id, "WARN", "VoiceDirector", voice_res["substitution_notice"])
             else:

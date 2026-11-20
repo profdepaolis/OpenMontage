@@ -1,6 +1,7 @@
 import type {
   BudgetSettings,
   CreativeConcept,
+  CreativeRequestPayload,
   HyperframesConfig,
   JobRecord,
   MediaAsset,
@@ -76,20 +77,49 @@ export const koraApi = {
 
   // Creative & Voices
   surpriseMe: (durationSec = 20) =>
-    apiFetch<{ concepts: CreativeConcept[] }>("/api/creative/surprise", {
+    apiFetch<{
+      concepts: CreativeConcept[];
+      generation_engine?: string;
+      fallback_reason?: string | null;
+    }>("/api/creative/surprise", {
       method: "POST",
       body: JSON.stringify({ theme: "", duration_sec: durationSec }),
     }),
-  fromTheme: (theme: string, durationSec = 20, assetIds: string[] = []) =>
-    apiFetch<{ concepts: CreativeConcept[]; recommendation?: ThemeSuggestionResponse }>(
-      "/api/creative/from-theme",
-      {
-        method: "POST",
-        body: JSON.stringify({ theme, duration_sec: durationSec, asset_ids: assetIds }),
-      }
-    ),
+  fromTheme: (
+    themeOrPayload: string | Partial<CreativeRequestPayload>,
+    durationSec = 20,
+    assetIds: string[] = []
+  ) => {
+    const body =
+      typeof themeOrPayload === "string"
+        ? { theme: themeOrPayload, duration_sec: durationSec, asset_ids: assetIds }
+        : themeOrPayload;
+    return apiFetch<{
+      concepts: CreativeConcept[];
+      generation_engine?: string;
+      fallback_reason?: string | null;
+      recommendation?: ThemeSuggestionResponse;
+    }>("/api/creative/from-theme", {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  },
+  suggestThemes: (payload: Partial<CreativeRequestPayload> = {}) =>
+    apiFetch<{
+      concepts: CreativeConcept[];
+      generation_engine?: string;
+      fallback_reason?: string | null;
+    }>("/api/creative/suggest", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  recommendHyperframes: (theme: string, durationSec = 20) =>
+    apiFetch<ThemeSuggestionResponse>("/api/hyperframes/recommend", {
+      method: "POST",
+      body: JSON.stringify({ theme, duration_sec: durationSec }),
+    }),
   suggestTheme: (theme: string, durationSec = 20) =>
-    apiFetch<ThemeSuggestionResponse>("/api/creative/suggest", {
+    apiFetch<ThemeSuggestionResponse>("/api/hyperframes/recommend", {
       method: "POST",
       body: JSON.stringify({ theme, duration_sec: durationSec }),
     }),
@@ -118,6 +148,7 @@ export const koraApi = {
     concept?: CreativeConcept;
     caption_style?: string;
     hyperframes?: Partial<HyperframesConfig>;
+    creative_request?: Partial<CreativeRequestPayload>;
     auto_start?: boolean;
   }) =>
     apiFetch<{ project: ProjectRecord; job: JobRecord | null }>("/api/projects", {

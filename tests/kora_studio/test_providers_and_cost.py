@@ -301,14 +301,14 @@ def test_elevenlabs_reason_preservation_and_full_hyperframes_api(isolated_env):
     render_title_card_png("Tramonto KORA", tc_png, style=hf_cfg["title_card_intro"])
     assert tc_png.is_file() and tc_png.stat().st_size > 1000
 
-    # API endpoints: /api/creative/suggest + /api/voices/{id}/sample + /health hyperframes_options
+    # API endpoints: /api/hyperframes/recommend + /api/creative/suggest + /api/voices/{id}/sample + /health hyperframes_options
     app = create_app(db_path=isolated_env["db_path"], auto_seed=True)
     client = TestClient(app)
     h = client.get("/health").json()
     assert "hyperframes_options" in h
     assert "grain_overlay" in h["hyperframes_options"]
 
-    sug = client.post("/api/creative/suggest", json={"theme": "poche parole e silenzio sul mare"})
+    sug = client.post("/api/hyperframes/recommend", json={"theme": "poche parole e silenzio sul mare"})
     assert sug.status_code == 200
     assert sug.json()["recommended_preset"] == "KORA Editorial"
 

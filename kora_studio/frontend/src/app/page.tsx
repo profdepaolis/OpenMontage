@@ -120,6 +120,7 @@ export default function KoraStudioPage() {
       concept,
       caption_style: captionStyle || hyperframes?.caption_style,
       hyperframes,
+      creative_request: concept.creative_request,
       auto_start: !customizeFirst && prodMode === "AUTO",
     });
     setActiveProjectId(res.project.id);

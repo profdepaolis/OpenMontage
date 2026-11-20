@@ -27,4 +27,4 @@ if (-not (Test-Path "remotion-composer\node_modules")) {
 
 .venv\Scripts\python.exe -m kora_studio seed
 .venv\Scripts\python.exe -m kora_studio doctor
-.venv\Scripts\python.exe -m kora_studio serve --host 0.0.0.0 --port 8000
+.venv\Scripts\python.exe -m kora_studio serve --host 127.0.0.1 --port 8000

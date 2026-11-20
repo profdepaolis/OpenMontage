@@ -254,7 +254,7 @@ export function CreativeStudioView({
   const handleSuggestHyperframes = async () => {
     try {
       const spokenAll = scenes.map((s) => s.spoken_text).join(" ");
-      const rec = await koraApi.suggestTheme(`${project.theme} ${project.title} ${spokenAll}`);
+      const rec = await koraApi.recommendHyperframes(`${project.theme} ${project.title} ${spokenAll}`);
       setHyperframes(rec.recommended_hyperframes);
       setCaptionStyle(rec.recommended_hyperframes.caption_style);
       setHfRationale(rec.rationale);
@@ -578,6 +578,18 @@ export function CreativeStudioView({
                 <div className="text-[11px] text-[#6C6459]">
                   {sc.start_sec.toFixed(1)}s → {sc.end_sec.toFixed(1)}s ({sc.duration_sec.toFixed(2)}s)
                 </div>
+                <div className="mt-1 flex flex-wrap gap-1 text-[10px]">
+                  {sc.shot_framing && (
+                    <span className="rounded bg-[#EFE8DB] px-1.5 py-0.5 text-[#1D1B18]">
+                      {sc.shot_framing}
+                    </span>
+                  )}
+                  {sc.authenticity_status && (
+                    <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-emerald-800">
+                      {sc.authenticity_status}
+                    </span>
+                  )}
+                </div>
               </div>
               {sc.selected_asset_id && (
                 <img
@@ -607,15 +619,40 @@ export function CreativeStudioView({
                   className="mt-1 w-full rounded-lg border border-[#DDD4C4] px-3 py-1.5 text-xs text-[#1D1B18]"
                 />
               </label>
-              <label className="block text-[11px] font-medium text-[#6C6459]">
-                Caption / Sottotitolo a schermo
-                <input
-                  type="text"
-                  value={sc.subtitle_text}
-                  onChange={(e) => updateField(idx, "subtitle_text", e.target.value)}
-                  className="mt-1 w-full rounded-lg border border-[#DDD4C4] px-3 py-1.5 text-xs text-[#1D1B18]"
-                />
-              </label>
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                <label className="block text-[11px] font-medium text-[#6C6459]">
+                  Caption / Sottotitolo a schermo
+                  <input
+                    type="text"
+                    value={sc.subtitle_text}
+                    onChange={(e) => updateField(idx, "subtitle_text", e.target.value)}
+                    className="mt-1 w-full rounded-lg border border-[#DDD4C4] px-3 py-1.5 text-xs text-[#1D1B18]"
+                  />
+                </label>
+                <label className="block text-[11px] font-medium text-[#6C6459]">
+                  Voce scena (modalità due voci)
+                  <select
+                    value={sc.voice_id}
+                    onChange={(e) => updateField(idx, "voice_id", e.target.value)}
+                    className="mt-1 w-full rounded-lg border border-[#DDD4C4] bg-white px-2.5 py-1.5 text-xs text-[#1D1B18]"
+                  >
+                    <option value="brando">Brando</option>
+                    <option value="tiziana">Tiziana</option>
+                    <option value="felice">Felice</option>
+                    <option value="none">Nessuna voce</option>
+                  </select>
+                </label>
+              </div>
+              {sc.visual_rationale && (
+                <div className="rounded-lg bg-[#FAF7F2] px-2.5 py-1.5 text-[10px] text-[#6C6459]">
+                  <strong>Scelta visiva:</strong> {sc.visual_rationale}
+                </div>
+              )}
+              {sc.generative_prompt && (
+                <div className="rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[10px] text-amber-900">
+                  <strong>Prompt vincolato:</strong> {sc.generative_prompt}
+                </div>
+              )}
             </div>
 
             <div className="md:col-span-5 space-y-2">

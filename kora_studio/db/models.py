@@ -77,6 +77,8 @@ class StoryboardScene(BaseModel):
     voice_id: str = "brando"
     selected_asset_id: Optional[str] = None
     alternative_asset_id: Optional[str] = None
+    visual_rationale: str = ""
+    shot_framing: str = "piano_medio"
     asset_mode: str = "original"  # original | crop_detail | animated_photo | i2v | outro
     camera_motion: str = CameraMotion.SLOW_PUSH_IN.value
     transition: str = SceneTransition.CROSS_DISSOLVE.value
@@ -84,10 +86,26 @@ class StoryboardScene(BaseModel):
     sfx_asset_id: Optional[str] = None
     music_cue: Optional[str] = None
     subtitle_text: str = ""
+    generative_prompt: Optional[str] = None
+    authenticity_status: str = AuthenticityStatus.AUTENTICO.value
     production_status: str = "pianificata"
     approval_status: str = "approvata"
     is_outro: bool = False
     crop_focus: Optional[dict[str, float]] = None  # x, y, zoom
+
+
+class CreativeRequestPayload(BaseModel):
+    theme: str = ""
+    objective: str = ""
+    duration_sec: float = Field(default=20.0, ge=8.0, le=90.0)
+    voice_id: str = "brando"
+    asset_ids: list[str] = Field(default_factory=list)
+    media_selection: str = "vault_auto"  # vault_auto | selected_only | allow_crops | allow_controlled_gen
+    generation_policy: str = "authentic_first"  # authentic_first | conservative_only | controlled_i2v
+    budget_eur: float = Field(default=0.0, ge=0.0, le=20.0)
+    brand_profile_version: Optional[int] = None
+    previous_production_ids: list[str] = Field(default_factory=list)
+    custom_instructions: str = ""
 
 
 class CreativeConcept(BaseModel):
@@ -101,14 +119,26 @@ class CreativeConcept(BaseModel):
     ending: str
     voiceover_script: str
     visual_mood: str
+    moodboard_tags: list[str] = Field(default_factory=list)
     required_materials: list[str]
     available_asset_ids: list[str] = Field(default_factory=list)
     missing_materials: list[str] = Field(default_factory=list)
+    objective: str = ""
+    recommended_voice_id: str = "brando"
     duration_sec: float = 20.0
     feasibility_score: float = 1.0
     originality_score: float = 1.0
     preset: str = EditingPreset.CINEMATIC_IDENTITY.value
+    generation_engine: str = "deterministic_offline_fallback"
+    fallback_reason: Optional[str] = None
     anti_repetition_notes: list[str] = Field(default_factory=list)
+    creative_request: dict[str, Any] = Field(default_factory=dict)
+
+
+class CreativeProposalsEnvelope(BaseModel):
+    concepts: list[CreativeConcept] = Field(min_length=1, max_length=6)
+    generation_engine: str = "deterministic_offline_fallback"
+    fallback_reason: Optional[str] = None
 
 
 class QualityCheckItem(BaseModel):

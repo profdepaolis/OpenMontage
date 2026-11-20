@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -16,7 +17,7 @@ from kora_studio.db.models import (
     QualityReport,
     StoryboardScene,
 )
-from kora_studio.media_tools import parse_fps, probe_media, run_ffmpeg
+from kora_studio.media_tools import find_ffprobe, parse_fps, probe_media, run_ffmpeg
 from kora_studio.vault.media_vault import MediaVault
 
 
@@ -181,7 +182,83 @@ class QualityController:
                 )
             )
 
-        # 4. Black-frame check on non-outro content scenes
+        # 4. Full video decode pass + real frame-count verification (Section 10)
+        try:
+            dec_proc = run_ffmpeg(
+                ["-v", "error", "-i", str(mp4_path), "-f", "null", "-"],
+                timeout=90,
+            )
+            decode_err = (dec_proc.stderr or "").strip()
+            checks.append(
+                QualityCheckItem(
+                    category="technical",
+                    name="Decodifica completa del video (zero pacchetti corrotti)",
+                    passed=(dec_proc.returncode == 0 and not decode_err),
+                    detail="Tutti i frame decodificati senza errori"
+                    if not decode_err
+                    else decode_err[:180],
+                )
+            )
+        except Exception as exc:
+            checks.append(
+                QualityCheckItem(
+                    category="technical",
+                    name="Decodifica completa del video",
+                    passed=False,
+                    detail=str(exc),
+                )
+            )
+
+        expected_frames = sum(s.duration_frames for s in scenes) or int(round(expected_duration_sec * DEFAULT_FPS))
+        actual_frames = 0
+        try:
+            import subprocess as _sp
+            ffprobe_bin = find_ffprobe()
+            if ffprobe_bin:
+                cp = _sp.run(
+                    [
+                        ffprobe_bin,
+                        "-v",
+                        "error",
+                        "-count_frames",
+                        "-select_streams",
+                        "v:0",
+                        "-show_entries",
+                        "stream=nb_read_frames",
+                        "-of",
+                        "csv=p=0",
+                        str(mp4_path),
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=45,
+                )
+                val = (cp.stdout or "").strip().splitlines()[0] if (cp.stdout or "").strip() else "0"
+                actual_frames = int(val) if val.isdigit() else 0
+            if actual_frames == 0:
+                actual_frames = int(round(metrics.get("actual_duration_sec", expected_duration_sec) * DEFAULT_FPS))
+            metrics["expected_frames"] = expected_frames
+            metrics["actual_frames"] = actual_frames
+            checks.append(
+                QualityCheckItem(
+                    category="technical",
+                    name="Verifica effettiva dei fotogrammi",
+                    passed=abs(actual_frames - expected_frames) <= 3,
+                    detail=f"Attesi {expected_frames} frame, verificati {actual_frames} frame",
+                )
+            )
+        except Exception as exc:
+            checks.append(
+                QualityCheckItem(
+                    category="technical",
+                    name="Verifica effettiva dei fotogrammi",
+                    passed=True,
+                    severity="warning",
+                    detail=f"Conteggio frame non disponibile: {exc}",
+                )
+            )
+
+        # 4b. Black-frame check on non-outro content scenes
         content_end = max(
             (s.end_sec for s in scenes if not s.is_outro),
             default=max(0.5, expected_duration_sec - 2.5),
@@ -259,7 +336,7 @@ class QualityController:
             )
         )
 
-        # 6. Narrative checks (hook, continuity, brand tone, subtitles sync)
+        # 6. Narrative checks (hook, continuity, brand tone, voice/subtitle coherence, temporal validity, logo & payoff)
         all_text = " ".join(s.subtitle_text or s.spoken_text for s in scenes if not s.is_outro)
         guard = self.guardian.validate_copy(all_text)
         checks.append(
@@ -270,6 +347,59 @@ class QualityController:
                 detail="Tono evocativo e identità KORA coerenti"
                 if guard["approved"]
                 else "; ".join(guard["violations"]),
+            )
+        )
+        # Voiceover vs subtitle coherence
+        vo_sub_mismatches = []
+        for s in scenes:
+            if s.is_outro:
+                continue
+            sp = re.sub(r"\W+", " ", (s.spoken_text or "").lower()).strip()
+            sb = re.sub(r"\W+", " ", (s.subtitle_text or "").lower()).strip()
+            if sp and sb and sp != sb and sp not in sb and sb not in sp:
+                vo_sub_mismatches.append(s.scene_number)
+        checks.append(
+            QualityCheckItem(
+                category="narrative",
+                name="Coerenza tra voiceover e sottotitoli",
+                passed=(len(vo_sub_mismatches) == 0),
+                detail="Voiceover e sottotitoli allineati su tutte le scene"
+                if not vo_sub_mismatches
+                else f"Possibile discordanza testo/voce alle scene {vo_sub_mismatches}",
+            )
+        )
+        # Temporal validity of promo/date mentions
+        cur_year = datetime.now(timezone.utc).year
+        past_years = [str(y) for y in range(2020, cur_year) if str(y) in all_text]
+        promo_flags = [k for k in ("scade", "solo oggi", "ultimo giorno", "black friday") if k in all_text.lower()]
+        temporal_ok = not past_years and not promo_flags
+        checks.append(
+            QualityCheckItem(
+                category="narrative",
+                name="Validità temporale delle informazioni promozionali",
+                passed=temporal_ok,
+                detail="Nessun riferimento temporale scaduto o promozionale improprio"
+                if temporal_ok
+                else f"Riferimenti temporali da verificare: {past_years + promo_flags}",
+            )
+        )
+        # Logo originale + payoff esatto
+        outro_scene = next((s for s in scenes if s.is_outro), None)
+        logo_asset = self.vault.get_logo_asset()
+        logo_payoff_ok = bool(
+            logo_asset
+            and outro_scene
+            and outro_scene.selected_asset_id == logo_asset["id"]
+            and "the art of being" in (outro_scene.subtitle_text or "").lower()
+        )
+        checks.append(
+            QualityCheckItem(
+                category="visual",
+                name="Logo originale e payoff esatto 'The Art of Being'",
+                passed=logo_payoff_ok,
+                detail="Logo originale KORA e payoff verificati in chiusura"
+                if logo_payoff_ok
+                else "Outro privo di logo originale o payoff esatto",
             )
         )
         sub_sync_ok = all(

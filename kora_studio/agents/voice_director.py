@@ -63,6 +63,16 @@ VOICE_CATALOG: dict[str, dict[str, Any]] = {
         "edge_voice": "it-IT-GiuseppeMultilingualNeural",
         "vault_match": "felice",
     },
+    "brando_tiziana": {
+        "id": "brando_tiziana",
+        "label": "Brando & Tiziana (Due voci)",
+        "tone": "Dialogo alternato: profondità di Brando e calore confidenziale di Tiziana",
+        "gender": "dual",
+        "elevenlabs_env": None,
+        "openai_voice": "onyx",
+        "edge_voice": "it-IT-DiegoNeural",
+        "vault_match": "voce_brando",
+    },
     "none": {
         "id": "none",
         "label": "Senza Voiceover",
@@ -113,14 +123,23 @@ class VoiceDirector:
                     if meta["vault_match"] in a["filename"].lower():
                         vault_asset = a
                         break
-            el_id = self._get_elevenlabs_voice_id(vid)
+            if vid == "brando_tiziana":
+                el_ready = bool(
+                    eleven_key
+                    and self._get_elevenlabs_voice_id("brando")
+                    and self._get_elevenlabs_voice_id("tiziana")
+                )
+                el_id = f"{self._get_elevenlabs_voice_id('brando') or ''}+{self._get_elevenlabs_voice_id('tiziana') or ''}".strip("+")
+            else:
+                el_id = self._get_elevenlabs_voice_id(vid)
+                el_ready = bool(eleven_key and el_id)
             out.append(
                 {
                     **meta,
                     "vault_asset_id": vault_asset["id"] if vault_asset else None,
                     "vault_duration_sec": vault_asset["duration_sec"] if vault_asset else None,
                     "elevenlabs_voice_id": el_id or "",
-                    "elevenlabs_configured": bool(eleven_key and el_id),
+                    "elevenlabs_configured": el_ready,
                     "openai_tts_configured": bool(openai_key),
                     "piper_local_available": piper_ready,
                     "status": (
@@ -128,7 +147,7 @@ class VoiceDirector:
                         if vid == "none"
                         else (
                             "operativa_api"
-                            if (eleven_key and el_id)
+                            if el_ready
                             else (
                                 "disponibile_locale_tts"
                                 if piper_ready
@@ -372,7 +391,8 @@ class VoiceDirector:
 
         # 1. Primary: Official ElevenLabs API (synthesizes exact new script in requested voice)
         el_key = self.providers.get_decrypted_key("elevenlabs_api")
-        el_voice_id = self._get_elevenlabs_voice_id(voice_id)
+        primary_vid = "brando" if voice_id == "brando_tiziana" else voice_id
+        el_voice_id = self._get_elevenlabs_voice_id(primary_vid)
         if el_key and el_voice_id:
             est_el = round(max(0.01, (len(full_text) / 1000.0) * 0.18), 4)
             auth = self.providers.cost_guard.check_authorization(
@@ -513,32 +533,39 @@ class VoiceDirector:
         total_scene_dur = round(sum(s.duration_sec for s in scenes if not s.is_outro), 3)
 
         timing_adjustments: list[str] = []
-        # If multiple spoken scenes and a dynamic TTS engine was used, align each phrase to its scene start_sec
+        # Synthesize per-scene spoken lines (supports dual-voice Brando & Tiziana and real-duration timing)
         aligned_cues: list[dict[str, Any]] = []
+        speech_durations_by_scene: dict[int, float] = {}
         if (
-            len(spoken_scenes) > 1
+            len(spoken_scenes) >= 1
             and source_used in ("elevenlabs_api", "openai_tts", "piper_tts_local", "edge_tts_fallback")
         ):
             seg_files: list[tuple[StoryboardScene, Path, float]] = []
             for sc in spoken_scenes:
                 seg_raw = work_dir / f"vo_sc_{sc.scene_number:02d}.wav"
                 seg_mp3 = work_dir / f"vo_sc_{sc.scene_number:02d}.mp3"
+                scene_vid = (
+                    sc.voice_id
+                    if (sc.voice_id in VOICE_CATALOG and sc.voice_id not in ("none", "brando_tiziana"))
+                    else primary_vid
+                )
                 ok_seg: Optional[Path] = None
                 try:
                     if source_used == "elevenlabs_api":
-                        ok_seg = self._synthesize_elevenlabs(voice_id, sc.spoken_text.strip(), seg_mp3)
+                        ok_seg = self._synthesize_elevenlabs(scene_vid, sc.spoken_text.strip(), seg_mp3)
                     elif source_used == "openai_tts":
-                        ok_seg = self._synthesize_openai_tts(voice_id, sc.spoken_text.strip(), seg_mp3)
+                        ok_seg = self._synthesize_openai_tts(scene_vid, sc.spoken_text.strip(), seg_mp3)
                     elif source_used == "piper_tts_local":
                         ok_seg = self._synthesize_piper(sc.spoken_text.strip(), seg_raw)
                     elif source_used == "edge_tts_fallback":
-                        ok_seg = self._synthesize_edge_tts(voice_id, sc.spoken_text.strip(), seg_mp3)
+                        ok_seg = self._synthesize_edge_tts(scene_vid, sc.spoken_text.strip(), seg_mp3)
                 except Exception:
                     ok_seg = None
                 if ok_seg and ok_seg.is_file():
                     s_probe = probe_media(ok_seg)
                     s_dur = float(s_probe["format"].get("duration", 0.0) or 0.0)
                     seg_files.append((sc, ok_seg, s_dur))
+                    speech_durations_by_scene[sc.scene_number] = round(s_dur, 3)
             if len(seg_files) == len(spoken_scenes):
                 total_reel_sec = max(1.0, sum(s.duration_frames for s in scenes) / 25.0)
                 inputs_cmd: list[str] = [
@@ -556,7 +583,7 @@ class VoiceDirector:
                     max_win = max(0.8, sc.duration_sec - 0.15)
                     if s_dur > max_win:
                         timing_adjustments.append(
-                            f"Scena {sc.scene_number}: parlato ({s_dur:.2f}s) leggermente più lungo della finestra ({max_win:.2f}s); usa 'Sincronizza scene alla voce' per adattare."
+                            f"Scena {sc.scene_number}: parlato ({s_dur:.2f}s) più lungo della finestra ({max_win:.2f}s)."
                         )
                     inputs_cmd.extend(["-i", str(seg_p)])
                     fparts.append(
@@ -566,6 +593,7 @@ class VoiceDirector:
                     aligned_cues.append(
                         {
                             "scene_number": sc.scene_number,
+                            "voice_id": sc.voice_id,
                             "start_sec": round(sc.start_sec + 0.18, 2),
                             "speech_duration_sec": round(s_dur, 2),
                             "scene_duration_sec": sc.duration_sec,
@@ -618,6 +646,7 @@ class VoiceDirector:
             "duration_sec": actual_dur,
             "scene_aligned": bool(aligned_cues),
             "aligned_cues": aligned_cues,
+            "speech_durations_by_scene": speech_durations_by_scene,
             "substituted": substituted,
             "substitution_notice": substitution_notice,
             "word_check": {
@@ -632,21 +661,48 @@ class VoiceDirector:
         self,
         scenes: list[StoryboardScene],
         fps: int = 25,
+        measured_durations: Optional[dict[int, float]] = None,
+        target_total_frames: Optional[int] = None,
     ) -> list[StoryboardScene]:
-        """Adjust each scene's duration cleanly to match spoken word rate (~2.3 words/sec + 0.7s breath)
-        while preserving outro timing and exact frame continuity.
+        """Adjust each scene's duration cleanly to match real speech durations (or ~2.25 words/sec)
+        while preserving outro timing and exact total frames when `target_total_frames` is given.
         """
-        cursor = 0
-        synced: list[StoryboardScene] = []
+        raw_secs: list[float] = []
         for sc in scenes:
             words = len(re.findall(r"\w+", sc.spoken_text or ""))
+            measured = (measured_durations or {}).get(sc.scene_number)
             if sc.is_outro:
-                target_sec = max(2.2, min(4.0, sc.duration_sec or 3.0))
+                target_sec = max(2.2, min(4.0, (measured + 0.6) if measured else (sc.duration_sec or 3.0)))
+            elif measured and measured > 0:
+                target_sec = max(2.0, measured + 0.55)
             elif words > 0:
-                target_sec = max(2.2, min(9.5, round((words / 2.25) + 0.75, 2)))
+                target_sec = max(2.0, min(9.5, round((words / 2.25) + 0.65, 2)))
             else:
-                target_sec = max(2.0, sc.duration_sec or 2.8)
-            df = max(fps, int(round(target_sec * fps)))
+                target_sec = max(1.8, sc.duration_sec or 2.8)
+            raw_secs.append(target_sec)
+
+        frame_counts = [max(fps, int(round(s * fps))) for s in raw_secs]
+        if target_total_frames and target_total_frames >= len(scenes) * fps:
+            # Proportionally scale to match target_total_frames mathematically without starving spoken lines
+            cur_sum = sum(frame_counts)
+            if cur_sum != target_total_frames:
+                scale = target_total_frames / max(1, cur_sum)
+                frame_counts = [max(fps, int(round(fc * scale))) for fc in frame_counts]
+                diff = target_total_frames - sum(frame_counts)
+                idx = 0
+                while diff != 0 and scenes:
+                    pos = idx % len(frame_counts)
+                    if diff > 0:
+                        frame_counts[pos] += 1
+                        diff -= 1
+                    elif frame_counts[pos] > fps:
+                        frame_counts[pos] -= 1
+                        diff += 1
+                    idx += 1
+
+        cursor = 0
+        synced: list[StoryboardScene] = []
+        for sc, df in zip(scenes, frame_counts):
             updated = sc.model_copy(
                 update={
                     "start_frame": cursor,
@@ -667,12 +723,13 @@ class VoiceDirector:
         """Generate or return a short audition audio clip so the user can listen before rendering."""
         if voice_id not in VOICE_CATALOG or voice_id == "none":
             raise ValueError("Seleziona una voce valida da ascoltare.")
+        effective_vid = "brando" if voice_id == "brando_tiziana" else voice_id
         label = VOICE_CATALOG[voice_id]["label"]
-        sample_text = f"Ciao, sono {label}. Questa è la mia voce per i racconti KORA Beach Club di Policoro."
+        sample_text = f"Ciao, sono {label}. Questa è la nostra voce per i racconti KORA Beach Club di Policoro."
         work_dir.mkdir(parents=True, exist_ok=True)
 
         if engine in ("vault",):
-            v_asset = self._find_vault_voice_asset(voice_id)
+            v_asset = self._find_vault_voice_asset(effective_vid)
             if v_asset:
                 p = Path(v_asset["working_path"] or v_asset["original_path"])
                 if p.is_file():
@@ -680,12 +737,12 @@ class VoiceDirector:
 
         if engine in ("auto", "elevenlabs"):
             el_key = self.providers.get_decrypted_key("elevenlabs_api")
-            el_vid = self._get_elevenlabs_voice_id(voice_id)
+            el_vid = self._get_elevenlabs_voice_id(effective_vid)
             auth = self.providers.cost_guard.check_authorization(0.01)
             if el_key and el_vid and auth["authorized"]:
                 try:
-                    out = work_dir / f"sample_{voice_id}_el.mp3"
-                    self._synthesize_elevenlabs(voice_id, sample_text, out)
+                    out = work_dir / f"sample_{effective_vid}_el.mp3"
+                    self._synthesize_elevenlabs(effective_vid, sample_text, out)
                     if out.is_file():
                         return {"path": str(out), "engine": "elevenlabs_api", "media_type": "audio/mpeg"}
                 except Exception as exc:
@@ -693,19 +750,19 @@ class VoiceDirector:
                         raise RuntimeError(f"Anteprima ElevenLabs fallita: {exc}")
 
         if engine in ("auto", "edge"):
-            out_edge = work_dir / f"sample_{voice_id}_edge.mp3"
-            res = self._synthesize_edge_tts(voice_id, sample_text, out_edge)
+            out_edge = work_dir / f"sample_{effective_vid}_edge.mp3"
+            res = self._synthesize_edge_tts(effective_vid, sample_text, out_edge)
             if res and res.is_file():
                 return {"path": str(res), "engine": "edge_tts", "media_type": "audio/mpeg"}
 
         if engine in ("auto", "piper"):
-            out_piper = work_dir / f"sample_{voice_id}_piper.wav"
+            out_piper = work_dir / f"sample_{effective_vid}_piper.wav"
             res = self._synthesize_piper(sample_text, out_piper)
             if res and res.is_file():
                 return {"path": str(res), "engine": "piper_tts_local", "media_type": "audio/wav"}
 
         # Final fallback: original vault voice sample if present
-        v_asset = self._find_vault_voice_asset(voice_id)
+        v_asset = self._find_vault_voice_asset(effective_vid)
         if v_asset:
             p = Path(v_asset["working_path"] or v_asset["original_path"])
             if p.is_file():

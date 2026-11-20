@@ -736,3 +736,115 @@ class AIMediaLab:
             "estimated_eur": est_eur,
             "asset": ingested,
         }
+
+    def resolve_scene_visual_cascade(
+        self,
+        scene: StoryboardScene,
+        theme: str = "",
+        generation_policy: str = "authentic_first",
+        budget_eur: float = 0.0,
+        explicit_authorization: bool = False,
+    ) -> dict[str, Any]:
+        """Strict Section 6 Upgrade 2.0 Authenticity Cascade:
+        Originale -> crop -> animazione conservativa -> generazione vincolata -> image-to-video.
+        Default budget is strictly 0.0 EUR (zero paid calls unless authorized within budget_eur).
+        """
+        effective_budget = max(0.0, float(budget_eur or 0.0))
+
+        # 1. Originale reale (already assigned or semantic vault match)
+        curated = MediaCurator(self.vault).curate_for_scene(scene, theme=theme)
+        asset = curated.get("asset")
+        if asset:
+            # Prefer original authentic video or photo with conservative deterministic motion
+            if asset["media_type"] == "video":
+                return {
+                    "step": "Originale",
+                    "asset": asset,
+                    "reference_asset_id": asset["id"],
+                    "authenticity_status": asset["authenticity_status"],
+                    "estimated_eur": 0.0,
+                    "requires_human_review": asset["authenticity_status"] == AuthenticityStatus.DA_VERIFICARE.value,
+                }
+            # 2. Crop / 3. Animazione conservativa on real photo
+            if scene.asset_mode == "ritaglio_dettaglio":
+                crop_res = self.create_detail_crop(
+                    asset["id"],
+                    detail_label=scene.narrative_goal[:40] or "dettaglio KORA",
+                    ingest_to_vault=False,
+                )
+                return {
+                    "step": "crop",
+                    "asset": asset,
+                    "derived_path": crop_res["output_path"],
+                    "reference_asset_id": asset["id"],
+                    "authenticity_status": AuthenticityStatus.DERIVATO_CONSERVATIVO.value,
+                    "estimated_eur": 0.0,
+                    "requires_human_review": False,
+                }
+            if generation_policy != "controlled_i2v" or effective_budget <= 0.0:
+                return {
+                    "step": "animazione conservativa",
+                    "asset": asset,
+                    "reference_asset_id": asset["id"],
+                    "authenticity_status": AuthenticityStatus.DERIVATO_CONSERVATIVO.value,
+                    "estimated_eur": 0.0,
+                    "requires_human_review": False,
+                }
+
+        # 4. Generazione vincolata / 5. Image-to-Video only if budget_eur > 0 & explicitly allowed
+        if generation_policy == "conservative_only" or effective_budget <= 0.0:
+            return {
+                "step": "animazione conservativa" if asset else "mancante",
+                "asset": asset,
+                "reference_asset_id": asset["id"] if asset else None,
+                "authenticity_status": (
+                    AuthenticityStatus.DERIVATO_CONSERVATIVO.value if asset else "mancante"
+                ),
+                "estimated_eur": 0.0,
+                "reason": "Budget predefinito 0 € o politica conservativa attiva: nessuna chiamata AI a pagamento.",
+                "requires_human_review": asset is None,
+            }
+
+        if asset and asset["media_type"] == "image":
+            i2v_plan = self.request_image_to_video(
+                asset_id=asset["id"],
+                camera_motion=scene.camera_motion,
+                duration_sec=5,
+                explicit_authorization=explicit_authorization,
+            )
+            if i2v_plan.get("estimated_eur", 0.0) <= effective_budget and i2v_plan.get("status") == "ready_for_provider_dispatch":
+                return {
+                    "step": "image-to-video",
+                    "asset": asset,
+                    "reference_asset_id": asset["id"],
+                    "authenticity_status": AuthenticityStatus.GENERATIVO_CONTROLLATO.value,
+                    "estimated_eur": i2v_plan["estimated_eur"],
+                    "prompt": i2v_plan["prompt"],
+                    "requires_human_review": True,
+                }
+            return {
+                "step": "generazione vincolata",
+                "asset": asset,
+                "reference_asset_id": asset["id"],
+                "authenticity_status": AuthenticityStatus.DERIVATO_CONSERVATIVO.value,
+                "estimated_eur": 0.0,
+                "prompt": self.build_faithful_detail_prompt(scene.narrative_goal),
+                "reason": i2v_plan.get("reason") or "Costo superiore al budget autorizzato.",
+                "requires_human_review": True,
+            }
+
+        # No reference photo available -> constrained illustrative prompt (0 EUR fallback unless authorized)
+        ill = self.generate_illustrative_atmosphere(
+            scene.generative_prompt or scene.narrative_goal,
+            explicit_authorization=explicit_authorization,
+        )
+        return {
+            "step": "generazione vincolata",
+            "asset": None,
+            "reference_asset_id": None,
+            "authenticity_status": AuthenticityStatus.ILLUSTRATIVO_SINTETICO.value,
+            "estimated_eur": 0.0,
+            "details": ill,
+            "requires_human_review": True,
+        }
+
