@@ -1,11 +1,13 @@
 import type {
   BudgetSettings,
   CreativeConcept,
+  HyperframesConfig,
   JobRecord,
   MediaAsset,
   ProjectRecord,
   ProviderRecord,
   StoryboardScene,
+  ThemeSuggestionResponse,
   VoiceOption,
 } from "./types";
 
@@ -79,9 +81,17 @@ export const koraApi = {
       body: JSON.stringify({ theme: "", duration_sec: durationSec }),
     }),
   fromTheme: (theme: string, durationSec = 20, assetIds: string[] = []) =>
-    apiFetch<{ concepts: CreativeConcept[] }>("/api/creative/from-theme", {
+    apiFetch<{ concepts: CreativeConcept[]; recommendation?: ThemeSuggestionResponse }>(
+      "/api/creative/from-theme",
+      {
+        method: "POST",
+        body: JSON.stringify({ theme, duration_sec: durationSec, asset_ids: assetIds }),
+      }
+    ),
+  suggestTheme: (theme: string, durationSec = 20) =>
+    apiFetch<ThemeSuggestionResponse>("/api/creative/suggest", {
       method: "POST",
-      body: JSON.stringify({ theme, duration_sec: durationSec, asset_ids: assetIds }),
+      body: JSON.stringify({ theme, duration_sec: durationSec }),
     }),
   listVoices: () => apiFetch<VoiceOption[]>("/api/voices"),
   setVoiceElevenLabsId: (voiceId: string, elevenlabsVoiceId: string) =>
@@ -107,6 +117,7 @@ export const koraApi = {
     target_duration_sec: number;
     concept?: CreativeConcept;
     caption_style?: string;
+    hyperframes?: Partial<HyperframesConfig>;
     auto_start?: boolean;
   }) =>
     apiFetch<{ project: ProjectRecord; job: JobRecord | null }>("/api/projects", {
@@ -122,6 +133,9 @@ export const koraApi = {
     id: string,
     payload: {
       caption_style?: string;
+      hyperframes?: Partial<HyperframesConfig>;
+      voice_id?: string;
+      preset?: string;
       music_id?: string;
       include_music?: boolean;
       music_start_sec?: number;
@@ -195,9 +209,15 @@ export const koraApi = {
       { method: "POST" }
     ),
   fetchElevenLabsVoices: () =>
-    apiFetch<Array<{ voice_id: string; name: string; category: string }>>(
-      "/api/providers/elevenlabs_api/voices"
-    ),
+    apiFetch<
+      Array<{
+        voice_id: string;
+        name: string;
+        category: string;
+        preview_url?: string;
+        labels?: Record<string, string>;
+      }>
+    >("/api/providers/elevenlabs_api/voices"),
   runVeoMediaLab: (payload: {
     mode: "image_to_video" | "text_to_video";
     prompt: string;

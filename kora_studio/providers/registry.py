@@ -646,6 +646,8 @@ class ProviderManager:
                 "voice_id": v.get("voice_id", ""),
                 "name": v.get("name", ""),
                 "category": v.get("category", ""),
+                "preview_url": v.get("preview_url", ""),
+                "labels": v.get("labels", {}),
             }
             for v in data.get("voices", [])
             if v.get("voice_id")

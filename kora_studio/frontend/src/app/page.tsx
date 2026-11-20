@@ -15,6 +15,7 @@ import {
 import type {
   BudgetSettings,
   CreativeConcept,
+  HyperframesConfig,
   JobRecord,
   MediaAsset,
   NavSection,
@@ -103,19 +104,23 @@ export default function KoraStudioPage() {
     mode: string,
     voiceId: string,
     prodMode: ProductionMode,
-    captionStyle?: string
+    captionStyle?: string,
+    hyperframes?: Partial<HyperframesConfig>,
+    customizeFirst?: boolean
   ) => {
+    const effectiveMode: ProductionMode = customizeFirst ? "GUIDATA" : prodMode;
     const res = await koraApi.createProject({
       title: concept.title,
       theme,
       mode,
       preset: concept.preset,
-      production_mode: prodMode,
+      production_mode: effectiveMode,
       voice_id: voiceId,
       target_duration_sec: concept.duration_sec,
       concept,
-      caption_style: captionStyle,
-      auto_start: prodMode === "AUTO",
+      caption_style: captionStyle || hyperframes?.caption_style,
+      hyperframes,
+      auto_start: !customizeFirst && prodMode === "AUTO",
     });
     setActiveProjectId(res.project.id);
     if (res.job) {
@@ -202,6 +207,16 @@ export default function KoraStudioPage() {
                 {budget.actual_month_eur.toFixed(2)} / {budget.monthly_cap_eur.toFixed(0)} €
               </span>
             </div>
+            <div className="mt-1 flex items-center justify-between">
+              <span>Budget pagam.</span>
+              <span
+                className={`font-medium ${
+                  budget.paid_budget_eur > 0 ? "text-emerald-700" : "text-amber-700"
+                }`}
+              >
+                {budget.paid_budget_eur.toFixed(2)} €
+              </span>
+            </div>
           </div>
         )}
       </aside>
@@ -243,6 +258,7 @@ export default function KoraStudioPage() {
           <CreativeStudioView
             project={activeProject}
             assets={assets}
+            voices={voices}
             onUpdated={() => refreshAll()}
             onProduce={handleProduceExisting}
           />

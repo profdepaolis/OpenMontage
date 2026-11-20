@@ -15,7 +15,10 @@ from kora_studio.agents.colorist import Colorist
 from kora_studio.agents.hyperframes_captions import (
     CAPTION_STYLES,
     build_caption_segments_for_scene,
+    build_hyperframes_vf_filters,
     export_hyperframes_workspace,
+    normalize_hyperframes_config,
+    render_title_card_png,
 )
 from kora_studio.config import ASSETS_KORA_DIR, DEFAULT_FPS, DEFAULT_HEIGHT, DEFAULT_WIDTH
 from kora_studio.db.models import EditingPreset, StoryboardScene
@@ -395,6 +398,7 @@ class CinematicEditor:
         include_subtitles: bool = True,
         fps: int = DEFAULT_FPS,
         caption_style: Optional[str] = None,
+        hyperframes: Optional[dict[str, Any]] = None,
     ) -> dict[str, Any]:
         """Assemble full 1080x1920 25fps H.264/AAC Rec.709 MP4 with transitions & captions (KORA / Hyperframes)."""
         if not scenes:
@@ -403,11 +407,18 @@ class CinematicEditor:
         expected_duration = total_frames / fps
 
         preset_cfg = PRESET_DEFINITIONS.get(preset, PRESET_DEFINITIONS[EditingPreset.CINEMATIC_IDENTITY.value])
+        hf_cfg = normalize_hyperframes_config(
+            {
+                **(hyperframes or {}),
+                **({"caption_style": caption_style} if caption_style else {}),
+            }
+        )
         active_caption_style = (
-            caption_style
-            if caption_style and caption_style in CAPTION_STYLES
+            hf_cfg["caption_style"]
+            if (caption_style or (hyperframes and hyperframes.get("caption_style")))
             else preset_cfg.get("subtitle_style", "serif_ivory")
         )
+        hf_cfg["caption_style"] = active_caption_style
         scenes_dir = project_dir / "scene_cache"
         sub_dir = project_dir / "subtitles"
         scenes_dir.mkdir(parents=True, exist_ok=True)
@@ -450,9 +461,25 @@ class CinematicEditor:
             next_idx += 1
 
         cur_v = "[vcat]"
+        hf_filters = build_hyperframes_vf_filters(hf_cfg)
+        if hf_filters:
+            filter_parts.append(f"{cur_v}{','.join(hf_filters)}[vhf]")
+            cur_v = "[vhf]"
+
         hyperframes_ws: Optional[dict[str, str]] = None
+        if hf_cfg.get("title_card_intro", "none") != "none" and scenes and not scenes[0].is_outro:
+            tc_png = sub_dir / "title_card_intro.png"
+            render_title_card_png(title, tc_png, style=hf_cfg["title_card_intro"])
+            inputs.extend(["-loop", "1", "-t", f"{expected_duration:.4f}", "-i", str(tc_png)])
+            tc_en = max(1.5, min(2.9, scenes[0].end_sec - 0.15))
+            filter_parts.append(
+                f"{cur_v}[{next_idx}:v]overlay=0:0:enable='between(t,0.25,{tc_en:.3f})'[vtc]"
+            )
+            cur_v = "[vtc]"
+            next_idx += 1
+
         if include_subtitles:
-            if active_caption_style.startswith("hyperframes"):
+            if active_caption_style.startswith("hyperframes") or hf_cfg.get("title_card_intro") != "none":
                 hyperframes_ws = export_hyperframes_workspace(
                     scenes=scenes,
                     caption_style=active_caption_style,
@@ -553,6 +580,7 @@ class CinematicEditor:
             "remotion_spec_path": str(remotion_spec_path),
             "caption_style": active_caption_style,
             "caption_engine": CAPTION_STYLES.get(active_caption_style, {}).get("engine", "kora_native"),
+            "hyperframes_config": hf_cfg,
             "hyperframes_workspace": hyperframes_ws,
             "render_engine": "ffmpeg_deterministic_25fps",
         }

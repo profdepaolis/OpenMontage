@@ -202,3 +202,19 @@ export interface SoundAsset {
   duration_sec: number;
   license: string;
 }
+
+export interface HyperframesConfig {
+  caption_style: string;
+  title_card_intro: string;
+  grain_overlay: string;
+  vignette: string;
+  letterbox: string;
+  motion_pace: string;
+}
+
+export interface ThemeSuggestionResponse {
+  recommended_preset: string;
+  recommended_hyperframes: HyperframesConfig;
+  rationale: string;
+  theme_suggestions: string[];
+}

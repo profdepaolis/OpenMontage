@@ -17,7 +17,11 @@ from pydantic import BaseModel, Field
 
 from kora_studio.agents.cinematic_editor import PRESET_DEFINITIONS
 from kora_studio.agents.director import KoraDirector
-from kora_studio.agents.hyperframes_captions import CAPTION_STYLES
+from kora_studio.agents.hyperframes_captions import (
+    CAPTION_STYLES,
+    HYPERFRAMES_OPTIONS_CATALOG,
+    recommend_hyperframes_for_theme,
+)
 from kora_studio.backup.backup_manager import BackupManager
 from kora_studio.config import BACKUPS_DIR, REPO_ROOT
 from kora_studio.db.database import Database, utcnow_iso
@@ -46,11 +50,15 @@ class CreateProjectRequest(BaseModel):
     target_duration_sec: float = Field(default=20.0, ge=8.0, le=90.0)
     concept: Optional[dict[str, Any]] = None
     caption_style: Optional[str] = None
+    hyperframes: Optional[dict[str, Any]] = None
     auto_start: bool = True
 
 
 class ProjectSyncRequest(BaseModel):
     caption_style: Optional[str] = None
+    hyperframes: Optional[dict[str, Any]] = None
+    voice_id: Optional[str] = None
+    preset: Optional[str] = None
     music_id: Optional[str] = None
     include_music: Optional[bool] = None
     music_start_sec: Optional[float] = None
@@ -157,6 +165,7 @@ def create_app(db_path: Optional[Path] = None, auto_seed: bool = True) -> FastAP
             "db_schema_version": db.get_schema_version(),
             "presets": list(PRESET_DEFINITIONS.values()),
             "caption_styles": list(CAPTION_STYLES.values()),
+            "hyperframes_options": HYPERFRAMES_OPTIONS_CATALOG,
             "preferences": db.get_all_preferences(),
         }
 
@@ -282,11 +291,42 @@ def create_app(db_path: Optional[Path] = None, auto_seed: bool = True) -> FastAP
             duration_sec=req.duration_sec,
             preferred_asset_ids=req.asset_ids or None,
         )
-        return {"concepts": [c.model_dump() for c in concepts]}
+        suggestion = recommend_hyperframes_for_theme(req.theme)
+        return {
+            "concepts": [c.model_dump() for c in concepts],
+            "recommendation": suggestion,
+        }
+
+    @app.post("/api/creative/suggest")
+    def creative_suggest(req: ThemeRequest) -> dict[str, Any]:
+        return recommend_hyperframes_for_theme(req.theme)
 
     @app.get("/api/voices")
     def list_voices() -> list[dict[str, Any]]:
         return director.voice_director.list_voices()
+
+    @app.get("/api/voices/{voice_id}/sample")
+    def voice_sample(
+        voice_id: str,
+        engine: str = Query("auto"),
+    ) -> FileResponse:
+        from kora_studio.config import PROJECTS_DIR
+        sample_dir = PROJECTS_DIR / "_voice_samples"
+        try:
+            res = director.voice_director.generate_voice_sample(
+                voice_id=voice_id,
+                work_dir=sample_dir,
+                engine=engine,
+            )
+            p = Path(res["path"])
+            return FileResponse(
+                p,
+                media_type=res["media_type"],
+                filename=p.name,
+                headers={"X-Voice-Engine": res["engine"]},
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
 
     # ---- Projects, Production, Revisions & Exports -----------------------
 
@@ -307,9 +347,11 @@ def create_app(db_path: Optional[Path] = None, auto_seed: bool = True) -> FastAP
             target_duration_sec=req.target_duration_sec,
             concept=concept,
         )
-        if req.caption_style:
+        if req.caption_style or req.hyperframes:
             proj = director.sync_project_audio_and_caption(
-                proj["id"], caption_style=req.caption_style
+                proj["id"],
+                caption_style=req.caption_style,
+                hyperframes=req.hyperframes,
             )
         job = None
         if req.auto_start and req.production_mode == "AUTO":
@@ -334,9 +376,27 @@ def create_app(db_path: Optional[Path] = None, auto_seed: bool = True) -> FastAP
         proj = director.get_project(project_id)
         if not proj:
             raise HTTPException(status_code=404, detail="Progetto non trovato")
-        validated = [StoryboardScene(**s).model_dump() for s in req.scenes]
+        fps = max(1, int(proj.get("fps") or 25))
+        cursor_sec = 0.0
+        cursor_frame = 0
+        validated: list[dict[str, Any]] = []
+        for idx, raw_scene in enumerate(req.scenes, start=1):
+            sc = StoryboardScene(**raw_scene)
+            dur_s = max(1.0, float(sc.duration_sec or 3.0))
+            df = max(fps, int(round(dur_s * fps)))
+            dur_s = round(df / fps, 3)
+            sc.scene_number = idx
+            sc.start_sec = round(cursor_sec, 3)
+            sc.end_sec = round(cursor_sec + dur_s, 3)
+            sc.duration_sec = dur_s
+            sc.start_frame = cursor_frame
+            sc.duration_frames = df
+            validated.append(sc.model_dump())
+            cursor_sec += dur_s
+            cursor_frame += df
+
         total_frames = sum(int(s.get("duration_frames") or 25) for s in validated)
-        target_dur = round(total_frames / max(1, int(proj.get("fps") or 25)), 2)
+        target_dur = round(total_frames / fps, 2)
         with db.session() as conn:
             conn.execute(
                 "UPDATE projects SET storyboard_json = ?, total_frames = ?, target_duration_sec = ?, updated_at = ? WHERE id = ?",
@@ -348,9 +408,24 @@ def create_app(db_path: Optional[Path] = None, auto_seed: bool = True) -> FastAP
     @app.post("/api/projects/{project_id}/sync-audio")
     def sync_project_audio(project_id: str, req: ProjectSyncRequest) -> dict[str, Any]:
         try:
+            if req.voice_id or req.preset:
+                proj_cur = director.get_project(project_id)
+                if not proj_cur:
+                    raise KeyError(f"Progetto {project_id} non trovato")
+                with db.session() as conn:
+                    conn.execute(
+                        "UPDATE projects SET voice_id = ?, preset = ?, updated_at = ? WHERE id = ?",
+                        (
+                            req.voice_id or proj_cur["voice_id"],
+                            req.preset or proj_cur["preset"],
+                            utcnow_iso(),
+                            project_id,
+                        ),
+                    )
             return director.sync_project_audio_and_caption(
                 project_id=project_id,
                 caption_style=req.caption_style,
+                hyperframes=req.hyperframes,
                 music_id=req.music_id,
                 include_music=req.include_music,
                 music_start_sec=req.music_start_sec,

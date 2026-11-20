@@ -381,3 +381,243 @@ def render_styled_caption_png(
     out_png.parent.mkdir(parents=True, exist_ok=True)
     overlay.save(out_png, "PNG")
     return out_png
+
+
+HYPERFRAMES_OPTIONS_CATALOG: dict[str, list[dict[str, str]]] = {
+    "caption_style": [
+        {"id": k, "label": v["label"], "description": v["description"]}
+        for k, v in CAPTION_STYLES.items()
+    ],
+    "title_card_intro": [
+        {"id": "none", "label": "Nessuna Title Card", "description": "Apertura pura sull'immagine reale."},
+        {"id": "editorial_serif", "label": "Editorial Serif Intro", "description": "Titolo in Playfair Display centrato su Scena 1 (0.3s–2.8s)."},
+        {"id": "hyperframes_gold_line", "label": "Hyperframes · Gold Line Title", "description": "Title card Hyperframes con filetto oro #9A8052 e sottotitolo Policoro."},
+    ],
+    "grain_overlay": [
+        {"id": "none", "label": "Pulito (Nessuna grana)", "description": "Nitidezza digitale originale."},
+        {"id": "subtle_35mm", "label": "Grana 35mm leggera", "description": "Texture pellicola discreta (Hyperframes grain-overlay)."},
+        {"id": "warm_kodak", "label": "Pellicola calda Kodak", "description": "Grana organica calda adatta a tramonti e luce radente."},
+    ],
+    "vignette": [
+        {"id": "none", "label": "Nessuna vignettatura", "description": "Luminosità uniforme su tutto il frame."},
+        {"id": "soft_luxury", "label": "Vignettatura Luxury morbida", "description": "Guida l'occhio al centro con bordi leggermente più profondi."},
+        {"id": "deep_cinematic", "label": "Vignettatura Cinema", "description": "Cornice ottica drammatica per tramonti o sera."},
+    ],
+    "letterbox": [
+        {"id": "none", "label": "Schermo pieno 9:16", "description": "Nessuna cornice ai bordi."},
+        {"id": "cinema_frame", "label": "Cornice Cinema leggera", "description": "Bande scure minimali alto/basso per respiro cinematografico."},
+        {"id": "editorial_border", "label": "Passepartout Avorio", "description": "Sottile filetto editoriale caldo sui margini."},
+    ],
+    "motion_pace": [
+        {"id": "slow_contemplative", "label": "Lento contemplativo", "description": "Movimenti di camera morbidi e distesi."},
+        {"id": "balanced", "label": "Equilibrato KORA", "description": "Ritmo naturale tra dettagli e respiri visivi."},
+        {"id": "dynamic_experience", "label": "Dinamico Experience", "description": "Ritmo più vivo per aperitivi, convivialità ed eventi."},
+    ],
+}
+
+DEFAULT_HYPERFRAMES_CONFIG: dict[str, str] = {
+    "caption_style": "serif_ivory",
+    "title_card_intro": "none",
+    "grain_overlay": "none",
+    "vignette": "soft_luxury",
+    "letterbox": "none",
+    "motion_pace": "balanced",
+}
+
+
+def normalize_hyperframes_config(raw: Optional[dict[str, Any]]) -> dict[str, str]:
+    cfg = dict(DEFAULT_HYPERFRAMES_CONFIG)
+    if not raw:
+        return cfg
+    for key, options in HYPERFRAMES_OPTIONS_CATALOG.items():
+        val = str(raw.get(key) or "").strip()
+        valid_ids = {o["id"] for o in options}
+        if val in valid_ids:
+            cfg[key] = val
+    return cfg
+
+
+def recommend_hyperframes_for_theme(theme: str) -> dict[str, Any]:
+    """Intelligently recommend Preset, Hyperframes options, and theme enrichments from user text."""
+    lower = (theme or "").lower()
+    if any(k in lower for k in ("aperitivo", "tramonto", "sera", "calice", "spritz", "festa", "insieme", "amici")):
+        hf = {
+            "caption_style": "hyperframes_kinetic",
+            "title_card_intro": "hyperframes_gold_line",
+            "grain_overlay": "warm_kodak",
+            "vignette": "deep_cinematic",
+            "letterbox": "none",
+            "motion_pace": "dynamic_experience",
+        }
+        preset = "KORA Experience"
+        rationale = (
+            "Per temi conviviali o al tramonto consiglio Hyperframes Kinetic Gold + grana calda Kodak + vignettatura cinema "
+            "per valorizzare riflessi dorati, calici e ritmo vivo."
+        )
+        suggestions = [
+            f"{theme.strip()} — con focus sui dettagli dei calici e i sorrisi sotto il pergolato",
+            "Aperitivo al tramonto a Policoro: ritmo caldo, poche parole, suono del mare",
+            "La luce dorata delle 19:00 al KORA: dalla preparazione dei cocktail al brindisi",
+            "Ospitalità vista mare: un invito elegante a vivere la serata senza fretta",
+        ]
+    elif any(k in lower for k in ("poche parole", "silenzio", "poesia", "minimal", "essenziale", "fuori stagione", "inverno")):
+        hf = {
+            "caption_style": "serif_minimal",
+            "title_card_intro": "editorial_serif",
+            "grain_overlay": "subtle_35mm",
+            "vignette": "soft_luxury",
+            "letterbox": "editorial_border",
+            "motion_pace": "slow_contemplative",
+        }
+        preset = "KORA Editorial"
+        rationale = (
+            "Per un racconto intimo ed essenziale consiglio Editorial Minimal + cornice avorio + ritmo lento contemplativo "
+            "per lasciare spazio al respiro delle immagini."
+        )
+        suggestions = [
+            f"{theme.strip()} — ritmo contemplativo con solo 3 frasi brevi e suono naturale delle onde",
+            "Quando la spiaggia si svuota, il mare di Policoro torna protagonista",
+            "Pochi gesti, materiali naturali e luce radente: The Art of Being",
+            "Un Reel senza voiceover, solo musica soffusa, onde e sottotitoli editoriali",
+        ]
+    elif any(k in lower for k in ("colazione", "mattino", "caffè", "alba", "luce")):
+        hf = {
+            "caption_style": "hyperframes_glass",
+            "title_card_intro": "editorial_serif",
+            "grain_overlay": "subtle_35mm",
+            "vignette": "soft_luxury",
+            "letterbox": "none",
+            "motion_pace": "balanced",
+        }
+        preset = "KORA Cinematic Identity"
+        rationale = (
+            "Per la luce del mattino e la colazione consiglio Hyperframes Mediterranean Glass + grana 35mm leggera "
+            "per un effetto luminoso, fresco e tattile."
+        )
+        suggestions = [
+            f"{theme.strip()} — dalla prima luce sul pergolato al profumo del caffè",
+            "Colazione vista mare a Policoro: ombre lunghe, lino chiaro e calma assoluta",
+            "Il risveglio del KORA prima dell'arrivo degli ospiti",
+            "Dettagli del mattino: tazzina calda, vento leggero e orizzonte limpido",
+        ]
+    else:
+        hf = {
+            "caption_style": "hyperframes_word_highlight",
+            "title_card_intro": "hyperframes_gold_line",
+            "grain_overlay": "subtle_35mm",
+            "vignette": "soft_luxury",
+            "letterbox": "cinema_frame",
+            "motion_pace": "balanced",
+        }
+        preset = "KORA Cinematic Identity"
+        rationale = (
+            "Combinazione equilibrata KORA: Title Card oro Hyperframes + Word Highlight ad alta leggibilità mobile "
+            "+ cornice cinema leggera."
+        )
+        suggestions = [
+            "Il piacere di stare insieme davanti al mare, senza guardare l'orologio",
+            "Dal mattino al tramonto: una giornata autentica al KORA Beach Club di Policoro",
+            "Architettura naturale, pergolato e ospitalità mediterranea",
+            "Poche parole essenziali, voce calda e focus sui dettagli reali del lido",
+        ]
+
+    return {
+        "recommended_preset": preset,
+        "recommended_hyperframes": hf,
+        "rationale": rationale,
+        "theme_suggestions": [s for s in suggestions if s],
+    }
+
+
+def render_title_card_png(
+    title: str,
+    out_png: Path,
+    style: str = "hyperframes_gold_line",
+    width: int = DEFAULT_WIDTH,
+    height: int = DEFAULT_HEIGHT,
+) -> Path:
+    """Render an editorial Hyperframes opening title card overlay for Scene 1."""
+    overlay = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    if style == "none" or not title.strip():
+        out_png.parent.mkdir(parents=True, exist_ok=True)
+        overlay.save(out_png, "PNG")
+        return out_png
+
+    draw = ImageDraw.Draw(overlay)
+    kicker_font = load_kora_font(22, sans=True)
+    title_font = load_kora_font(54, italic=False)
+    kicker = "KORA BEACH CLUB · POLICORO"
+    kb = draw.textbbox((0, 0), kicker, font=kicker_font)
+    kw = kb[2] - kb[0]
+
+    wrapped = textwrap.fill(title.strip(), width=22)
+    lines = wrapped.splitlines()[:3]
+    l_boxes = [draw.textbbox((0, 0), ln, font=title_font) for ln in lines]
+    l_heights = [(b[3] - b[1]) + 16 for b in l_boxes]
+    l_widths = [b[2] - b[0] for b in l_boxes]
+    total_h = sum(l_heights) + 64
+    max_w = max(kw, *(l_widths or [200]))
+
+    center_y = int(height * 0.24)
+    box_top = center_y - total_h // 2 - 26
+    box_bottom = center_y + total_h // 2 + 20
+    box_left = (width - max_w) // 2 - 44
+    box_right = (width + max_w) // 2 + 44
+
+    draw.rounded_rectangle(
+        [max(40, box_left), box_top, min(width - 40, box_right), box_bottom],
+        radius=22,
+        fill=(14, 14, 13, 150),
+        outline=(154, 128, 82, 160) if style == "hyperframes_gold_line" else (247, 243, 234, 80),
+        width=2,
+    )
+
+    cur_y = box_top + 26
+    draw.text(((width - kw) // 2, cur_y), kicker, fill=(214, 195, 155, 245), font=kicker_font)
+    cur_y += 38
+    if style == "hyperframes_gold_line":
+        cx = width // 2
+        draw.rectangle([cx - 55, cur_y, cx + 55, cur_y + 3], fill=(154, 128, 82, 245))
+        cur_y += 20
+    else:
+        cur_y += 8
+
+    for idx, line in enumerate(lines):
+        lw = l_widths[idx]
+        draw.text(((width - lw) // 2 + 1, cur_y + 2), line, fill=(0, 0, 0, 175), font=title_font)
+        draw.text(((width - lw) // 2, cur_y), line, fill=(247, 243, 234, 255), font=title_font)
+        cur_y += l_heights[idx]
+
+    out_png.parent.mkdir(parents=True, exist_ok=True)
+    overlay.save(out_png, "PNG")
+    return out_png
+
+
+def build_hyperframes_vf_filters(
+    hf_cfg: dict[str, str],
+    width: int = DEFAULT_WIDTH,
+    height: int = DEFAULT_HEIGHT,
+) -> list[str]:
+    """Build deterministic FFmpeg post-processing video filters for Hyperframes visual FX."""
+    filters: list[str] = []
+    grain = hf_cfg.get("grain_overlay", "none")
+    if grain == "subtle_35mm":
+        filters.append("noise=alls=4:allf=t+u")
+    elif grain == "warm_kodak":
+        filters.append("noise=alls=7:allf=t+u,eq=saturation=1.04:gamma=1.01")
+
+    vignette = hf_cfg.get("vignette", "none")
+    if vignette == "soft_luxury":
+        filters.append("vignette=angle=PI/6")
+    elif vignette == "deep_cinematic":
+        filters.append("vignette=angle=PI/4.2")
+
+    letterbox = hf_cfg.get("letterbox", "none")
+    if letterbox == "cinema_frame":
+        filters.append(f"drawbox=x=0:y=0:w={width}:h=76:color=0x0B0C0B@0.92:t=fill")
+        filters.append(f"drawbox=x=0:y={height - 76}:w={width}:h=76:color=0x0B0C0B@0.92:t=fill")
+    elif letterbox == "editorial_border":
+        filters.append(f"drawbox=x=24:y=24:w={width - 48}:h={height - 48}:color=0xF7F3EA@0.38:t=3")
+
+    return filters
+

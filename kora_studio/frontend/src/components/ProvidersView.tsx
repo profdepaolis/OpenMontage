@@ -12,6 +12,7 @@ import {
   Shield,
   Terminal,
   Trash2,
+  Volume2,
   Wallet,
 } from "lucide-react";
 import type { BudgetSettings, ProviderRecord, VoiceOption } from "@/lib/types";
@@ -28,8 +29,16 @@ export function ProvidersView({ providers, budget, voices, onRefresh }: Provider
   const [keyInputs, setKeyInputs] = useState<Record<string, string>>({});
   const [voiceIds, setVoiceIds] = useState<Record<string, string>>({});
   const [accountVoices, setAccountVoices] = useState<
-    Array<{ voice_id: string; name: string; category: string }>
+    Array<{
+      voice_id: string;
+      name: string;
+      category: string;
+      preview_url?: string;
+      labels?: Record<string, string>;
+    }>
   >([]);
+  const [audioPreviewUrl, setAudioPreviewUrl] = useState<string | null>(null);
+  const [audioPreviewLabel, setAudioPreviewLabel] = useState<string | null>(null);
   const [paidInput, setPaidInput] = useState<string>(
     budget ? String(budget.paid_budget_eur) : "0"
   );
@@ -266,13 +275,36 @@ export function ProvidersView({ providers, budget, voices, onRefresh }: Provider
             <span className="text-xs text-[#6C6459]">
               Per usare ElevenLabs o Google Veo nei Reel, imposta il Budget autorizzato &gt; 0 € (es. 5 €) e salva.
             </span>
-            <button
-              type="submit"
-              className="rounded-xl bg-[#1D1B18] px-4 py-2 text-xs font-medium text-white hover:bg-[#224C66]"
-            >
-              Salva Budget
-            </button>
+            <div className="flex flex-wrap items-center gap-2">
+              {budget.paid_budget_eur <= 0 && (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const target = Math.max(5, Number(capInput) || 5);
+                    setPaidInput(String(target));
+                    setCapInput(String(Math.max(target, Number(capInput) || target)));
+                    await koraApi.updateBudget(target, Math.max(target, Number(capInput) || target));
+                    setMsg(`Budget autorizzato impostato a ${target.toFixed(2)} € (ElevenLabs sbloccato!).`);
+                    onRefresh();
+                  }}
+                  className="rounded-xl bg-[#9A8052] px-3.5 py-2 text-xs font-medium text-white hover:bg-[#7f673f]"
+                >
+                  Autorizza {Math.max(5, Number(capInput) || 5)} € subito
+                </button>
+              )}
+              <button
+                type="submit"
+                className="rounded-xl bg-[#1D1B18] px-4 py-2 text-xs font-medium text-white hover:bg-[#224C66]"
+              >
+                Salva Budget
+              </button>
+            </div>
           </div>
+          {budget.paid_budget_eur <= 0 && (
+            <div className="mt-3 rounded-xl border border-amber-300 bg-amber-50 px-3.5 py-2.5 text-xs text-amber-900">
+              <strong>Nota importante:</strong> il <em>Budget autorizzato</em> è a <strong>0.00 €</strong> (anche se il limite mensile è {budget.monthly_cap_eur.toFixed(0)} €). Finché resta a 0 €, ElevenLabs viene bloccato dal Cost Guard e KORA usa Piper TTS locale gratuito.
+            </div>
+          )}
         </form>
       )}
 
@@ -358,7 +390,7 @@ export function ProvidersView({ providers, budget, voices, onRefresh }: Provider
             {voices
               .filter((v) => v.id !== "none")
               .map((v) => (
-                <div key={v.id} className="flex items-center gap-2">
+                <div key={v.id} className="flex flex-wrap items-center gap-2">
                   <span className="w-16 text-xs font-medium text-[#1D1B18]">{v.label}</span>
                   {accountVoices.length > 0 ? (
                     <select
@@ -366,7 +398,7 @@ export function ProvidersView({ providers, budget, voices, onRefresh }: Provider
                       onChange={(e) =>
                         setVoiceIds((prev) => ({ ...prev, [v.id]: e.target.value }))
                       }
-                      className="flex-1 rounded-lg border border-[#DDD4C4] bg-[#FAF7F2] px-2.5 py-1.5 text-xs"
+                      className="flex-1 min-w-[160px] rounded-lg border border-[#DDD4C4] bg-[#FAF7F2] px-2.5 py-1.5 text-xs"
                     >
                       <option value="">-- Seleziona voce ElevenLabs --</option>
                       {accountVoices.map((av) => (
@@ -383,9 +415,27 @@ export function ProvidersView({ providers, budget, voices, onRefresh }: Provider
                         setVoiceIds((prev) => ({ ...prev, [v.id]: e.target.value }))
                       }
                       placeholder={`Voice ID ElevenLabs per ${v.label}`}
-                      className="flex-1 rounded-lg border border-[#DDD4C4] bg-[#FAF7F2] px-3 py-1.5 text-xs"
+                      className="flex-1 min-w-[160px] rounded-lg border border-[#DDD4C4] bg-[#FAF7F2] px-3 py-1.5 text-xs"
                     />
                   )}
+                  <button
+                    type="button"
+                    title="Ascolta anteprima voce"
+                    onClick={() => {
+                      const sel = accountVoices.find((av) => av.voice_id === voiceIds[v.id]);
+                      if (sel?.preview_url) {
+                        setAudioPreviewUrl(sel.preview_url);
+                        setAudioPreviewLabel(`ElevenLabs · ${sel.name}`);
+                      } else {
+                        setAudioPreviewUrl(`/api/voices/${v.id}/sample?engine=auto&t=${Date.now()}`);
+                        setAudioPreviewLabel(`Anteprima live · ${v.label}`);
+                      }
+                    }}
+                    className="inline-flex items-center gap-1 rounded-lg border border-[#DDD4C4] bg-[#FAF7F2] px-2.5 py-1.5 text-xs text-[#1D1B18] hover:border-[#9A8052]"
+                  >
+                    <Volume2 className="h-3.5 w-3.5 text-[#9A8052]" />
+                    Ascolta
+                  </button>
                   <button
                     type="button"
                     onClick={() => handleSaveVoiceId(v.id)}
@@ -397,6 +447,58 @@ export function ProvidersView({ providers, budget, voices, onRefresh }: Provider
                 </div>
               ))}
           </div>
+          {audioPreviewUrl && (
+            <div className="rounded-xl border border-[#DDD4C4] bg-[#FAF7F2] p-2.5">
+              <div className="mb-1 text-[11px] font-medium text-[#1D1B18]">
+                In ascolto: {audioPreviewLabel}
+              </div>
+              <audio key={audioPreviewUrl} src={audioPreviewUrl} controls autoPlay className="h-8 w-full" />
+            </div>
+          )}
+          {accountVoices.length > 0 && (
+            <div className="max-h-48 overflow-y-auto rounded-xl border border-[#EDE6D9] bg-[#FAF7F2] p-2.5 space-y-1.5">
+              <div className="text-[11px] font-medium text-[#6C6459]">
+                Catalogo voci ElevenLabs ({accountVoices.length}) — ascolta e assegna:
+              </div>
+              {accountVoices.map((av) => (
+                <div
+                  key={av.voice_id}
+                  className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-white px-2.5 py-1.5 text-[11px]"
+                >
+                  <div>
+                    <span className="font-medium text-[#1D1B18]">{av.name}</span>{" "}
+                    <span className="text-[#6C6459]">({av.category || "voice"})</span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    {av.preview_url && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setAudioPreviewUrl(av.preview_url || null);
+                          setAudioPreviewLabel(`ElevenLabs · ${av.name}`);
+                        }}
+                        className="inline-flex items-center gap-1 rounded border border-[#DDD4C4] px-2 py-0.5 text-[10px] hover:border-[#9A8052]"
+                      >
+                        <Volume2 className="h-3 w-3 text-[#9A8052]" /> Ascolta
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        setVoiceIds((prev) => ({ ...prev, brando: av.voice_id }));
+                        await koraApi.setVoiceElevenLabsId("brando", av.voice_id);
+                        setMsg(`Voce '${av.name}' assegnata a Brando!`);
+                        onRefresh();
+                      }}
+                      className="rounded bg-[#1D1B18] px-2 py-0.5 text-[10px] text-white hover:bg-[#224C66]"
+                    >
+                      Usa su Brando
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
 

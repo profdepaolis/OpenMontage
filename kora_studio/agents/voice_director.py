@@ -367,14 +367,16 @@ class VoiceDirector:
         norm_out = work_dir / f"voice_{voice_id}_norm.wav"
         substituted = False
         substitution_notice: Optional[str] = None
+        el_failure_reason: Optional[str] = None
         source_used = ""
 
         # 1. Primary: Official ElevenLabs API (synthesizes exact new script in requested voice)
         el_key = self.providers.get_decrypted_key("elevenlabs_api")
         el_voice_id = self._get_elevenlabs_voice_id(voice_id)
         if el_key and el_voice_id:
+            est_el = round(max(0.01, (len(full_text) / 1000.0) * 0.18), 4)
             auth = self.providers.cost_guard.check_authorization(
-                0.05, explicit_user_authorization=explicit_paid_authorization
+                est_el, explicit_user_authorization=explicit_paid_authorization
             )
             if auth["authorized"]:
                 try:
@@ -382,8 +384,20 @@ class VoiceDirector:
                     self._synthesize_elevenlabs(voice_id, full_text, mp3_tmp)
                     self.normalize_audio(mp3_tmp, norm_out)
                     source_used = "elevenlabs_api"
+                    self.providers.cost_guard.record_usage(
+                        "elevenlabs_api", "text_to_speech", est_el, est_el, True, "completed"
+                    )
                 except Exception as exc:
-                    substitution_notice = f"ElevenLabs non riuscito ({exc}); verifico alternative."
+                    el_failure_reason = f"ElevenLabs ha restituito errore: {exc}"
+            else:
+                el_failure_reason = (
+                    f"ElevenLabs configurato ma bloccato dal Cost Guard: {auth['reason']} "
+                    "(Controlla 'Budget autorizzato (€)' in Provider AI, non solo il limite mensile)."
+                )
+        elif el_key and not el_voice_id:
+            el_failure_reason = (
+                f"Chiave ElevenLabs salvata, ma nessun Voice ID associato a '{VOICE_CATALOG[voice_id]['label']}'."
+            )
 
         # 2. Authorized matching KORA recording (ONLY if the script matches the recording — never mismatch!)
         if not source_used:
@@ -449,10 +463,12 @@ class VoiceDirector:
                 self.normalize_audio(piper_path, norm_out)
                 source_used = "piper_tts_local"
                 substituted = True
-                substitution_notice = (
+                substitution_notice = el_failure_reason or (
                     f"Servizio vocale '{VOICE_CATALOG[voice_id]['label']}' non configurato per nuovo testo: "
                     "utilizzato sintetizzatore locale gratuito Piper TTS (esplicitamente segnalato)."
                 )
+                if el_failure_reason:
+                    substitution_notice = f"{el_failure_reason} · Fallback utilizzato: Piper TTS locale gratuito."
 
         # 5. Free Edge TTS fallback (works on internet-connected machines; skipped cleanly offline)
         if not source_used:
@@ -463,8 +479,12 @@ class VoiceDirector:
                 source_used = "edge_tts_fallback"
                 substituted = True
                 substitution_notice = (
-                    f"Voce '{VOICE_CATALOG[voice_id]['label']}' sostituita temporaneamente con voce neurale "
-                    "gratuita di fallback (Edge TTS) per pronunciare esattamente il nuovo testo."
+                    f"{el_failure_reason} · Fallback utilizzato: Edge TTS gratuito."
+                    if el_failure_reason
+                    else (
+                        f"Voce '{VOICE_CATALOG[voice_id]['label']}' sostituita temporaneamente con voce neurale "
+                        "gratuita di fallback (Edge TTS) per pronunciare esattamente il nuovo testo."
+                    )
                 )
 
         # 6. No TTS & script differs from archived recording -> DO NOT insert mismatched old audio!
@@ -475,7 +495,7 @@ class VoiceDirector:
                 "audio_path": None,
                 "duration_sec": 0.0,
                 "substituted": True,
-                "substitution_notice": (
+                "substitution_notice": el_failure_reason or (
                     f"Il nuovo copione ha parole diverse dalla vecchia registrazione d'archivio '{VOICE_CATALOG[voice_id]['label']}' "
                     "(che non è stata riutilizzata per evitare testo e audio discordanti). "
                     "Senza API ElevenLabs/OpenAI o modello Piper offline, il Reel prosegue con musica, SFX e sottotitoli."
@@ -640,3 +660,55 @@ class VoiceDirector:
             synced.append(updated)
             cursor += df
         return synced
+
+    def generate_voice_sample(
+        self, voice_id: str, work_dir: Path, engine: str = "auto"
+    ) -> dict[str, Any]:
+        """Generate or return a short audition audio clip so the user can listen before rendering."""
+        if voice_id not in VOICE_CATALOG or voice_id == "none":
+            raise ValueError("Seleziona una voce valida da ascoltare.")
+        label = VOICE_CATALOG[voice_id]["label"]
+        sample_text = f"Ciao, sono {label}. Questa è la mia voce per i racconti KORA Beach Club di Policoro."
+        work_dir.mkdir(parents=True, exist_ok=True)
+
+        if engine in ("vault",):
+            v_asset = self._find_vault_voice_asset(voice_id)
+            if v_asset:
+                p = Path(v_asset["working_path"] or v_asset["original_path"])
+                if p.is_file():
+                    return {"path": str(p), "engine": "kora_vault", "media_type": "audio/mpeg"}
+
+        if engine in ("auto", "elevenlabs"):
+            el_key = self.providers.get_decrypted_key("elevenlabs_api")
+            el_vid = self._get_elevenlabs_voice_id(voice_id)
+            auth = self.providers.cost_guard.check_authorization(0.01)
+            if el_key and el_vid and auth["authorized"]:
+                try:
+                    out = work_dir / f"sample_{voice_id}_el.mp3"
+                    self._synthesize_elevenlabs(voice_id, sample_text, out)
+                    if out.is_file():
+                        return {"path": str(out), "engine": "elevenlabs_api", "media_type": "audio/mpeg"}
+                except Exception as exc:
+                    if engine == "elevenlabs":
+                        raise RuntimeError(f"Anteprima ElevenLabs fallita: {exc}")
+
+        if engine in ("auto", "edge"):
+            out_edge = work_dir / f"sample_{voice_id}_edge.mp3"
+            res = self._synthesize_edge_tts(voice_id, sample_text, out_edge)
+            if res and res.is_file():
+                return {"path": str(res), "engine": "edge_tts", "media_type": "audio/mpeg"}
+
+        if engine in ("auto", "piper"):
+            out_piper = work_dir / f"sample_{voice_id}_piper.wav"
+            res = self._synthesize_piper(sample_text, out_piper)
+            if res and res.is_file():
+                return {"path": str(res), "engine": "piper_tts_local", "media_type": "audio/wav"}
+
+        # Final fallback: original vault voice sample if present
+        v_asset = self._find_vault_voice_asset(voice_id)
+        if v_asset:
+            p = Path(v_asset["working_path"] or v_asset["original_path"])
+            if p.is_file():
+                return {"path": str(p), "engine": "kora_vault", "media_type": "audio/mpeg"}
+
+        raise RuntimeError("Nessun motore vocale disponibile per l'anteprima audio.")

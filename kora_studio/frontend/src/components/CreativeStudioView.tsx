@@ -12,13 +12,22 @@ import {
   Sparkles,
   Volume2,
   Type,
+  Wand2,
 } from "lucide-react";
-import type { MediaAsset, ProjectRecord, SoundAsset, StoryboardScene } from "@/lib/types";
+import type {
+  HyperframesConfig,
+  MediaAsset,
+  ProjectRecord,
+  SoundAsset,
+  StoryboardScene,
+  VoiceOption,
+} from "@/lib/types";
 import { koraApi } from "@/lib/api";
 
 interface CreativeStudioViewProps {
   project: ProjectRecord | null;
   assets: MediaAsset[];
+  voices: VoiceOption[];
   onUpdated: () => void;
   onProduce: (projectId: string) => Promise<void>;
 }
@@ -63,12 +72,24 @@ const CAPTION_OPTIONS = [
 export function CreativeStudioView({
   project,
   assets,
+  voices,
   onUpdated,
   onProduce,
 }: CreativeStudioViewProps) {
   const [scenes, setScenes] = useState<StoryboardScene[]>([]);
   const [sounds, setSounds] = useState<SoundAsset[]>([]);
+  const [voiceId, setVoiceId] = useState("brando");
+  const [voicePreviewUrl, setVoicePreviewUrl] = useState<string | null>(null);
   const [captionStyle, setCaptionStyle] = useState("serif_ivory");
+  const [hyperframes, setHyperframes] = useState<HyperframesConfig>({
+    caption_style: "serif_ivory",
+    title_card_intro: "none",
+    grain_overlay: "none",
+    vignette: "soft_luxury",
+    letterbox: "none",
+    motion_pace: "balanced",
+  });
+  const [hfRationale, setHfRationale] = useState<string | null>(null);
   const [musicId, setMusicId] = useState("");
   const [includeMusic, setIncludeMusic] = useState(true);
   const [musicStartSec, setMusicStartSec] = useState(0);
@@ -87,8 +108,19 @@ export function CreativeStudioView({
   useEffect(() => {
     if (!project) return;
     setScenes(project.storyboard || []);
+    setVoiceId(project.voice_id || "brando");
     const prefs = (project.preferences || {}) as Record<string, unknown>;
-    setCaptionStyle(String(prefs.caption_style || "serif_ivory"));
+    const savedHf = (prefs.hyperframes || {}) as Partial<HyperframesConfig>;
+    const cStyle = String(savedHf.caption_style || prefs.caption_style || "serif_ivory");
+    setCaptionStyle(cStyle);
+    setHyperframes({
+      caption_style: cStyle,
+      title_card_intro: String(savedHf.title_card_intro || "none"),
+      grain_overlay: String(savedHf.grain_overlay || "none"),
+      vignette: String(savedHf.vignette || "soft_luxury"),
+      letterbox: String(savedHf.letterbox || "none"),
+      motion_pace: String(savedHf.motion_pace || "balanced"),
+    });
     const ap = (project.audio_plan || {}) as Record<string, unknown>;
     const mus = (ap.music || null) as { id?: string } | null;
     setMusicId(mus?.id || "");
@@ -198,6 +230,8 @@ export function CreativeStudioView({
       await koraApi.updateStoryboard(project.id, normalized);
       const updated = await koraApi.syncProjectAudio(project.id, {
         caption_style: captionStyle,
+        hyperframes: { ...hyperframes, caption_style: captionStyle },
+        voice_id: voiceId,
         music_id: musicId || undefined,
         include_music: includeMusic,
         music_start_sec: musicStartSec,
@@ -208,12 +242,24 @@ export function CreativeStudioView({
       setScenes(updated.storyboard || normalized);
       setSavedMsg(
         autoSyncToVoice
-          ? "Durata delle scene sincronizzata alle parole + musica e stile caption salvati!"
-          : "Storyboard, sincronizzazione audio/musica e stile caption salvati."
+          ? "Durata delle scene sincronizzata alle parole + voce, musica e opzioni Hyperframes salvate!"
+          : "Storyboard, voce, sincronizzazione musica e opzioni Hyperframes salvati."
       );
       onUpdated();
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleSuggestHyperframes = async () => {
+    try {
+      const spokenAll = scenes.map((s) => s.spoken_text).join(" ");
+      const rec = await koraApi.suggestTheme(`${project.theme} ${project.title} ${spokenAll}`);
+      setHyperframes(rec.recommended_hyperframes);
+      setCaptionStyle(rec.recommended_hyperframes.caption_style);
+      setHfRationale(rec.rationale);
+    } catch {
+      // ignore
     }
   };
 
@@ -266,94 +312,215 @@ export function CreativeStudioView({
         </div>
       </div>
 
-      {/* Sync & Hyperframes Caption Bar */}
-      <div className="rounded-2xl border border-[#DDD4C4] bg-white p-4 shadow-sm grid grid-cols-1 gap-4 md:grid-cols-12">
-        <div className="md:col-span-4 space-y-1">
-          <label className="flex items-center gap-1.5 text-[11px] font-medium text-[#6C6459]">
-            <Type className="h-3.5 w-3.5 text-[#9A8052]" />
-            Stile Caption / Sottotitoli (KORA o Hyperframes)
-          </label>
-          <select
-            value={captionStyle}
-            onChange={(e) => setCaptionStyle(e.target.value)}
-            className="w-full rounded-lg border border-[#DDD4C4] bg-[#FAF7F2] px-3 py-2 text-xs text-[#1D1B18]"
-          >
-            {CAPTION_OPTIONS.map((opt) => (
-              <option key={opt.id} value={opt.id}>
-                {opt.label}
-              </option>
-            ))}
-          </select>
-        </div>
+      {/* Sync, Voice & Full Hyperframes Bar */}
+      <div className="rounded-2xl border border-[#DDD4C4] bg-white p-4 shadow-sm space-y-4">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-12">
+          <div className="md:col-span-4 space-y-1">
+            <label className="flex items-center gap-1.5 text-[11px] font-medium text-[#6C6459]">
+              <Volume2 className="h-3.5 w-3.5 text-[#9A8052]" />
+              Voce narrante &amp; Ascolto anteprima
+            </label>
+            <div className="flex items-center gap-2">
+              <select
+                value={voiceId}
+                onChange={(e) => {
+                  setVoiceId(e.target.value);
+                  setVoicePreviewUrl(null);
+                }}
+                className="flex-1 rounded-lg border border-[#DDD4C4] bg-[#FAF7F2] px-2.5 py-2 text-xs text-[#1D1B18]"
+              >
+                {voices.map((v) => (
+                  <option key={v.id} value={v.id}>
+                    {v.label} {v.id !== "none" && v.elevenlabs_configured ? "(ElevenLabs)" : ""}
+                  </option>
+                ))}
+              </select>
+              {voiceId !== "none" && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    setVoicePreviewUrl(`/api/voices/${voiceId}/sample?engine=auto&t=${Date.now()}`)
+                  }
+                  className="inline-flex items-center gap-1 rounded-lg border border-[#DDD4C4] bg-[#FAF7F2] px-2.5 py-2 text-[11px] font-medium hover:border-[#9A8052]"
+                >
+                  <Volume2 className="h-3.5 w-3.5 text-[#9A8052]" /> Ascolta
+                </button>
+              )}
+            </div>
+            {voicePreviewUrl && (
+              <audio key={voicePreviewUrl} src={voicePreviewUrl} controls autoPlay className="mt-1 h-8 w-full" />
+            )}
+          </div>
 
-        <div className="md:col-span-4 space-y-1">
-          <label className="flex items-center gap-1.5 text-[11px] font-medium text-[#6C6459]">
-            <Music className="h-3.5 w-3.5 text-[#224C66]" />
-            Musica di sottofondo (CC0 / Libreria KORA)
-          </label>
-          <div className="flex items-center gap-2">
-            <select
-              value={musicId}
-              disabled={!includeMusic}
-              onChange={(e) => setMusicId(e.target.value)}
-              className="flex-1 rounded-lg border border-[#DDD4C4] bg-[#FAF7F2] px-2.5 py-2 text-xs text-[#1D1B18]"
-            >
-              <option value="">Automatica (dal preset)</option>
-              {musicTracks.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.name} ({Math.round(m.duration_sec)}s)
-                </option>
-              ))}
-            </select>
-            <label className="flex items-center gap-1 text-[11px] text-[#1D1B18] whitespace-nowrap">
+          <div className="md:col-span-4 space-y-1">
+            <label className="flex items-center gap-1.5 text-[11px] font-medium text-[#6C6459]">
+              <Music className="h-3.5 w-3.5 text-[#224C66]" />
+              Musica di sottofondo (CC0 / Libreria KORA)
+            </label>
+            <div className="flex items-center gap-2">
+              <select
+                value={musicId}
+                disabled={!includeMusic}
+                onChange={(e) => setMusicId(e.target.value)}
+                className="flex-1 rounded-lg border border-[#DDD4C4] bg-[#FAF7F2] px-2.5 py-2 text-xs text-[#1D1B18]"
+              >
+                <option value="">Automatica (dal preset)</option>
+                {musicTracks.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.name} ({Math.round(m.duration_sec)}s)
+                  </option>
+                ))}
+              </select>
+              <label className="flex items-center gap-1 text-[11px] text-[#1D1B18] whitespace-nowrap">
+                <input
+                  type="checkbox"
+                  checked={includeMusic}
+                  onChange={(e) => setIncludeMusic(e.target.checked)}
+                />
+                Attiva
+              </label>
+            </div>
+          </div>
+
+          <div className="md:col-span-4 grid grid-cols-3 gap-2">
+            <label className="block text-[11px] font-medium text-[#6C6459]">
+              Start musica (s)
               <input
-                type="checkbox"
-                checked={includeMusic}
-                onChange={(e) => setIncludeMusic(e.target.checked)}
+                type="number"
+                min="0"
+                step="1"
+                value={musicStartSec}
+                onChange={(e) => setMusicStartSec(Math.max(0, Number(e.target.value)))}
+                className="mt-1 w-full rounded-lg border border-[#DDD4C4] bg-[#FAF7F2] px-2 py-1.5 text-xs text-[#1D1B18]"
               />
-              Attiva
+            </label>
+            <label className="block text-[11px] font-medium text-[#6C6459]">
+              Musica ({Math.round(musicVolume * 100)}%)
+              <input
+                type="range"
+                min="0.05"
+                max="0.6"
+                step="0.02"
+                value={musicVolume}
+                onChange={(e) => setMusicVolume(Number(e.target.value))}
+                className="mt-2 w-full"
+              />
+            </label>
+            <label className="block text-[11px] font-medium text-[#6C6459]">
+              Voce ({Math.round(voiceVolume * 100)}%)
+              <input
+                type="range"
+                min="0.6"
+                max="1.4"
+                step="0.05"
+                value={voiceVolume}
+                onChange={(e) => setVoiceVolume(Number(e.target.value))}
+                className="mt-2 w-full"
+              />
             </label>
           </div>
         </div>
 
-        <div className="md:col-span-4 grid grid-cols-3 gap-2">
-          <label className="block text-[11px] font-medium text-[#6C6459]">
-            Start musica (s)
-            <input
-              type="number"
-              min="0"
-              step="1"
-              value={musicStartSec}
-              onChange={(e) => setMusicStartSec(Math.max(0, Number(e.target.value)))}
-              className="mt-1 w-full rounded-lg border border-[#DDD4C4] bg-[#FAF7F2] px-2 py-1.5 text-xs text-[#1D1B18]"
-            />
-          </label>
-          <label className="block text-[11px] font-medium text-[#6C6459]">
-            <span className="flex items-center gap-1">
-              <Volume2 className="h-3 w-3" /> Musica ({Math.round(musicVolume * 100)}%)
-            </span>
-            <input
-              type="range"
-              min="0.05"
-              max="0.6"
-              step="0.02"
-              value={musicVolume}
-              onChange={(e) => setMusicVolume(Number(e.target.value))}
-              className="mt-2 w-full"
-            />
-          </label>
-          <label className="block text-[11px] font-medium text-[#6C6459]">
-            Voce ({Math.round(voiceVolume * 100)}%)
-            <input
-              type="range"
-              min="0.6"
-              max="1.4"
-              step="0.05"
-              value={voiceVolume}
-              onChange={(e) => setVoiceVolume(Number(e.target.value))}
-              className="mt-2 w-full"
-            />
-          </label>
+        <div className="border-t border-[#EDE6D9] pt-3 space-y-2.5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-1.5 text-xs font-medium text-[#1D1B18]">
+              <Wand2 className="h-3.5 w-3.5 text-[#9A8052]" />
+              Opzioni complete Hyperframes (Caption · Title Card · Grana · Vignetta · Cornice · Ritmo)
+            </div>
+            <button
+              type="button"
+              onClick={handleSuggestHyperframes}
+              className="inline-flex items-center gap-1 rounded-lg bg-[#9A8052] px-3 py-1 text-[11px] font-medium text-white hover:bg-[#7d663e]"
+            >
+              <Sparkles className="h-3 w-3" /> Suggerisci in base a tema e testo
+            </button>
+          </div>
+          {hfRationale && (
+            <div className="rounded-xl bg-[#FAF7F2] px-3 py-2 text-[11px] text-[#4A443C]">
+              <strong>Suggerimento AI KORA:</strong> {hfRationale}
+            </div>
+          )}
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 lg:grid-cols-6 text-xs">
+            <label className="space-y-1">
+              <span className="flex items-center gap-1 text-[11px] text-[#6C6459]">
+                <Type className="h-3 w-3" /> Caption
+              </span>
+              <select
+                value={captionStyle}
+                onChange={(e) => {
+                  setCaptionStyle(e.target.value);
+                  setHyperframes((h) => ({ ...h, caption_style: e.target.value }));
+                }}
+                className="w-full rounded-lg border border-[#DDD4C4] bg-[#FAF7F2] px-2 py-1.5 text-xs"
+              >
+                {CAPTION_OPTIONS.map((opt) => (
+                  <option key={opt.id} value={opt.id}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="space-y-1">
+              <span className="text-[11px] text-[#6C6459]">Title Card Scena 1</span>
+              <select
+                value={hyperframes.title_card_intro}
+                onChange={(e) => setHyperframes((h) => ({ ...h, title_card_intro: e.target.value }))}
+                className="w-full rounded-lg border border-[#DDD4C4] bg-[#FAF7F2] px-2 py-1.5 text-xs"
+              >
+                <option value="none">Nessuna</option>
+                <option value="editorial_serif">Editorial Serif</option>
+                <option value="hyperframes_gold_line">Hyperframes Gold Line</option>
+              </select>
+            </label>
+            <label className="space-y-1">
+              <span className="text-[11px] text-[#6C6459]">Grana (grain-overlay)</span>
+              <select
+                value={hyperframes.grain_overlay}
+                onChange={(e) => setHyperframes((h) => ({ ...h, grain_overlay: e.target.value }))}
+                className="w-full rounded-lg border border-[#DDD4C4] bg-[#FAF7F2] px-2 py-1.5 text-xs"
+              >
+                <option value="none">Pulito</option>
+                <option value="subtle_35mm">Grana 35mm</option>
+                <option value="warm_kodak">Kodak Calda</option>
+              </select>
+            </label>
+            <label className="space-y-1">
+              <span className="text-[11px] text-[#6C6459]">Vignettatura</span>
+              <select
+                value={hyperframes.vignette}
+                onChange={(e) => setHyperframes((h) => ({ ...h, vignette: e.target.value }))}
+                className="w-full rounded-lg border border-[#DDD4C4] bg-[#FAF7F2] px-2 py-1.5 text-xs"
+              >
+                <option value="none">Nessuna</option>
+                <option value="soft_luxury">Luxury Morbida</option>
+                <option value="deep_cinematic">Cinema Intensa</option>
+              </select>
+            </label>
+            <label className="space-y-1">
+              <span className="text-[11px] text-[#6C6459]">Cornice / Letterbox</span>
+              <select
+                value={hyperframes.letterbox}
+                onChange={(e) => setHyperframes((h) => ({ ...h, letterbox: e.target.value }))}
+                className="w-full rounded-lg border border-[#DDD4C4] bg-[#FAF7F2] px-2 py-1.5 text-xs"
+              >
+                <option value="none">Pieno 9:16</option>
+                <option value="cinema_frame">Cinema Frame</option>
+                <option value="editorial_border">Bordo Avorio</option>
+              </select>
+            </label>
+            <label className="space-y-1">
+              <span className="text-[11px] text-[#6C6459]">Ritmo Motion</span>
+              <select
+                value={hyperframes.motion_pace}
+                onChange={(e) => setHyperframes((h) => ({ ...h, motion_pace: e.target.value }))}
+                className="w-full rounded-lg border border-[#DDD4C4] bg-[#FAF7F2] px-2 py-1.5 text-xs"
+              >
+                <option value="slow_contemplative">Lento</option>
+                <option value="balanced">Equilibrato</option>
+                <option value="dynamic_experience">Dinamico</option>
+              </select>
+            </label>
+          </div>
         </div>
       </div>
 

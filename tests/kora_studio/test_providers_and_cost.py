@@ -244,3 +244,75 @@ def test_dynamic_scene_count_sync_and_hyperframes_captions(isolated_env):
     assert synced["preferences"]["caption_style"] == "hyperframes_kinetic"
     assert synced["audio_plan"]["music_start_sec"] == 4.5
     assert synced["audio_plan"]["music_volume"] == 0.22
+
+
+def test_elevenlabs_reason_preservation_and_full_hyperframes_api(isolated_env):
+    from fastapi.testclient import TestClient
+    from kora_studio.agents.hyperframes_captions import (
+        build_hyperframes_vf_filters,
+        normalize_hyperframes_config,
+        recommend_hyperframes_for_theme,
+        render_title_card_png,
+    )
+    from kora_studio.agents.voice_director import VoiceDirector
+    from kora_studio.api.app import create_app
+    from kora_studio.db.models import StoryboardScene
+
+    db = Database(isolated_env["db_path"])
+    vault = MediaVault(db)
+    vault.seed_kora_authentic_assets()
+    pm = ProviderManager(db)
+    pm.set_api_key("elevenlabs_api", "sk_fake_test_elevenlabs_key")
+    db.set_preference("elevenlabs_voice_brando", "fake_brando_voice_id")
+    # Simulate user raising monthly_cap_eur to 5 while leaving paid_budget_eur at 0!
+    pm.cost_guard.update_budget_settings(paid_budget_eur=0.0, monthly_cap_eur=5.0)
+
+    vd = VoiceDirector(vault, pm)
+    sc = StoryboardScene(
+        scene_number=1,
+        start_frame=0,
+        end_frame=100,
+        duration_frames=100,
+        start_sec=0.0,
+        end_sec=4.0,
+        duration_sec=4.0,
+        narrative_goal="Test",
+        spoken_text="Benvenuti al tramonto di Policoro",
+        voice_id="brando",
+    )
+    res = vd.prepare_voiceover(
+        [sc], "brando", isolated_env["tmp_path"] / "vtest", explicit_paid_authorization=False
+    )
+    # Must explicitly mention Cost Guard / Budget autorizzato (never pretend ElevenLabs wasn't configured!)
+    assert "Budget" in (res.get("substitution_notice") or "") or "Cost Guard" in (res.get("substitution_notice") or "")
+
+    # Smart theme recommendations + full Hyperframes filters + title card PNG
+    rec = recommend_hyperframes_for_theme("Aperitivo al tramonto con amici")
+    assert rec["recommended_preset"] == "KORA Experience"
+    assert rec["recommended_hyperframes"]["caption_style"] == "hyperframes_kinetic"
+    assert len(rec["theme_suggestions"]) >= 3
+
+    hf_cfg = normalize_hyperframes_config(rec["recommended_hyperframes"])
+    vf = build_hyperframes_vf_filters(hf_cfg)
+    assert any("noise=" in f for f in vf)
+    assert any("vignette=" in f for f in vf)
+
+    tc_png = isolated_env["tmp_path"] / "title_card.png"
+    render_title_card_png("Tramonto KORA", tc_png, style=hf_cfg["title_card_intro"])
+    assert tc_png.is_file() and tc_png.stat().st_size > 1000
+
+    # API endpoints: /api/creative/suggest + /api/voices/{id}/sample + /health hyperframes_options
+    app = create_app(db_path=isolated_env["db_path"], auto_seed=True)
+    client = TestClient(app)
+    h = client.get("/health").json()
+    assert "hyperframes_options" in h
+    assert "grain_overlay" in h["hyperframes_options"]
+
+    sug = client.post("/api/creative/suggest", json={"theme": "poche parole e silenzio sul mare"})
+    assert sug.status_code == 200
+    assert sug.json()["recommended_preset"] == "KORA Editorial"
+
+    sample = client.get("/api/voices/brando/sample?engine=vault")
+    assert sample.status_code == 200
+    assert len(sample.content) > 1000
+

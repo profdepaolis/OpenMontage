@@ -1,12 +1,24 @@
 "use client";
 
 import React, { useState } from "react";
-import { Sparkles, PenLine, ImagePlus, History, Play, CheckCircle2, AlertCircle } from "lucide-react";
+import {
+  Sparkles,
+  PenLine,
+  ImagePlus,
+  History,
+  Play,
+  SlidersHorizontal,
+  AlertCircle,
+  Volume2,
+  Wand2,
+} from "lucide-react";
 import type {
   CreativeConcept,
+  HyperframesConfig,
   MediaAsset,
   ProductionMode,
   ProjectRecord,
+  ThemeSuggestionResponse,
   VoiceOption,
 } from "@/lib/types";
 import { koraApi } from "@/lib/api";
@@ -25,7 +37,9 @@ interface HomeHubProps {
     mode: string,
     voiceId: string,
     prodMode: ProductionMode,
-    captionStyle?: string
+    captionStyle?: string,
+    hyperframes?: Partial<HyperframesConfig>,
+    customizeFirst?: boolean
   ) => Promise<void>;
   onOpenProject: (projectId: string) => void;
   onVaultUpdated: () => void;
@@ -43,7 +57,17 @@ export function HomeHub({
   const [themeText, setThemeText] = useState("");
   const [durationSec, setDurationSec] = useState(20);
   const [presetOverride, setPresetOverride] = useState("AUTO_CONCEPT");
-  const [captionStyle, setCaptionStyle] = useState("serif_ivory");
+  const [hyperframes, setHyperframes] = useState<HyperframesConfig>({
+    caption_style: "serif_ivory",
+    title_card_intro: "none",
+    grain_overlay: "none",
+    vignette: "soft_luxury",
+    letterbox: "none",
+    motion_pace: "balanced",
+  });
+  const [showHyperframesDrawer, setShowHyperframesDrawer] = useState(false);
+  const [recommendation, setRecommendation] = useState<ThemeSuggestionResponse | null>(null);
+  const [voicePreviewUrl, setVoicePreviewUrl] = useState<string | null>(null);
   const [dragActive, setDragActive] = useState(false);
   const [voiceId, setVoiceId] = useState("brando");
   const [prodMode, setProdMode] = useState<ProductionMode>("AUTO");
@@ -75,7 +99,23 @@ export function HomeHub({
     try {
       const res = await koraApi.fromTheme(themeText.trim(), durationSec);
       setProposals(res.concepts);
+      if (res.recommendation) {
+        setRecommendation(res.recommendation);
+      }
       onConceptsReady(res.concepts, themeText.trim(), "theme");
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleGetSuggestions = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const rec = await koraApi.suggestTheme(themeText.trim() || "mare e ospitalità a Policoro", durationSec);
+      setRecommendation(rec);
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -205,7 +245,10 @@ export function HomeHub({
               <span className="font-medium text-[#1D1B18]">Voce:</span>
               <select
                 value={voiceId}
-                onChange={(e) => setVoiceId(e.target.value)}
+                onChange={(e) => {
+                  setVoiceId(e.target.value);
+                  setVoicePreviewUrl(null);
+                }}
                 className="rounded-lg border border-[#DDD4C4] bg-white px-2.5 py-1.5 text-xs text-[#1D1B18]"
               >
                 {voices.map((v) => (
@@ -221,6 +264,18 @@ export function HomeHub({
                   </option>
                 ))}
               </select>
+              {voiceId !== "none" && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    setVoicePreviewUrl(`/api/voices/${voiceId}/sample?engine=auto&t=${Date.now()}`)
+                  }
+                  className="inline-flex items-center gap-1 rounded-lg border border-[#DDD4C4] bg-[#FAF7F2] px-2.5 py-1.5 text-[11px] font-medium text-[#1D1B18] hover:border-[#9A8052]"
+                  title="Ascolta una breve anteprima della voce selezionata"
+                >
+                  <Volume2 className="h-3.5 w-3.5 text-[#9A8052]" /> Ascolta
+                </button>
+              )}
             </label>
             <label className="flex items-center gap-2">
               <span className="font-medium text-[#1D1B18]">Durata:</span>
@@ -251,31 +306,139 @@ export function HomeHub({
                 <option value="KORA Editorial">KORA Editorial</option>
               </select>
             </label>
-            <label className="flex items-center gap-2">
-              <span className="font-medium text-[#1D1B18]">Caption:</span>
-              <select
-                value={captionStyle}
-                onChange={(e) => setCaptionStyle(e.target.value)}
-                className="rounded-lg border border-[#DDD4C4] bg-white px-2.5 py-1.5 text-xs text-[#1D1B18]"
-              >
-                <option value="serif_ivory">KORA Classic Serif</option>
-                <option value="serif_minimal">Editorial Minimal</option>
-                <option value="clean_sans">Space Grotesk Clean</option>
-                <option value="hyperframes_kinetic">Hyperframes · Kinetic Gold</option>
-                <option value="hyperframes_glass">Hyperframes · Mediterranean Glass</option>
-                <option value="hyperframes_word_highlight">Hyperframes · Word Highlight</option>
-              </select>
-            </label>
+            <button
+              type="button"
+              onClick={() => setShowHyperframesDrawer((prev) => !prev)}
+              className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium transition ${
+                showHyperframesDrawer
+                  ? "border-[#224C66] bg-[#224C66]/10 text-[#224C66]"
+                  : "border-[#DDD4C4] bg-[#FAF7F2] text-[#1D1B18] hover:border-[#9A8052]"
+              }`}
+            >
+              <Wand2 className="h-3.5 w-3.5 text-[#9A8052]" />
+              Opzioni Hyperframes ({hyperframes.caption_style.replace("hyperframes_", "HF ")})
+            </button>
           </div>
           <span>1080×1920 · 9:16 · 25 fps · Rec.709</span>
         </div>
 
+        {voicePreviewUrl && (
+          <div className="mt-3 flex flex-wrap items-center gap-3 rounded-xl border border-[#EDE6D9] bg-[#FAF7F2] px-4 py-2 text-xs">
+            <span className="font-medium text-[#1D1B18]">Anteprima voce ({voiceId}):</span>
+            <audio key={voicePreviewUrl} src={voicePreviewUrl} controls autoPlay className="h-8 flex-1 min-w-[200px]" />
+          </div>
+        )}
+
+        {showHyperframesDrawer && (
+          <div className="mt-4 rounded-2xl border border-[#DDD4C4] bg-[#FAF7F2] p-4 space-y-3 text-xs">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="font-medium text-[#1D1B18]">
+                Configurazione completa Motore Hyperframes (Testi, Title Card, Grana, Vignettatura, Cornice, Ritmo)
+              </div>
+              <button
+                type="button"
+                onClick={handleGetSuggestions}
+                className="inline-flex items-center gap-1 rounded-lg bg-[#9A8052] px-3 py-1 text-[11px] font-medium text-white hover:bg-[#7e673e]"
+              >
+                <Sparkles className="h-3 w-3" /> Suggerisci dal tema
+              </button>
+            </div>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              <label className="block space-y-1">
+                <span className="text-[11px] text-[#6C6459]">Stile Sottotitoli / Caption</span>
+                <select
+                  value={hyperframes.caption_style}
+                  onChange={(e) => setHyperframes((h) => ({ ...h, caption_style: e.target.value }))}
+                  className="w-full rounded-lg border border-[#DDD4C4] bg-white px-2.5 py-1.5 text-xs"
+                >
+                  <option value="serif_ivory">KORA Classic Serif</option>
+                  <option value="serif_minimal">Editorial Minimal</option>
+                  <option value="clean_sans">Space Grotesk Clean</option>
+                  <option value="hyperframes_kinetic">Hyperframes · Kinetic Gold</option>
+                  <option value="hyperframes_glass">Hyperframes · Mediterranean Glass</option>
+                  <option value="hyperframes_word_highlight">Hyperframes · Word Highlight</option>
+                </select>
+              </label>
+              <label className="block space-y-1">
+                <span className="text-[11px] text-[#6C6459]">Title Card Apertura (Scena 1)</span>
+                <select
+                  value={hyperframes.title_card_intro}
+                  onChange={(e) => setHyperframes((h) => ({ ...h, title_card_intro: e.target.value }))}
+                  className="w-full rounded-lg border border-[#DDD4C4] bg-white px-2.5 py-1.5 text-xs"
+                >
+                  <option value="none">Nessuna Title Card</option>
+                  <option value="editorial_serif">Editorial Serif Intro</option>
+                  <option value="hyperframes_gold_line">Hyperframes · Gold Line Title</option>
+                </select>
+              </label>
+              <label className="block space-y-1">
+                <span className="text-[11px] text-[#6C6459]">Grana Pellicola (grain-overlay)</span>
+                <select
+                  value={hyperframes.grain_overlay}
+                  onChange={(e) => setHyperframes((h) => ({ ...h, grain_overlay: e.target.value }))}
+                  className="w-full rounded-lg border border-[#DDD4C4] bg-white px-2.5 py-1.5 text-xs"
+                >
+                  <option value="none">Pulito (Nessuna grana)</option>
+                  <option value="subtle_35mm">Grana 35mm leggera</option>
+                  <option value="warm_kodak">Pellicola calda Kodak</option>
+                </select>
+              </label>
+              <label className="block space-y-1">
+                <span className="text-[11px] text-[#6C6459]">Vignettatura Ottica</span>
+                <select
+                  value={hyperframes.vignette}
+                  onChange={(e) => setHyperframes((h) => ({ ...h, vignette: e.target.value }))}
+                  className="w-full rounded-lg border border-[#DDD4C4] bg-white px-2.5 py-1.5 text-xs"
+                >
+                  <option value="none">Nessuna</option>
+                  <option value="soft_luxury">Vignettatura Luxury morbida</option>
+                  <option value="deep_cinematic">Vignettatura Cinema intensa</option>
+                </select>
+              </label>
+              <label className="block space-y-1">
+                <span className="text-[11px] text-[#6C6459]">Cornice / Letterbox</span>
+                <select
+                  value={hyperframes.letterbox}
+                  onChange={(e) => setHyperframes((h) => ({ ...h, letterbox: e.target.value }))}
+                  className="w-full rounded-lg border border-[#DDD4C4] bg-white px-2.5 py-1.5 text-xs"
+                >
+                  <option value="none">Schermo pieno 9:16</option>
+                  <option value="cinema_frame">Cornice Cinema leggera</option>
+                  <option value="editorial_border">Passepartout Avorio</option>
+                </select>
+              </label>
+              <label className="block space-y-1">
+                <span className="text-[11px] text-[#6C6459]">Ritmo Motion</span>
+                <select
+                  value={hyperframes.motion_pace}
+                  onChange={(e) => setHyperframes((h) => ({ ...h, motion_pace: e.target.value }))}
+                  className="w-full rounded-lg border border-[#DDD4C4] bg-white px-2.5 py-1.5 text-xs"
+                >
+                  <option value="slow_contemplative">Lento contemplativo</option>
+                  <option value="balanced">Equilibrato KORA</option>
+                  <option value="dynamic_experience">Dinamico Experience</option>
+                </select>
+              </label>
+            </div>
+          </div>
+        )}
+
         {/* Action Drawers */}
         {activeAction === "theme" && (
           <form onSubmit={handleThemeSubmit} className="mt-6 space-y-3 rounded-2xl bg-[#FAF7F2] p-5 border border-[#DDD4C4]">
-            <label className="block text-xs font-medium uppercase tracking-wider text-[#6C6459]">
-              Tema libero
-            </label>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <label className="block text-xs font-medium uppercase tracking-wider text-[#6C6459]">
+                Tema libero
+              </label>
+              <button
+                type="button"
+                onClick={handleGetSuggestions}
+                disabled={loading}
+                className="inline-flex items-center gap-1 rounded-full border border-[#9A8052] bg-white px-3 py-1 text-[11px] font-medium text-[#1D1B18] hover:bg-[#EFE8DB]"
+              >
+                <Sparkles className="h-3 w-3 text-[#9A8052]" /> Suggerimenti intelligenti per il tema
+              </button>
+            </div>
             <div className="flex flex-col gap-3 sm:flex-row">
               <input
                 type="text"
@@ -293,11 +456,12 @@ export function HomeHub({
               </button>
             </div>
             <div className="flex flex-wrap gap-2">
-              {[
+              {(recommendation?.theme_suggestions || [
                 "Il piacere di stare insieme davanti al mare.",
                 "Vorrei un Reel più emozionante, con poche parole.",
                 "La colazione lenta vista mare al KORA.",
-              ].map((sample) => (
+                "Aperitivo al tramonto a Policoro: ritmo caldo e calici.",
+              ]).map((sample) => (
                 <button
                   key={sample}
                   type="button"
@@ -308,6 +472,27 @@ export function HomeHub({
                 </button>
               ))}
             </div>
+            {recommendation && (
+              <div className="rounded-xl border border-[#DDD4C4] bg-white p-3.5 text-xs space-y-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="font-medium text-[#1D1B18]">
+                    Consiglio Regia &amp; Hyperframes ({recommendation.recommended_preset}):
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setHyperframes(recommendation.recommended_hyperframes);
+                      setPresetOverride(recommendation.recommended_preset);
+                      setShowHyperframesDrawer(true);
+                    }}
+                    className="rounded-lg bg-[#224C66] px-3 py-1 text-[11px] font-medium text-white hover:bg-[#1D1B18]"
+                  >
+                    Applica opzioni consigliate
+                  </button>
+                </div>
+                <p className="text-[#4A443C]">{recommendation.rationale}</p>
+              </div>
+            )}
           </form>
         )}
 
@@ -437,38 +622,60 @@ export function HomeHub({
                     </div>
                   )}
                 </div>
-                <button
-                  type="button"
-                  disabled={loading}
-                  onClick={async () => {
-                    setLoading(true);
-                    try {
-                      await onStartProduction(
-                        presetOverride === "AUTO_CONCEPT"
-                          ? c
-                          : { ...c, preset: presetOverride },
-                        themeText.trim() || c.central_idea,
-                        activeAction || "theme",
-                        voiceId,
-                        prodMode,
-                        captionStyle
-                      );
-                    } finally {
-                      setLoading(false);
-                    }
-                  }}
-                  className="mt-5 flex w-full items-center justify-center gap-2 rounded-xl bg-[#1D1B18] px-4 py-2.5 text-sm font-medium text-[#FAF7F2] transition hover:bg-[#224C66]"
-                >
-                  {prodMode === "AUTO" ? (
-                    <>
-                      <Play className="h-4 w-4" /> Produci Reel ora
-                    </>
-                  ) : (
-                    <>
-                      <CheckCircle2 className="h-4 w-4" /> Apri in Creative Studio
-                    </>
-                  )}
-                </button>
+                <div className="mt-5 space-y-2">
+                  <button
+                    type="button"
+                    disabled={loading}
+                    onClick={async () => {
+                      setLoading(true);
+                      try {
+                        await onStartProduction(
+                          presetOverride === "AUTO_CONCEPT"
+                            ? c
+                            : { ...c, preset: presetOverride },
+                          themeText.trim() || c.central_idea,
+                          activeAction || "theme",
+                          voiceId,
+                          prodMode,
+                          hyperframes.caption_style,
+                          hyperframes,
+                          true
+                        );
+                      } finally {
+                        setLoading(false);
+                      }
+                    }}
+                    className="flex w-full items-center justify-center gap-2 rounded-xl border border-[#224C66] bg-[#FAF7F2] px-4 py-2.5 text-xs font-medium text-[#224C66] transition hover:bg-[#224C66] hover:text-white"
+                  >
+                    <SlidersHorizontal className="h-3.5 w-3.5" /> Personalizza scene, foto e parametri
+                  </button>
+                  <button
+                    type="button"
+                    disabled={loading}
+                    onClick={async () => {
+                      setLoading(true);
+                      try {
+                        await onStartProduction(
+                          presetOverride === "AUTO_CONCEPT"
+                            ? c
+                            : { ...c, preset: presetOverride },
+                          themeText.trim() || c.central_idea,
+                          activeAction || "theme",
+                          voiceId,
+                          prodMode,
+                          hyperframes.caption_style,
+                          hyperframes,
+                          false
+                        );
+                      } finally {
+                        setLoading(false);
+                      }
+                    }}
+                    className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#1D1B18] px-4 py-2.5 text-sm font-medium text-[#FAF7F2] transition hover:bg-[#224C66]"
+                  >
+                    <Play className="h-4 w-4" /> Produci Reel ora
+                  </button>
+                </div>
               </div>
             ))}
           </div>

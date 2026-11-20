@@ -483,7 +483,9 @@ class KoraDirector:
             completed.append("Montaggio")
             self._update_job(job_id, JobState.RENDERING, "Rendering MP4 1080x1920 25fps", completed)
             rendered_mp4 = project_dir / f"{project_id}_preview.mp4"
-            caption_style = (proj.get("preferences") or {}).get("caption_style")
+            prefs = proj.get("preferences") or {}
+            caption_style = prefs.get("caption_style")
+            hyperframes_cfg = prefs.get("hyperframes")
             edit_res = self.editor.render_reel(
                 project_id=project_id,
                 title=proj["title"],
@@ -495,6 +497,7 @@ class KoraDirector:
                 include_subtitles=include_subtitles,
                 fps=proj["fps"],
                 caption_style=caption_style,
+                hyperframes=hyperframes_cfg,
             )
             completed.append("Rendering")
             self.log_job(job_id, "INFO", "CinematicEditor", f"Render completato: {rendered_mp4.name}")
@@ -642,6 +645,7 @@ class KoraDirector:
         self,
         project_id: str,
         caption_style: Optional[str] = None,
+        hyperframes: Optional[dict[str, Any]] = None,
         music_id: Optional[str] = None,
         include_music: Optional[bool] = None,
         music_start_sec: Optional[float] = None,
@@ -649,14 +653,22 @@ class KoraDirector:
         voice_volume: Optional[float] = None,
         auto_sync_scenes_to_voice: bool = False,
     ) -> dict[str, Any]:
-        """Update caption style (KORA / Hyperframes), music sync parameters, and optionally align scene durations to speech."""
+        """Update caption style & Hyperframes options, music sync parameters, and optionally align scene durations to speech."""
         proj = self.get_project(project_id)
         if not proj:
             raise KeyError(f"Progetto {project_id} non trovato")
 
         prefs = dict(proj.get("preferences") or {})
+        existing_hf = dict(prefs.get("hyperframes") or {})
+        if hyperframes is not None:
+            existing_hf.update(hyperframes)
+            prefs["hyperframes"] = existing_hf
         if caption_style is not None:
             prefs["caption_style"] = caption_style
+            existing_hf["caption_style"] = caption_style
+            prefs["hyperframes"] = existing_hf
+        elif existing_hf.get("caption_style"):
+            prefs["caption_style"] = existing_hf["caption_style"]
 
         scenes = [StoryboardScene(**s) for s in (proj.get("storyboard") or [])]
         if auto_sync_scenes_to_voice and scenes:
