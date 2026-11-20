@@ -173,8 +173,17 @@ class EngineResult:
     provider: str
     model: str
     latency_ms: int = 0
-    #: None -> cost unknown
+    #: REAL cost only (provider usage/billing). None -> not charged / not known.
     cost_eur: Optional[float] = None
+    #: published unit rate of the model (€ per 1k tokens) — never a call cost
+    unit_price_per_1k_eur: Optional[float] = None
+    #: our estimate for this call (token estimate × unit rate); not an actual cost
+    estimated_cost_eur: Optional[float] = None
+    #: actual | estimated_from_unit_price | subscription | local_compute | free_quota | unknown
+    cost_basis: str = "unknown"
+    auth_type: str = ""
+    attachments_transmitted: int = 0
+    request_status: str = "completed"
     local: bool = False
     subscription: bool = False
     billing: str = BILLING_UNKNOWN
@@ -191,6 +200,12 @@ class EngineResult:
             "latency_ms": self.latency_ms,
             "cost_eur": self.cost_eur,
             "cost_known": self.cost_eur is not None,
+            "unit_price_per_1k_eur": self.unit_price_per_1k_eur,
+            "estimated_cost_eur": self.estimated_cost_eur,
+            "cost_basis": self.cost_basis,
+            "auth_type": self.auth_type,
+            "attachments_transmitted": self.attachments_transmitted,
+            "request_status": self.request_status,
             "local": self.local,
             "subscription": self.subscription,
             "billing": self.billing,

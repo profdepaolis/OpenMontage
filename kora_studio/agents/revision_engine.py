@@ -207,3 +207,161 @@ class RevisionEngine:
                         )
 
         return updated_scenes, updated_audio, proposal
+
+
+# ---------------------------------------------------------------------------
+# v2.8 — conversational revision of a SINGLE scene (approved scenes untouched)
+# ---------------------------------------------------------------------------
+
+SCENE_EDITABLE_FIELDS = (
+    "framing",
+    "camera",
+    "motion_intensity",
+    "subtitle_text",
+    "spoken_text",
+    "sfx",
+    "transition",
+    "zoom_hint",
+    "focus_hint",
+)
+
+_FRAMING_WORDS = {
+    "dettaglio": "dettaglio_ravvicinato",
+    "close": "dettaglio_ravvicinato",
+    "vicino": "dettaglio_ravvicinato",
+    "ampio": "campo_ampio",
+    "wide": "campo_ampio",
+    "panoramica": "campo_ampio",
+    "medio": "piano_medio",
+}
+
+
+class SingleSceneReviser:
+    """Turns a conversational note into a validated change set for one scene."""
+
+    def __init__(self, engine: Any = None) -> None:
+        self.engine = engine
+
+    def attach_engine_manager(self, engine: Any) -> None:
+        self.engine = engine
+
+    def _deterministic(self, instruction: str, scene: StoryboardScene) -> dict[str, Any]:
+        lower = (instruction or "").lower()
+        changes: dict[str, Any] = {}
+        for word, framing in _FRAMING_WORDS.items():
+            if word in lower:
+                changes["framing"] = framing
+                break
+        if any(k in lower for k in ("più lento", "lento", "calmo", "lenta")):
+            changes["motion_intensity"] = 0.3
+        if any(k in lower for k in ("più veloce", "dinamico", "energico", "veloce")):
+            changes["motion_intensity"] = 0.9
+        if any(k in lower for k in ("fermo", "statico", "immobile")):
+            changes["camera"] = CameraMotion.STATIC_BREATHE.value
+        if "indietro" in lower or "allontana" in lower:
+            changes["zoom_hint"] = "out"
+        if "avanti" in lower or "avvicina" in lower:
+            changes["zoom_hint"] = "in"
+        quoted = re.findall(r"[\"«“](.+?)[\"»”]", instruction or "")
+        if quoted:
+            changes["subtitle_text"] = quoted[0].strip()
+            changes["spoken_text"] = quoted[0].strip()
+        if ("onde" in lower or "mare" in lower) and any(k in lower for k in ("suono", "sound", "sfx", "audio")):
+            changes["sfx"] = "onde"
+        if "dissolvenza" in lower:
+            changes["transition"] = "cross_dissolve"
+        return changes
+
+    def _engine_changes(self, instruction: str, scene: StoryboardScene) -> Optional[dict[str, Any]]:
+        if self.engine is None:
+            return None
+        import json as _json
+
+        from kora_studio.ai_engine.base import EngineError
+
+        payload = {
+            "instruction": instruction,
+            "scene": {
+                "scene_number": scene.scene_number,
+                "framing": scene.shot_framing,
+                "camera": scene.camera_motion,
+                "subtitle": scene.subtitle_text,
+                "sfx": scene.sfx_category,
+                "transition": scene.transition,
+                "duration_frames": scene.duration_frames,
+            },
+            "allowed_fields": list(SCENE_EDITABLE_FIELDS),
+            "allowed_framing": ["campo_ampio", "piano_medio", "dettaglio_ravvicinato"],
+            "allowed_camera": [m.value for m in CameraMotion],
+            "allowed_transition": ["cross_dissolve", "warm_fade", "cut_on_motion", "fade_black"],
+        }
+        try:
+            result = self.engine.call(
+                "cinematic_story_director",
+                [
+                    {
+                        "role": "system",
+                        "content": (
+                            "Sei il regista di KORA. Devi modificare UNA sola scena secondo l'istruzione, "
+                            "senza toccare le altre. Rispondi solo JSON: {\"changes\":{...}} usando esclusivamente "
+                            "i campi consentiti."
+                        ),
+                    },
+                    {"role": "user", "content": _json.dumps(payload, ensure_ascii=False)},
+                ],
+                json_mode=True,
+                timeout=60,
+            )
+        except EngineError:
+            return None
+        try:
+            raw = result.text
+            start, end = raw.find("{"), raw.rfind("}")
+            data = _json.loads(raw[start : end + 1]) if start >= 0 and end > start else {}
+        except ValueError:
+            return None
+        changes = data.get("changes") if isinstance(data, dict) else None
+        return changes if isinstance(changes, dict) else None
+
+    def propose(self, instruction: str, scene: StoryboardScene) -> dict[str, Any]:
+        engine_changes = self._engine_changes(instruction, scene)
+        source = "engine"
+        changes = engine_changes or self._deterministic(instruction, scene)
+        if engine_changes is None:
+            source = "deterministic"
+        # validate: only allowed fields, only renderable values
+        clean: dict[str, Any] = {}
+        for key, value in (changes or {}).items():
+            if key not in SCENE_EDITABLE_FIELDS:
+                continue
+            if key == "framing" and value not in ("campo_ampio", "piano_medio", "dettaglio_ravvicinato"):
+                continue
+            if key == "camera" and value not in {m.value for m in CameraMotion}:
+                continue
+            if key == "transition" and value not in ("cross_dissolve", "warm_fade", "cut_on_motion", "fade_black"):
+                continue
+            if key == "motion_intensity":
+                try:
+                    value = max(0.05, min(1.0, float(value)))
+                except (TypeError, ValueError):
+                    continue
+            if key in ("subtitle_text", "spoken_text"):
+                value = str(value)[:180]
+            if key == "zoom_hint" and value not in ("in", "out"):
+                continue
+            if key == "focus_hint" and not isinstance(value, dict):
+                continue
+            clean[key] = value
+        return {
+            "instruction": instruction,
+            "scene_number": scene.scene_number,
+            "changes": clean,
+            "source": source,
+            "applies_to": [scene.scene_number],
+            "preserved_scenes": [],
+            "note": (
+                "Modifica conversazionale limitata a questa scena: nessun'altra scena viene rigenerata."
+                if clean
+                else "Nessuna modifica riconosciuta: riformula indicando inquadratura, movimento o testo."
+            ),
+        }

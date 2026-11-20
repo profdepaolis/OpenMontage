@@ -128,15 +128,11 @@ export default function KoraStudioPage() {
       creative_request: concept.creative_request,
       asset_ids: assetIds && assetIds.length > 0 ? assetIds : undefined,
       destination_dir: destinationDir || undefined,
-      auto_start: !customizeFirst && prodMode === "AUTO",
+      // 2.8 flow: Progetta Reel → anteprima cinematografica → Realizza Reel
+      auto_start: false,
     });
     setActiveProjectId(res.project.id);
-    if (res.job) {
-      setActiveJobId(res.job.id);
-      setSection("production");
-    } else {
-      setSection("creative");
-    }
+    setSection("preview");
     await refreshAll();
   };
 
@@ -294,6 +290,7 @@ export default function KoraStudioPage() {
             }}
             onRestored={() => refreshAll()}
             onGoExport={() => setSection("export")}
+            onProduce={(projectId) => void handleProduceExisting(projectId)}
           />
         )}
 

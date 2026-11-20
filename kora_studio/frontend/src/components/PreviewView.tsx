@@ -3,6 +3,7 @@
 import React, { useEffect, useState } from "react";
 import { CheckCircle2, AlertTriangle, Sparkles, Wand2, ArrowRight, RotateCcw, Copy, Upload, ExternalLink, Mic } from "lucide-react";
 import type { ProjectRecord } from "@/lib/types";
+import { CinematicPreviewPanel } from "@/components/CinematicPreviewPanel";
 import { koraApi } from "@/lib/api";
 
 interface PreviewViewProps {
@@ -10,9 +11,10 @@ interface PreviewViewProps {
   onRevisionStarted: (jobId: string) => void;
   onRestored: () => void;
   onGoExport: () => void;
+  onProduce?: (projectId: string) => void;
 }
 
-export function PreviewView({ project, onRevisionStarted, onRestored, onGoExport }: PreviewViewProps) {
+export function PreviewView({ project, onRevisionStarted, onRestored, onGoExport, onProduce }: PreviewViewProps) {
   const [instruction, setInstruction] = useState("");
   const [diffPreview, setDiffPreview] = useState<{
     what_will_change: string[];
@@ -151,6 +153,11 @@ export function PreviewView({ project, onRevisionStarted, onRestored, onGoExport
 
   return (
     <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
+      <CinematicPreviewPanel
+        project={project}
+        onProduce={() => (onProduce ? onProduce(project.id) : undefined)}
+      />
+
       {/* Vertical 9:16 Video Player */}
       <div className="lg:col-span-5 flex flex-col items-center rounded-2xl border border-[#DDD4C4] bg-[#141311] p-6">
         {project.output_video_path ? (

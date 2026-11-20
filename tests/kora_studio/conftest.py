@@ -83,7 +83,7 @@ def isolated_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         (vd_mod, {"VOICES_PIPER_DIR": voices_dir}),
         (ml_mod, {"CACHE_DIR": cache_dir}),
         (bm_mod, {"DATA_DIR": data_dir, "BACKUPS_DIR": backups_dir, "CACHE_DIR": cache_dir, "PROJECTS_DIR": projects_dir, "EXPORTS_DIR": exports_dir, "VAULT_ORIGINALS_DIR": originals_dir}),
-        (app_mod, {"BACKUPS_DIR": backups_dir}),
+        (app_mod, {"BACKUPS_DIR": backups_dir, "PROJECTS_DIR": projects_dir}),
     ]:
         for attr, val in attrs.items():
             if hasattr(mod, attr):

@@ -255,6 +255,37 @@ MIGRATIONS: list[tuple[int, str, str]] = [
         CREATE INDEX IF NOT EXISTS idx_ai_activity_production ON ai_activity(production_id);
         """,
     ),
+    (
+        3,
+        "v28_costs_preview_provenance",
+        """
+        ALTER TABLE ai_activity ADD COLUMN estimated_cost_eur REAL;
+        ALTER TABLE ai_activity ADD COLUMN unit_price_per_1k_eur REAL;
+        ALTER TABLE ai_activity ADD COLUMN cost_basis TEXT NOT NULL DEFAULT 'unknown';
+        ALTER TABLE ai_activity ADD COLUMN attachments INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE ai_activity ADD COLUMN auth_type TEXT NOT NULL DEFAULT '';
+        ALTER TABLE ai_activity ADD COLUMN request_status TEXT NOT NULL DEFAULT 'completed';
+        ALTER TABLE ai_activity ADD COLUMN vision_image INTEGER NOT NULL DEFAULT 0;
+
+        CREATE TABLE IF NOT EXISTS scene_previews (
+            id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            scene_number INTEGER NOT NULL,
+            storyboard_hash TEXT NOT NULL,
+            preview_path TEXT NOT NULL DEFAULT '',
+            thumb_source_path TEXT NOT NULL DEFAULT '',
+            thumb_derived_path TEXT NOT NULL DEFAULT '',
+            duration_frames INTEGER NOT NULL DEFAULT 0,
+            camera_move TEXT NOT NULL DEFAULT '',
+            transition TEXT NOT NULL DEFAULT '',
+            voiceover TEXT NOT NULL DEFAULT '',
+            sound_design TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            UNIQUE(project_id, scene_number, storyboard_hash)
+        );
+        CREATE INDEX IF NOT EXISTS idx_scene_previews_project ON scene_previews(project_id);
+        """,
+    ),
 ]
 
 

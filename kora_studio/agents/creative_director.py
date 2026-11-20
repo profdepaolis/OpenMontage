@@ -216,7 +216,14 @@ class CreativeDirector:
         )
         self.story_director = CinematicStoryDirector(self.vault, engine_manager)
         self.visual_intelligence = VisualIntelligence(self.vault, engine_manager, db=self.db)
+        if hasattr(engine_manager, "register_vision_listener"):
+            engine_manager.register_vision_listener(self._on_vision_verified)
         self.guardian.attach_engine_manager(engine_manager)
+
+    def _on_vision_verified(self, provider_id: str = "", model: str = "") -> dict[str, Any]:
+        """Auto-upgrade fallback analyses when a Vision model becomes verified."""
+        result = self.visual_intelligence.upgrade_fallback_analyses()
+        return {"trigger": "vision_verified", "provider": provider_id, "model": model, **result}
 
     def _call_engine_manager(
         self, req: CreativeRequestPayload, count: int, valid_asset_ids: set[str]
@@ -781,8 +788,14 @@ class CreativeDirector:
         concept: CreativeConcept,
         voice_id: str = "brando",
         fps: int = DEFAULT_FPS,
+        authorized_asset_ids: Optional[list[str]] = None,
     ) -> list[StoryboardScene]:
-        """Storyboard Engine 2.0: narrative-driven asset planning & exact 25fps frame math."""
+        """Storyboard Engine 2.0: narrative-driven asset planning & exact 25fps frame math.
+
+        ``authorized_asset_ids`` is a *constraint on the inventory*, never a forced
+        sequence: the Story Director is free to choose the best authorised photo for
+        each scene, and the outro logo stays independent from this selection.
+        """
         total_frames = int(round(concept.duration_sec * fps))
         outro_frames = min(int(round(3.0 * fps)), max(fps * 2, total_frames // 6))
         content_frames = total_frames - outro_frames
@@ -811,9 +824,19 @@ class CreativeDirector:
             for a in self.vault.list_assets()
             if a["category"] != "Logo" and a["media_type"] in ("image", "video")
         ]
-        assets_pool = preferred_assets + [
-            a for a in all_visuals if a["id"] not in {p["id"] for p in preferred_assets}
-        ]
+        if authorized_asset_ids is not None:
+            auth = {str(a) for a in authorized_asset_ids if str(a).strip()}
+            # the authorised inventory *is* the inventory; nothing outside it may appear
+            assets_pool = [
+                a
+                for a in (preferred_assets + all_visuals)
+                if a.get("id") in auth and a["category"] != "Logo"
+            ]
+            preferred_assets = [a for a in preferred_assets if a["id"] in auth]
+        else:
+            assets_pool = preferred_assets + [
+                a for a in all_visuals if a["id"] not in {p["id"] for p in preferred_assets}
+            ]
 
         # Auto-scale scene count by duration (~3.2s per visual scene) and provided media assets
         content_sec = max(4.0, content_frames / fps)
@@ -917,8 +940,11 @@ class CreativeDirector:
             sub = raw_phrases[idx]
             phase_query = f"{goal} {sub} {concept.visual_mood}".strip()
 
-            # Narrative semantic asset selection avoiding consecutive duplicates
-            sem_matches = self.vault.semantic_search(phase_query, limit=8)
+            # Narrative semantic selection *inside the authorised inventory only*
+            pool_ids = {a["id"] for a in assets_pool}
+            sem_matches = [
+                m for m in self.vault.semantic_search(phase_query, limit=16) if m["id"] in pool_ids
+            ][:8]
             candidates = sem_matches + [
                 a for a in assets_pool if a["id"] not in {m["id"] for m in sem_matches}
             ]
@@ -1036,21 +1062,125 @@ class CreativeDirector:
         # fallback deterministico proporzionale — mai sequenze cicliche).
         story_director = getattr(self, "story_director", None)
         if story_director is not None:
-            assets_now = self.vault.list_assets()
+            # Only the authorised inventory reaches the director (outro logo excluded).
+            assets_now = [a for a in assets_pool if a["category"] != "Logo"]
             by_id = {a["id"]: a for a in assets_now}
             plan = story_director.plan(
-                scenes, assets_now, preset=concept.preset, production_id=getattr(concept, "id", None)
+                scenes,
+                assets_now,
+                preset=concept.preset,
+                production_id=getattr(concept, "id", None),
+                authorized_ids=authorized_asset_ids,
             )
             if plan:
                 story_director.apply_plan(scenes, plan, by_id)
-                by_number = {p["scene_number"]: p for p in plan}
-                for scene in scenes:
-                    shot = by_number.get(scene.scene_number)
-                    if not shot:
-                        continue
-                    if shot.get("purpose") and not scene.is_outro:
-                        scene.narrative_goal = shot["purpose"]
-                    if shot.get("sfx"):
-                        scene.sfx_category = shot["sfx"]
                 self.last_storyboard_plan = plan
+                self.last_plan_validation = getattr(story_director, "last_validation", {})
+        self.apply_shot_plans(scenes)
+        return scenes
+
+    # ------------------------------------------------------- derived framing
+    def apply_shot_plans(
+        self, scenes: list[StoryboardScene], only_scene_numbers: Optional[set[int]] = None
+    ) -> list[StoryboardScene]:
+        """Attach a real Smart Shot plan (crop, keyframes, zoom ramp) to each photo scene."""
+        generator = getattr(self, "shot_generator", None)
+        if generator is None:
+            from kora_studio.agents.smart_shot_generator import SmartShotGenerator
+
+            generator = SmartShotGenerator(self.vault)
+            self.shot_generator = generator
+        for scene in scenes:
+            if scene.is_outro:
+                scene.shot_source = "logo_component"
+                continue
+            if only_scene_numbers is not None and scene.scene_number not in only_scene_numbers:
+                continue
+            asset = self.vault.get_asset(scene.selected_asset_id) if scene.selected_asset_id else None
+            if not asset:
+                scene.shot_plan = None
+                scene.shot_source = "fallback:asset_mancante"
+                continue
+            if asset.get("media_type") == "video":
+                # video clips keep their own real motion: no derived still framing
+                scene.shot_plan = None
+                scene.shot_source = "video_clip"
+                continue
+            plan = generator.plan_for_scene(
+                asset,
+                purpose=scene.narrative_goal,
+                duration_frames=scene.duration_frames,
+                motion_hint="still" if scene.camera_motion == CameraMotion.STATIC_BREATHE.value else None,
+            )
+            if plan:
+                ok, issues = generator.validate_plan(plan, plan.get("source_size") or {})
+                if not ok:
+                    scene.shot_plan = None
+                    scene.shot_source = "fallback:no_plan"
+                    scene.visual_rationale = (
+                        f"{scene.visual_rationale} Piano inquadratura derivato non valido: {'; '.join(issues)}. "
+                        "Usato movimento deterministico conservativo."
+                    )
+                    continue
+                scene.shot_plan = plan
+                scene.shot_source = "smart_shot"
+                scene.crop_focus = {
+                    "x": plan["focal_point"]["x"],
+                    "y": plan["focal_point"]["y"],
+                    "zoom": plan["zoom_end"],
+                }
+                # the plan's grammar wins over the generic motion name
+                scene.camera_motion = {
+                    "push_in": CameraMotion.SLOW_PUSH_IN.value,
+                    "pull_out": CameraMotion.SLOW_PULL_OUT.value,
+                    "detail_push": CameraMotion.SLOW_PUSH_IN.value,
+                    "parallax": CameraMotion.MICRO_PARALLAX.value,
+                    "drift": CameraMotion.PAN_RIGHT.value,
+                    "settle": CameraMotion.STATIC_BREATHE.value,
+                }.get(plan["trajectory"], scene.camera_motion)
+                scene.visual_rationale = f"{scene.visual_rationale} {plan['motivation']}".strip()
+        return scenes
+
+    def enforce_authorized_inventory(
+        self,
+        scenes: list[StoryboardScene],
+        authorized_asset_ids: Optional[list[str]],
+    ) -> list[StoryboardScene]:
+        """Manual selection constrains the inventory — it never forces a per-index sequence.
+
+        Scenes whose asset is outside the authorised set are re-cast with the best
+        authorised alternative (semantic match); approved scenes stay untouched.
+        """
+        if not authorized_asset_ids:
+            return scenes
+        auth = {str(a) for a in authorized_asset_ids if str(a).strip()}
+        pool = [
+            a
+            for a in self.vault.list_assets()
+            if a["id"] in auth and a["category"] != "Logo" and a["media_type"] in ("image", "video")
+        ]
+        if not pool:
+            return scenes
+        by_id = {a["id"]: a for a in pool}
+        used: set[str] = set()
+        for scene in [s for s in scenes if not s.is_outro]:
+            recast = scene.selected_asset_id not in auth
+            if scene.selected_asset_id:
+                used.add(scene.selected_asset_id)
+            if recast:
+                query = f"{scene.narrative_goal} {scene.spoken_text}".strip()
+                matches = [m["id"] for m in self.vault.semantic_search(query, limit=12) if m["id"] in by_id]
+                choice = next((mid for mid in matches if mid not in used), matches[0] if matches else None)
+                choice = choice or next((a["id"] for a in pool if a["id"] not in used), pool[0]["id"])
+                scene.selected_asset_id = choice
+                scene.alternative_asset_id = None
+                scene.visual_rationale = (
+                    f"Ricollocata su '{by_id[choice]['filename']}' (inventario autorizzato) "
+                    f"per sostenere «{scene.narrative_goal}»."
+                )
+                scene.authenticity_status = by_id[choice].get("authenticity_status") or scene.authenticity_status
+                scene.asset_mode = "video_clip" if by_id[choice]["media_type"] == "video" else "animated_photo"
+                scene.approval_status = "da_riverificare"
+            used.add(choice if recast else scene.selected_asset_id)
+        self.apply_shot_plans(scenes)
         return scenes

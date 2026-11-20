@@ -538,6 +538,28 @@ class AIEngineManager:
             return False, str(verdict.get("reason") or "budget esaurito")
         return True, "autorizzata"
 
+    # -------------------------------------------------- vision-change listeners
+    def register_vision_listener(self, callback: Any) -> None:
+        """Register a callback fired when a model becomes vision-VERIFIED."""
+        if not hasattr(self, "_vision_listeners"):
+            self._vision_listeners = []
+        if callback not in self._vision_listeners:
+            self._vision_listeners.append(callback)
+
+    def _fire_vision_listeners(self, provider_id: str, model: str) -> list[Any]:
+        results = []
+        for callback in list(getattr(self, "_vision_listeners", [])):
+            try:
+                results.append(callback(provider_id=provider_id, model=model))
+            except TypeError:
+                try:
+                    results.append(callback())
+                except Exception:
+                    continue
+            except Exception:
+                continue
+        return results
+
     # ------------------------------------------------------------------ routing
     def _entry(self, provider_id: str, info: ModelInfo, *, preferred: bool, explicit: bool) -> dict[str, Any]:
         return {
@@ -792,10 +814,27 @@ class AIEngineManager:
             model_override=model_override,
         )
         if needs_vision and not plan:
-            raise EngineVisionUnsupported(
+            detail = (
                 f"{agent_id}: nessun modello con visione VERIFICATA disponibile "
                 "(i modelli con capacità non verificata non vengono usati per le immagini)"
             )
+            # a blocked request is still a request: the monitor must show it
+            self._log(
+                production_id,
+                agent_id,
+                {"provider": "", "model": ":vision", "billing": "unknown", "execution": "unknown"},
+                _utcnow_iso(),
+                now_ms(),
+                outcome="error",
+                attempts=0,
+                fallback_used=False,
+                fallback_from=None,
+                cost=None,
+                error_kind="visione_non_verificata",
+                error_message=detail,
+                attachments=len(images),
+            )
+            raise EngineVisionUnsupported(detail)
 
         settings = self.settings()
         prompt_chars = sum(len(str(m.get("content") or "")) for m in messages)
@@ -870,8 +909,29 @@ class AIEngineManager:
                     result.model = entry["model"]
                     result.billing = entry["billing"]
                     result.execution = entry["execution"]
-                    if result.cost_eur is None and entry["cost_known"]:
-                        result.cost_eur = 0.0 if entry["zero_cost"] else estimated
+                    # Unit rate, estimated cost and actual cost are three distinct facts:
+                    # an estimate is never written as an actual cost.
+                    result.unit_price_per_1k_eur = entry.get("cost_per_1k_eur")
+                    result.auth_type = entry.get("auth_type") or ("oauth_subscription" if entry["billing"] == "subscription" else "")
+                    result.attachments_transmitted = len(staged or [])
+                    result.request_status = "completed"
+                    if result.cost_eur is None:
+                        if entry["zero_cost"]:
+                            result.cost_eur = 0.0
+                            result.cost_basis = {
+                                "subscription": "subscription",
+                                "local_compute": "local_compute",
+                                "free_quota": "free_quota",
+                            }.get(entry["billing"], "subscription")
+                        elif result.cost_basis in ("", "unknown"):
+                            result.cost_basis = "unknown"
+                    elif result.cost_basis in ("", "unknown"):
+                        result.cost_basis = "actual"
+                    if result.estimated_cost_eur is None:
+                        if entry["zero_cost"]:
+                            result.estimated_cost_eur = 0.0
+                        elif entry["cost_known"]:
+                            result.estimated_cost_eur = estimated
                     if result.cost_eur is not None and result.cost_eur > 0:
                         try:
                             self.providers.cost_guard.record_usage(
@@ -887,6 +947,9 @@ class AIEngineManager:
                         "attempts": list(errors),
                         "fallback_from": fallback_from,
                         "estimated_eur": estimated,
+                        "unit_price_per_1k_eur": entry.get("cost_per_1k_eur"),
+                        "actual_cost_eur": result.cost_eur,
+                        "cost_basis": result.cost_basis,
                         "production_id": production_id,
                         "actual_provider": entry.get("actual_provider"),
                     }
@@ -896,6 +959,11 @@ class AIEngineManager:
                         outcome="ok", attempts=attempts_total,
                         fallback_used=bool(result.fallback_used), fallback_from=fallback_from,
                         cost=result.cost_eur,
+                        estimated=result.estimated_cost_eur,
+                        unit_price=result.unit_price_per_1k_eur,
+                        cost_basis=result.cost_basis,
+                        attachments=result.attachments_transmitted,
+                        auth_type=result.auth_type,
                     )
                     return result
 
@@ -929,6 +997,11 @@ class AIEngineManager:
         error_kind: str = "",
         error_message: str = "",
         cancelled: bool = False,
+        estimated: Optional[float] = None,
+        unit_price: Optional[float] = None,
+        cost_basis: str = "unknown",
+        attachments: int = 0,
+        auth_type: str = "",
     ) -> None:
         self.activity.record(
             production_id=production_id,
@@ -947,6 +1020,13 @@ class AIEngineManager:
             error_kind=error_kind,
             error_message=error_message,
             cancelled=cancelled,
+            estimated_cost_eur=estimated,
+            unit_price_per_1k_eur=unit_price,
+            cost_basis=cost_basis,
+            attachments=attachments,
+            auth_type=auth_type or entry.get("auth_type") or "",
+            request_status="cancelled" if cancelled else ("completed" if outcome == "ok" else "error"),
+            vision_image=bool(attachments),
         )
 
     # -------------------------------------------------------------- diagnostics
@@ -1049,6 +1129,9 @@ class AIEngineManager:
             if self.db is not None:
                 self.db.set_preference(SETTINGS_KEY, settings)
             self.invalidate(provider_id)
+            if vision_ok:
+                # a new verified Vision model exists: fallback analyses can be upgraded
+                self._fire_vision_listeners(provider_id, result.model or chosen or "")
         if result.cost_eur is not None and result.cost_eur > 0:
             try:
                 self.providers.cost_guard.record_usage(
@@ -1070,6 +1153,12 @@ class AIEngineManager:
             cost_eur=result.cost_eur,
             billing=result.billing,
             execution=result.execution,
+            estimated_cost_eur=result.estimated_cost_eur,
+            unit_price_per_1k_eur=result.unit_price_per_1k_eur,
+            cost_basis=result.cost_basis,
+            attachments=result.attachments_transmitted,
+            auth_type=result.auth_type,
+            vision_image=bool(image_path),
         )
         return {
             "ok": True,
@@ -1082,6 +1171,9 @@ class AIEngineManager:
             "expected_content_seen": vision_ok,
             "cost_eur": result.cost_eur,
             "cost_known": result.cost_eur is not None,
+            "estimated_cost_eur": result.estimated_cost_eur,
+            "unit_price_per_1k_eur": result.unit_price_per_1k_eur,
+            "cost_basis": result.cost_basis,
             "billing": result.billing,
             "execution": result.execution,
         }

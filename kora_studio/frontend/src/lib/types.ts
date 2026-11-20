@@ -327,6 +327,8 @@ export interface AIActivitySummary {
   errors: number;
   fallbacks: number;
   known_cost_eur: number;
+  actual_cost_eur?: number;
+  estimated_cost_eur?: number;
   unknown_cost_calls: number;
   note: string;
 }
@@ -350,6 +352,62 @@ export interface AIActivityCall {
   error_kind?: string | null;
   error_message?: string | null;
   cancelled: boolean;
+  estimated_cost_eur?: number | null;
+  actual_cost_eur?: number | null;
+  unit_price_per_1k_eur?: number | null;
+  cost_basis?: string;
+  attachments?: number;
+  auth_type?: string;
+  request_status?: string;
+  vision_image?: boolean;
+}
+
+export interface PreviewSceneCard {
+  scene_number: number;
+  is_outro: boolean;
+  duration_frames: number;
+  duration_sec: number;
+  start_sec: number;
+  original_photo: string | null;
+  derived_shot: {
+    framing: string;
+    trajectory?: string | null;
+    crop?: { x: number; y: number; w: number; h: number } | null;
+    zoom_start?: number | null;
+    zoom_end?: number | null;
+    easing?: string | null;
+    motion_intensity?: number | null;
+    residual_resolution?: { width: number; height: number } | null;
+    source?: string;
+    motivation?: string | null;
+  };
+  camera_move: string;
+  voiceover: { text: string; voice_id: string; subtitles: string };
+  subtitle_text: string;
+  transition: string;
+  sound_design: { sfx?: string | null; music_cue?: string | null };
+  approval_status: string;
+  preview_status: string;
+  thumbnail_source: string | null;
+  thumbnail_derived: string | null;
+  preview_clip: string;
+}
+
+export interface PreviewManifest {
+  project_id: string;
+  title: string;
+  storyboard_hash: string;
+  audio_included: boolean;
+  audio_note: string;
+  resolution: string;
+  fps: number;
+  total_frames: number;
+  duration_sec: number;
+  preview_mp4: string;
+  cards: PreviewSceneCard[];
+  scene_clips_cached: number;
+  cache_hit: boolean;
+  scene_approvals?: Record<string, string>;
 }
 
 export interface AIEngineModel {

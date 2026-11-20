@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import textwrap
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -107,6 +108,9 @@ class CinematicEditor:
                 "duration_frames": scene.duration_frames,
                 "camera_motion": scene.camera_motion,
                 "crop_focus": scene.crop_focus,
+                "shot_plan": hashlib.sha256(
+                    json.dumps(scene.shot_plan or {}, sort_keys=True, default=str).encode("utf-8")
+                ).hexdigest()[:12],
                 "is_outro": scene.is_outro,
                 "warmth": round(warmth, 1),
             },
@@ -242,6 +246,9 @@ class CinematicEditor:
         preset_cfg: dict[str, Any],
         scenes_dir: Path,
         fps: int = DEFAULT_FPS,
+        width: int = DEFAULT_WIDTH,
+        height: int = DEFAULT_HEIGHT,
+        crf: int = 18,
     ) -> tuple[Path, dict[str, Any]]:
         """Render or reuse cached clip for a single scene (enables fast selective re-rendering)."""
         scenes_dir.mkdir(parents=True, exist_ok=True)
@@ -262,6 +269,8 @@ class CinematicEditor:
         cache_key = self._scene_cache_key(
             scene, asset["sha256"], preset_cfg.get("default_warmth", 12.0)
         )
+        if (width, height) != (DEFAULT_WIDTH, DEFAULT_HEIGHT):
+            cache_key = cache_key + f"_{width}x{height}"
         cached_mp4 = scenes_dir / f"scene_{scene.scene_number:02d}_{cache_key}.mp4"
         if cached_mp4.is_file() and cached_mp4.stat().st_size > 1000:
             return cached_mp4, {"cache_hit": True, "scene_number": scene.scene_number}
@@ -284,7 +293,7 @@ class CinematicEditor:
                     "-i",
                     str(outro_png),
                     "-vf",
-                    f"fps={fps},scale={DEFAULT_WIDTH}:{DEFAULT_HEIGHT},fade=t=in:st=0:d={fade_in:.2f},fade=t=out:st={fade_out_st:.2f}:d=0.5,format=yuv420p",
+                    f"fps={fps},scale={width}:{height},fade=t=in:st=0:d={fade_in:.2f},fade=t=out:st={fade_out_st:.2f}:d=0.5,format=yuv420p",
                     "-t",
                     f"{dur_sec:.4f}",
                     "-r",
@@ -294,7 +303,7 @@ class CinematicEditor:
                     "-preset",
                     "medium",
                     "-crf",
-                    "18",
+                    str(crf),
                     "-pix_fmt",
                     "yuv420p",
                     str(cached_mp4),
@@ -312,8 +321,8 @@ class CinematicEditor:
             # Conform fps to 25, smart 9:16 crop, adaptive grade, exact duration
             vf = (
                 f"fps={fps},"
-                f"scale={DEFAULT_WIDTH}:{DEFAULT_HEIGHT}:force_original_aspect_ratio=increase,"
-                f"crop={DEFAULT_WIDTH}:{DEFAULT_HEIGHT},"
+                f"scale={width}:{height}:force_original_aspect_ratio=increase,"
+                f"crop={width}:{height},"
                 f"{grade['filter']},setsar=1,format=yuv420p"
             )
             run_ffmpeg(
@@ -337,14 +346,27 @@ class CinematicEditor:
                     "-preset",
                     "medium",
                     "-crf",
-                    "18",
+                    str(crf),
                     "-pix_fmt",
                     "yuv420p",
                     str(cached_mp4),
                 ],
                 timeout=180,
             )
-            return cached_mp4, {"cache_hit": False, "scene_number": scene.scene_number, "grade": grade["adjustments"]}
+            return cached_mp4, {
+            "cache_hit": False,
+            "scene_number": scene.scene_number,
+            "grade": grade["adjustments"],
+            "shot_source": scene.shot_source,
+            "shot_plan": {
+                "trajectory": (scene.shot_plan or {}).get("trajectory"),
+                "zoom_start": (scene.shot_plan or {}).get("zoom_start"),
+                "zoom_end": (scene.shot_plan or {}).get("zoom_end"),
+                "easing": (scene.shot_plan or {}).get("easing"),
+                "crop": (scene.shot_plan or {}).get("crop"),
+                "applied": bool(scene.shot_plan),
+            },
+        }
 
         # Photo -> optional crop focus -> color grade -> deterministic camera motion
         metrics = self.colorist.analyze_frame(src_path)
@@ -358,8 +380,9 @@ class CinematicEditor:
             duration_frames=scene.duration_frames,
             motion=scene.camera_motion,
             fps=fps,
-            width=DEFAULT_WIDTH,
-            height=DEFAULT_HEIGHT,
+            width=width,
+            height=height,
+            shot_plan=scene.shot_plan,
         )
         run_ffmpeg(
             [
@@ -584,3 +607,286 @@ class CinematicEditor:
             "hyperframes_workspace": hyperframes_ws,
             "render_engine": "ffmpeg_deterministic_25fps",
         }
+
+
+# ---------------------------------------------------------------------------
+# Cinematic Preview (v2.8) — low-res, cached, scene-by-scene review before render
+# ---------------------------------------------------------------------------
+
+PREVIEW_WIDTH = 540
+PREVIEW_HEIGHT = 960
+PREVIEW_FPS = 25
+PREVIEW_CRF = 30
+
+
+def _preview_scene_hash(scene: StoryboardScene) -> str:
+    payload = json.dumps(
+        {
+            "asset": scene.selected_asset_id,
+            "frames": scene.duration_frames,
+            "framing": scene.shot_framing,
+            "motion": scene.camera_motion,
+            "transition": scene.transition,
+            "subtitle": scene.subtitle_text,
+            "shot_plan": scene.shot_plan or {},
+            "is_outro": scene.is_outro,
+        },
+        sort_keys=True,
+        default=str,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+
+
+class CinematicPreviewRenderer:
+    """Builds a low-resolution review reel + one card per scene, with caching."""
+
+    def __init__(self, editor: CinematicEditor, vault: MediaVault) -> None:
+        self.editor = editor
+        self.vault = vault
+
+    def _thumb(self, src: Path, out_png: Path, width: int = 270, height: int = 480) -> Path:
+        from PIL import ImageOps as _IO
+
+        out_png.parent.mkdir(parents=True, exist_ok=True)
+        with Image.open(src) as raw:
+            img = _IO.exif_transpose(raw).convert("RGB")
+            img = ImageOps.fit(img, (width, height), method=Image.Resampling.LANCZOS)
+            img.save(out_png, "PNG")
+        return out_png
+
+    def _first_frame(self, clip: Path, out_png: Path) -> Optional[Path]:
+        try:
+            run_ffmpeg(
+                ["-y", "-loglevel", "error", "-i", str(clip), "-frames:v", "1", str(out_png)],
+                timeout=60,
+            )
+            return out_png if out_png.is_file() else None
+        except Exception:
+            return None
+
+    def render(
+        self,
+        project_id: str,
+        title: str,
+        scenes: list[StoryboardScene],
+        preset: str,
+        project_dir: Path,
+        audio_mix_path: Optional[Path] = None,
+        fps: int = PREVIEW_FPS,
+        force: bool = False,
+    ) -> dict[str, Any]:
+        if not scenes:
+            raise ValueError("Nessuna scena da mostrare in anteprima.")
+        preview_dir = project_dir / "preview"
+        preview_dir.mkdir(parents=True, exist_ok=True)
+        manifest_path = preview_dir / "preview_manifest.json"
+        storyboard_hash = hashlib.sha256(
+            json.dumps(
+                [
+                    {
+                        "n": sc.scene_number,
+                        "asset": sc.selected_asset_id,
+                        "frames": sc.duration_frames,
+                        "framing": sc.shot_framing,
+                        "motion": sc.camera_motion,
+                        "transition": sc.transition,
+                        "subtitle": sc.subtitle_text,
+                        "spoken": sc.spoken_text,
+                        "plan": sc.shot_plan or {},
+                        "outro": sc.is_outro,
+                    }
+                    for sc in scenes
+                ],
+                sort_keys=True,
+                default=str,
+            ).encode("utf-8")
+        ).hexdigest()[:16]
+        audio_sig = ""
+        if audio_mix_path and Path(audio_mix_path).is_file():
+            st = Path(audio_mix_path).stat()
+            audio_sig = f"{st.st_size}:{int(st.st_mtime)}"
+
+        if manifest_path.is_file() and not force:
+            try:
+                existing = json.loads(manifest_path.read_text(encoding="utf-8"))
+                if (
+                    existing.get("storyboard_hash") == storyboard_hash
+                    and existing.get("audio_signature") == audio_sig
+                    and Path(existing.get("preview_mp4") or "").is_file()
+                ):
+                    existing["cache_hit"] = True
+                    return existing
+            except Exception:
+                pass
+
+        preset_cfg = PRESET_DEFINITIONS.get(preset, PRESET_DEFINITIONS[EditingPreset.CINEMATIC_IDENTITY.value])
+        clips_dir = preview_dir / "clips"
+        clips_dir.mkdir(parents=True, exist_ok=True)
+        thumbs_dir = preview_dir / "thumbs"
+        subs_dir = preview_dir / "subtitles"
+        subs_dir.mkdir(parents=True, exist_ok=True)
+
+        clips: list[Path] = []
+        cards: list[dict[str, Any]] = []
+        cache_hits = 0
+        for scene in scenes:
+            scene_hash = _preview_scene_hash(scene)
+            clip, stat = self.editor._render_scene_clip(
+                scene,
+                preset_cfg,
+                clips_dir,
+                fps=fps,
+                width=PREVIEW_WIDTH,
+                height=PREVIEW_HEIGHT,
+                crf=PREVIEW_CRF,
+            )
+            if stat.get("cache_hit"):
+                cache_hits += 1
+            clips.append(clip)
+
+            asset = self.vault.get_asset(scene.selected_asset_id) if scene.selected_asset_id else None
+            if scene.is_outro:
+                asset = self.vault.get_logo_asset() or asset
+            src_path = None
+            if asset:
+                candidate = Path(asset.get("working_path") or asset.get("original_path") or "")
+                if candidate.is_file():
+                    src_path = candidate
+            thumb_src = (
+                self._thumb(src_path, thumbs_dir / f"scene_{scene.scene_number:02d}_source.png")
+                if src_path
+                else None
+            )
+            thumb_derived = self._first_frame(clips[-1], thumbs_dir / f"scene_{scene.scene_number:02d}_derived.png")
+            plan = scene.shot_plan or {}
+            cards.append(
+                {
+                    "scene_number": scene.scene_number,
+                    "is_outro": scene.is_outro,
+                    "duration_frames": scene.duration_frames,
+                    "duration_sec": round(scene.duration_frames / fps, 3),
+                    "start_sec": round(scene.start_sec, 3),
+                    "original_photo": str(src_path) if src_path else None,
+                    "derived_shot": {
+                        "framing": scene.shot_framing,
+                        "trajectory": plan.get("trajectory"),
+                        "crop": plan.get("crop"),
+                        "zoom_start": plan.get("zoom_start"),
+                        "zoom_end": plan.get("zoom_end"),
+                        "easing": plan.get("easing"),
+                        "motion_intensity": plan.get("motion_intensity"),
+                        "residual_resolution": plan.get("residual_resolution"),
+                        "source": scene.shot_source,
+                        "motivation": plan.get("motivation"),
+                    },
+                    "camera_move": scene.camera_motion,
+                    "voiceover": {
+                        "text": scene.spoken_text,
+                        "voice_id": scene.voice_id,
+                        "subtitles": scene.subtitle_text,
+                    },
+                    "subtitle_text": scene.subtitle_text,
+                    "transition": scene.transition,
+                    "sound_design": {
+                        "sfx": scene.sfx_category,
+                        "music_cue": scene.music_cue,
+                    },
+                    "approval_status": scene.approval_status,
+                    "preview_status": scene.preview_status,
+                    "thumbnail_source": str(thumb_src) if thumb_src else None,
+                    "thumbnail_derived": str(thumb_derived) if thumb_derived else None,
+                    "preview_clip": str(clips[-1]),
+                }
+            )
+
+        # subtitle overlay per scene (simplified preview captions)
+        inputs: list[str] = []
+        for clip in clips:
+            inputs.extend(["-i", str(clip)])
+        total_frames = sum(s.duration_frames for s in scenes)
+        total_sec = total_frames / fps
+        filter_parts = [
+            "".join(f"[{i}:v]" for i in range(len(clips))) + f"concat=n={len(clips)}:v=1:a=0,fps={fps}[vcat]"
+        ]
+        cur = "[vcat]"
+        next_idx = len(clips)
+        for scene in scenes:
+            if not scene.subtitle_text.strip() or scene.is_outro:
+                continue
+            png = subs_dir / f"sub_{scene.scene_number:02d}_{_preview_scene_hash(scene)}.png"
+            self.editor._render_subtitle_overlay_png(
+                scene.subtitle_text, png, width=PREVIEW_WIDTH, height=PREVIEW_HEIGHT
+            )
+            inputs.extend(["-loop", "1", "-t", f"{total_sec:.3f}", "-i", str(png)])
+            out = f"[vsub_{next_idx}]"
+            filter_parts.append(
+                f"{cur}[{next_idx}:v]overlay=0:0:enable='between(t,{scene.start_sec:.3f},{scene.end_sec:.3f})'{out}"
+            )
+            cur = out
+            next_idx += 1
+        filter_parts.append(f"{cur}format=yuv420p[vfinal]")
+
+        if audio_mix_path and Path(audio_mix_path).is_file():
+            inputs.extend(["-i", str(audio_mix_path)])
+        else:
+            inputs.extend(["-f", "lavfi", "-t", f"{total_sec:.3f}", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000"])
+        audio_idx = next_idx
+
+        preview_mp4 = preview_dir / f"{project_id}_cinematic_preview.mp4"
+        run_ffmpeg(
+            [
+                "-y",
+                "-loglevel",
+                "error",
+                *inputs,
+                "-filter_complex",
+                ";".join(filter_parts),
+                "-map",
+                "[vfinal]",
+                "-map",
+                f"{audio_idx}:a",
+                "-t",
+                f"{total_sec:.3f}",
+                "-r",
+                str(fps),
+                "-c:v",
+                "libx264",
+                "-preset",
+                "veryfast",
+                "-crf",
+                str(PREVIEW_CRF),
+                "-pix_fmt",
+                "yuv420p",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "96k",
+                "-movflags",
+                "+faststart",
+                str(preview_mp4),
+            ],
+            timeout=600,
+        )
+        manifest = {
+            "project_id": project_id,
+            "title": title,
+            "storyboard_hash": storyboard_hash,
+            "audio_signature": audio_sig,
+            "audio_included": bool(audio_mix_path and Path(audio_mix_path).is_file()),
+            "audio_note": (
+                "voce e sound design inclusi"
+                if audio_mix_path and Path(audio_mix_path).is_file()
+                else "audio non ancora generato: l'anteprima è muta finché non viene prodotto il mix"
+            ),
+            "resolution": f"{PREVIEW_WIDTH}x{PREVIEW_HEIGHT}",
+            "fps": fps,
+            "total_frames": total_frames,
+            "duration_sec": round(total_sec, 3),
+            "preview_mp4": str(preview_mp4),
+            "cards": cards,
+            "scene_clips_cached": cache_hits,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "cache_hit": False,
+        }
+        manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
+        return manifest

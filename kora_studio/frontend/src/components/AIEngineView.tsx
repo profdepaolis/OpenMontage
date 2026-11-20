@@ -810,7 +810,8 @@ export function AIEngineView() {
             <span>Riuscite: {activitySummary.ok}</span>
             <span>Errori: {activitySummary.errors}</span>
             <span>Fallback: {activitySummary.fallbacks}</span>
-            <span>Costo noto: {activitySummary.known_cost_eur.toFixed(3)} €</span>
+            <span>Costo reale: {(activitySummary.actual_cost_eur ?? activitySummary.known_cost_eur).toFixed(3)} €</span>
+            <span>Costo stimato: {(activitySummary.estimated_cost_eur ?? 0).toFixed(3)} €</span>
             <span>Costo sconosciuto: {activitySummary.unknown_cost_calls} chiamate</span>
           </div>
         )}
@@ -827,11 +828,14 @@ export function AIEngineView() {
                   <th className="pb-1 pr-2">Produzione</th>
                   <th className="pb-1 pr-2">Agente</th>
                   <th className="pb-1 pr-2">Provider / modello</th>
+                  <th className="pb-1 pr-2">Auth</th>
+                  <th className="pb-1 pr-2">Allegati</th>
                   <th className="pb-1 pr-2">Durata</th>
-                  <th className="pb-1 pr-2">Esito</th>
-                  <th className="pb-1 pr-2">Tent.</th>
+                  <th className="pb-1 pr-2">Stato</th>
                   <th className="pb-1 pr-2">Fallback</th>
-                  <th className="pb-1 pr-2">Costo</th>
+                  <th className="pb-1 pr-2">Tariffa /1k</th>
+                  <th className="pb-1 pr-2">Stimato</th>
+                  <th className="pb-1 pr-2">Reale</th>
                 </tr>
               </thead>
               <tbody className="text-[#4A443C]">
@@ -844,15 +848,35 @@ export function AIEngineView() {
                       {row.provider}
                       <span className="text-[#9A8052]">/{row.model}</span>
                     </td>
+                    <td className="py-1 pr-2">{row.auth_type || "—"}</td>
+                    <td className="py-1 pr-2">
+                      {row.vision_image ? "immagine" : ""}
+                      {row.attachments ? ` (${row.attachments})` : row.vision_image ? "" : "—"}
+                    </td>
                     <td className="py-1 pr-2">{row.duration_ms} ms</td>
                     <td className="py-1 pr-2">
-                      {row.outcome === "ok" ? "✅ riuscita" : row.cancelled ? "⏹ annullata" : `⚠ ${row.outcome}`}
+                      {row.request_status === "completed" || row.outcome === "ok"
+                        ? "✅ riuscita"
+                        : row.cancelled
+                        ? "⏹ annullata"
+                        : `⚠ ${row.outcome}`}
+                      {row.attempts > 1 ? ` · ${row.attempts} tent.` : ""}
                     </td>
-                    <td className="py-1 pr-2">{row.attempts}</td>
                     <td className="py-1 pr-2">{row.fallback_used ? `sì (da ${row.fallback_from || "?"})` : "no"}</td>
                     <td className="py-1 pr-2">
-                      {row.cost_known && row.cost_eur !== null && row.cost_eur !== undefined
-                        ? `${row.cost_eur.toFixed(4)} €`
+                      {row.unit_price_per_1k_eur !== null && row.unit_price_per_1k_eur !== undefined
+                        ? `${row.unit_price_per_1k_eur.toFixed(4)} €`
+                        : "n/d"}
+                    </td>
+                    <td className="py-1 pr-2">
+                      {row.estimated_cost_eur !== null && row.estimated_cost_eur !== undefined
+                        ? `${row.estimated_cost_eur.toFixed(4)} €`
+                        : "—"}
+                    </td>
+                    <td className="py-1 pr-2">
+                      {row.cost_known && (row.actual_cost_eur ?? row.cost_eur) !== null &&
+                      (row.actual_cost_eur ?? row.cost_eur) !== undefined
+                        ? `${Number(row.actual_cost_eur ?? row.cost_eur).toFixed(4)} €`
                         : "sconosciuto"}
                     </td>
                   </tr>

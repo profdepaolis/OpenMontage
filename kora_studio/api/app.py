@@ -26,7 +26,7 @@ from kora_studio.agents.hyperframes_captions import (
     recommend_hyperframes_for_theme,
 )
 from kora_studio.backup.backup_manager import BackupManager
-from kora_studio.config import BACKUPS_DIR, DATA_DIR as KORA_DATA_DIR, REPO_ROOT
+from kora_studio.config import BACKUPS_DIR, DATA_DIR as KORA_DATA_DIR, PROJECTS_DIR, REPO_ROOT
 from kora_studio.db.database import Database, utcnow_iso
 from kora_studio.db.models import CreativeConcept, CreativeRequestPayload, StoryboardScene
 from kora_studio.media_tools import check_remotion_runtime, find_ffmpeg, find_ffprobe
@@ -144,6 +144,21 @@ class CreateProjectRequest(BaseModel):
     auto_start: bool = True
 
 
+class SceneReviseRequest(BaseModel):
+    instruction: str
+    regenerate_preview: bool = True
+
+
+class SceneApproveRequest(BaseModel):
+    approved: bool = True
+
+
+class VisionReanalyzeRequest(BaseModel):
+    force: bool = True
+    limit: Optional[int] = None
+    production_id: Optional[str] = None
+
+
 class AIEngineTestRequest(BaseModel):
     provider: str
     model: Optional[str] = None
@@ -246,7 +261,7 @@ def create_app(db_path: Optional[Path] = None, auto_seed: bool = True) -> FastAP
         director.vault.seed_kora_authentic_assets()
         director.brand_brain.refresh_palette_from_vault()
 
-    app = FastAPI(title="KORA STUDIO", version="2.7.0")
+    app = FastAPI(title="KORA STUDIO", version="2.8.0")
     app.state.director = director
     app.state.backup_mgr = backup_mgr
 
@@ -828,6 +843,86 @@ def create_app(db_path: Optional[Path] = None, auto_seed: bool = True) -> FastAP
             raise HTTPException(status_code=404, detail="Video non ancora renderizzato")
         p = _safe_workspace_file(Path(proj["output_video_path"]))
         return FileResponse(p, media_type="video/mp4", filename=p.name)
+
+    # ---- Cinematic Preview (v2.8) ---------------------------------------
+
+    @app.post("/api/projects/{project_id}/preview", dependencies=[Depends(_require_local_trust)])
+    def project_preview(project_id: str, force: bool = Query(False)) -> dict[str, Any]:
+        try:
+            return director.render_preview(project_id, force=force)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    def _preview_dir(project_id: str) -> Path:
+        from kora_studio.config import PROJECTS_DIR as _projects_dir
+
+        return _projects_dir / project_id / "preview"
+
+    @app.get("/api/projects/{project_id}/preview")
+    def project_preview_manifest(project_id: str) -> dict[str, Any]:
+        manifest_path = _preview_dir(project_id) / "preview_manifest.json"
+        if not manifest_path.is_file():
+            raise HTTPException(status_code=404, detail="Nessuna anteprima disponibile per questo progetto")
+        return json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    @app.get("/api/projects/{project_id}/preview/video")
+    def project_preview_video(project_id: str) -> FileResponse:
+        manifest_path = _preview_dir(project_id) / "preview_manifest.json"
+        if not manifest_path.is_file():
+            raise HTTPException(status_code=404, detail="Nessuna anteprima disponibile")
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        path = Path(manifest.get("preview_mp4") or "")
+        if not path.is_file():
+            raise HTTPException(status_code=404, detail="File di anteprima mancante")
+        return FileResponse(_safe_workspace_file(path), media_type="video/mp4", filename=path.name)
+
+    @app.get("/api/projects/{project_id}/preview/scene/{scene_number}/thumb/{kind}")
+    def project_preview_thumb(project_id: str, scene_number: int, kind: str) -> FileResponse:
+        manifest_path = _preview_dir(project_id) / "preview_manifest.json"
+        if not manifest_path.is_file():
+            raise HTTPException(status_code=404, detail="Nessuna anteprima disponibile")
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        card = next((c for c in manifest.get("cards", []) if c.get("scene_number") == scene_number), None)
+        if not card:
+            raise HTTPException(status_code=404, detail="Scena non presente nell'anteprima")
+        key = "thumbnail_source" if kind == "source" else "thumbnail_derived"
+        path = Path(card.get(key) or "")
+        if not path.is_file():
+            raise HTTPException(status_code=404, detail="Miniatura non disponibile")
+        return FileResponse(_safe_workspace_file(path), media_type="image/png")
+
+    @app.post("/api/projects/{project_id}/scenes/{scene_number}/revise", dependencies=[Depends(_require_local_trust)])
+    def revise_scene(project_id: str, scene_number: int, req: SceneReviseRequest) -> dict[str, Any]:
+        try:
+            return director.revise_scene_preview(
+                project_id, scene_number, req.instruction, regenerate_preview=req.regenerate_preview
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/projects/{project_id}/scenes/{scene_number}/approve", dependencies=[Depends(_require_local_trust)])
+    def approve_scene(project_id: str, scene_number: int, req: SceneApproveRequest) -> dict[str, Any]:
+        try:
+            return director.approve_scene(project_id, scene_number, approved=req.approved)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    # ---- Visual Intelligence provenance (v2.8) --------------------------
+
+    @app.get("/api/vault/vision/status")
+    def vault_vision_status() -> dict[str, Any]:
+        return director.creative.visual_intelligence.vault_status()
+
+    @app.post("/api/vault/vision/reanalyze", dependencies=[Depends(_require_local_trust)])
+    def vault_vision_reanalyze(req: VisionReanalyzeRequest) -> dict[str, Any]:
+        vi = director.creative.visual_intelligence
+        if req.force:
+            return vi.annotate_vault(production_id=req.production_id, limit=req.limit, force=True)
+        return vi.annotate_vault(production_id=req.production_id, limit=req.limit, force=False)
 
     @app.get("/api/projects/{project_id}/download/{kind}")
     def download_export_artifact(project_id: str, kind: str) -> FileResponse:

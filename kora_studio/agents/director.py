@@ -11,12 +11,12 @@ from typing import Any, Optional
 from kora_studio.agents.ai_media_lab import AIMediaLab, MediaCurator
 from kora_studio.agents.copywriter import Copywriter
 from kora_studio.agents.brand_guardian import BrandGuardian
-from kora_studio.agents.cinematic_editor import CinematicEditor
+from kora_studio.agents.cinematic_editor import CinematicEditor, CinematicPreviewRenderer
 from kora_studio.agents.colorist import Colorist
 from kora_studio.agents.creative_director import CreativeDirector
 from kora_studio.agents.export_manager import ExportManager
 from kora_studio.agents.quality_controller import QualityController
-from kora_studio.agents.revision_engine import RevisionEngine
+from kora_studio.agents.revision_engine import RevisionEngine, SingleSceneReviser
 from kora_studio.agents.sound_designer import SoundDesigner
 from kora_studio.agents.voice_director import VoiceDirector
 from kora_studio.ai_engine.context import BrandContextBuilder
@@ -25,6 +25,7 @@ from kora_studio.brand.brand_brain import BrandBrain
 from kora_studio.config import DEFAULT_FPS, PROJECTS_DIR, ensure_directories
 from kora_studio.db.database import Database, utcnow_iso
 from kora_studio.db.models import (
+    CameraMotion,
     CreativeConcept,
     EditingPreset,
     JobState,
@@ -76,6 +77,8 @@ class KoraDirector:
             if hasattr(agent, "attach_engine_manager"):
                 agent.attach_engine_manager(self.ai_engine)
         self.revision_engine = RevisionEngine(self.vault, self.sound_library)
+        self.scene_reviser = SingleSceneReviser(self.ai_engine)
+        self.preview_renderer = CinematicPreviewRenderer(self.editor, self.vault)
         self._lock = threading.Lock()
 
     # ---- Project Persistence & Versioning --------------------------------
@@ -97,21 +100,23 @@ class KoraDirector:
         total_frames = int(round(target_duration_sec * fps))
         now = utcnow_iso()
 
-        storyboard: list[dict[str, Any]] = []
-        if concept is not None:
-            scenes = self.creative.build_storyboard(concept, voice_id=voice_id, fps=fps)
-            storyboard = [s.model_dump() for s in scenes]
-
         prefs_payload = dict(preferences or {})
         if concept is not None and concept.creative_request:
             prefs_payload.setdefault("creative_request", concept.creative_request)
-        # Materiali scelti esplicitamente dall'utente: vincolano lo storyboard a quei soli asset
+        # Manual selection constrains the *inventory*: it is passed to the Story
+        # Director, which still chooses the best authorised photo per scene.
         selected_assets = [
             str(a) for a in (prefs_payload.get("selected_asset_ids") or []) if str(a).strip()
         ]
-        if selected_assets and storyboard:
-            for idx, scene_dict in enumerate(storyboard):
-                scene_dict["selected_asset_id"] = selected_assets[idx % len(selected_assets)]
+        storyboard: list[dict[str, Any]] = []
+        if concept is not None:
+            scenes = self.creative.build_storyboard(
+                concept,
+                voice_id=voice_id,
+                fps=fps,
+                authorized_asset_ids=selected_assets or None,
+            )
+            storyboard = [s.model_dump() for s in scenes]
 
         with self.db.session() as conn:
             conn.execute(
@@ -673,25 +678,33 @@ class KoraDirector:
 
             self._update_job(job_id, JobState.STORYBOARD, "Costruzione Storyboard 25fps", completed)
             raw_sb = proj.get("storyboard") or []
+            selected_pref = [
+                str(a)
+                for a in ((proj.get("preferences") or {}).get("selected_asset_ids") or [])
+                if str(a).strip()
+            ]
             if raw_sb:
                 scenes = [StoryboardScene(**s) for s in raw_sb]
             else:
                 scenes = self.creative.build_storyboard(
-                    concept, voice_id=proj["voice_id"], fps=proj["fps"]
+                    concept,
+                    voice_id=proj["voice_id"],
+                    fps=proj["fps"],
+                    authorized_asset_ids=selected_pref or None,
                 )
-            # Vincolo materiali scelti dall'utente anche quando lo storyboard nasce qui
-            selected_pref = [
-                str(a) for a in ((proj.get("preferences") or {}).get("selected_asset_ids") or [])
-            ]
+            # La selezione manuale vincola l'inventario, non la sequenza: nessuna
+            # assegnazione ciclica. Le scene fuori inventario vengono ricollocate.
             if selected_pref:
-                for idx, sc in enumerate(scenes):
-                    sc.selected_asset_id = selected_pref[idx % len(selected_pref)]
+                self.creative.enforce_authorized_inventory(scenes, selected_pref)
                 self.log_job(
                     job_id,
                     "INFO",
                     "MediaCurator",
-                    f"Materiali vincolati alla selezione utente ({len(selected_pref)} asset).",
+                    f"Inventario autorizzato ({len(selected_pref)} asset): il Cinematic Story Director sceglie "
+                    "l'immagine migliore per ogni scena.",
                 )
+            else:
+                self.creative.apply_shot_plans(scenes)
             completed.append("Storyboard")
             self.log_job(
                 job_id,
@@ -920,6 +933,173 @@ class KoraDirector:
                 )
             self.log_job(job_id, "ERROR", "KoraDirector", f"Errore: {exc}")
             return {"project": self.get_project(project_id), "job": self.get_job(job_id)}
+
+    # --------------------------------------------------------- Cinematic Preview
+    def _project_scenes(self, project_id: str) -> tuple[dict[str, Any], list[StoryboardScene]]:
+        proj = self.get_project(project_id)
+        if not proj:
+            raise KeyError(f"Progetto {project_id} non trovato")
+        scenes = [StoryboardScene(**s) for s in (proj.get("storyboard") or [])]
+        if not scenes:
+            raise ValueError("Storyboard assente: progetta prima il Reel.")
+        return proj, scenes
+
+    def _persist_scenes(self, project_id: str, scenes: list[StoryboardScene], reason: str) -> None:
+        with self.db.session() as conn:
+            conn.execute(
+                "UPDATE projects SET storyboard_json = ?, updated_at = ? WHERE id = ?",
+                (
+                    json.dumps([s.model_dump() for s in scenes], ensure_ascii=False),
+                    utcnow_iso(),
+                    project_id,
+                ),
+            )
+        self.save_project_snapshot(project_id, reason, "CinematicPreview")
+
+    def render_preview(self, project_id: str, force: bool = False) -> dict[str, Any]:
+        """Low-res Cinematic Preview with one review card per scene (cached)."""
+        proj, scenes = self._project_scenes(project_id)
+        project_dir = PROJECTS_DIR / project_id
+        audio_mix = project_dir / "audio_mix.wav"
+        manifest = self.preview_renderer.render(
+            project_id=project_id,
+            title=proj["title"],
+            scenes=scenes,
+            preset=proj["preset"],
+            project_dir=project_dir,
+            audio_mix_path=audio_mix if audio_mix.is_file() else None,
+            force=force,
+        )
+        if not manifest.get("cache_hit"):
+            for scene in scenes:
+                if scene.preview_status == "pending":
+                    scene.preview_status = "previewed"
+            self._persist_scenes(project_id, scenes, "Anteprima cinematografica generata")
+        manifest["scene_approvals"] = {
+            str(sc.scene_number): sc.approval_status for sc in scenes
+        }
+        manifest["plan_validation"] = getattr(self.creative, "last_plan_validation", {}) or {}
+        return manifest
+
+    def approve_scene(self, project_id: str, scene_number: int, approved: bool = True) -> dict[str, Any]:
+        proj, scenes = self._project_scenes(project_id)
+        target = next((s for s in scenes if s.scene_number == scene_number), None)
+        if target is None:
+            raise KeyError(f"Scena {scene_number} non trovata")
+        target.approval_status = "approvata" if approved else "da_riverificare"
+        target.preview_status = "approved" if approved else "previewed"
+        self._persist_scenes(project_id, scenes, f"Scena {scene_number} {'approvata' if approved else 'riaperta'}")
+        return {
+            "scene_number": scene_number,
+            "approval_status": target.approval_status,
+            "approved_scenes": [s.scene_number for s in scenes if s.approval_status == "approvata"],
+        }
+
+    def revise_scene_preview(
+        self,
+        project_id: str,
+        scene_number: int,
+        instruction: str,
+        regenerate_preview: bool = True,
+    ) -> dict[str, Any]:
+        """Conversational revision of one scene; approved scenes are never touched."""
+        proj, scenes = self._project_scenes(project_id)
+        target = next((s for s in scenes if s.scene_number == scene_number), None)
+        if target is None:
+            raise KeyError(f"Scena {scene_number} non trovata")
+        if target.is_outro:
+            raise ValueError("L'outro con logo è un componente brand: non è modificabile in anteprima.")
+        proposal = self.scene_reviser.propose(instruction, target)
+        changes = proposal["changes"]
+        if not changes:
+            return {"applied": False, "proposal": proposal, "scene_number": scene_number}
+
+        preserved = [s.scene_number for s in scenes if s.scene_number != scene_number and s.approval_status == "approvata"]
+        purpose = target.narrative_goal
+        if "framing" in changes:
+            purpose = {
+                "campo_ampio": "Contesto: dove siamo, luce e architettura reale",
+                "dettaglio_ravvicinato": "Dettaglio tattile: materia, texture, gesto",
+                "piano_medio": "Esperienza: ospitalità e convivialità KORA",
+            }.get(changes["framing"], purpose)
+            target.shot_framing = changes["framing"]
+        if "subtitle_text" in changes:
+            target.subtitle_text = changes["subtitle_text"]
+            target.spoken_text = changes.get("spoken_text", target.spoken_text)
+        if "sfx" in changes:
+            target.sfx_category = changes["sfx"]
+        if "transition" in changes:
+            target.transition = changes["transition"]
+        if "camera" in changes:
+            target.camera_motion = changes["camera"]
+        target.narrative_goal = purpose
+
+        # rebuild the derived shot for this scene only
+        asset = self.vault.get_asset(target.selected_asset_id) if target.selected_asset_id else None
+        generator = getattr(self.creative, "shot_generator", None)
+        if generator is None:
+            from kora_studio.agents.smart_shot_generator import SmartShotGenerator
+
+            generator = SmartShotGenerator(self.vault)
+            self.creative.shot_generator = generator
+        motion_hint = "still" if target.camera_motion == CameraMotion.STATIC_BREATHE.value else None
+        plan = generator.plan_for_scene(
+            asset,
+            purpose=purpose,
+            duration_frames=target.duration_frames,
+            motion_hint=motion_hint,
+        ) if asset else None
+        if plan:
+            if "zoom_hint" in changes:
+                zs, ze = plan["zoom_start"], plan["zoom_end"]
+                if changes["zoom_hint"] == "in":
+                    plan["trajectory"], plan["zoom_start"], plan["zoom_end"] = "push_in", min(zs, 1.02), max(ze, 1.12)
+                else:
+                    plan["trajectory"], plan["zoom_start"], plan["zoom_end"] = "pull_out", max(zs, 1.12), min(ze, 1.02)
+            if "motion_intensity" in changes:
+                factor = float(changes["motion_intensity"])
+                plan["motion_intensity"] = round(factor, 3)
+                span = max(0.0, plan["zoom_end"] - plan["zoom_start"]) * factor
+                plan["zoom_end"] = round(min(plan["zoom_start"] + span, plan["zoom_start"] + 0.45), 4)
+                if plan["zoom_end"] < plan["zoom_start"]:
+                    plan["zoom_start"], plan["zoom_end"] = plan["zoom_end"], plan["zoom_start"]
+            plan["motivation"] = f"{plan['motivation']} Revisione richiesta: «{instruction}»."
+            target.shot_plan = plan
+            target.shot_source = "smart_shot" 
+            target.crop_focus = {
+                "x": plan["focal_point"]["x"],
+                "y": plan["focal_point"]["y"],
+                "zoom": plan["zoom_end"],
+            }
+        target.approval_status = "modificata"
+        target.preview_status = "pending"
+        self._persist_scenes(project_id, scenes, f"Revisione conversazionale scena {scene_number}: {instruction}")
+
+        result: dict[str, Any] = {
+            "applied": True,
+            "proposal": proposal,
+            "scene_number": scene_number,
+            "preserved_approved_scenes": preserved,
+            "scene": target.model_dump(),
+        }
+        if regenerate_preview:
+            manifest = self.preview_renderer.render(
+                project_id=project_id,
+                title=proj["title"],
+                scenes=scenes,
+                preset=proj["preset"],
+                project_dir=PROJECTS_DIR / project_id,
+                audio_mix_path=(
+                    PROJECTS_DIR / project_id / "audio_mix.wav"
+                    if (PROJECTS_DIR / project_id / "audio_mix.wav").is_file()
+                    else None
+                ),
+            )
+            result["preview"] = manifest
+            result["card"] = next(
+                (c for c in manifest["cards"] if c["scene_number"] == scene_number), None
+            )
+        return result
 
     def apply_nl_revision_and_rerender(
         self,

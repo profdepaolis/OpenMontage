@@ -1,23 +1,32 @@
-"""Visual Intelligence — real image understanding for KORA's authentic material.
+"""Visual Intelligence — real image understanding with honest provenance.
 
-The agent sends the actual picture to a **vision-verified** model and records what
-it sees (subjects, light, framing, textures, whether the frame can carry a scene).
-Results are cached per asset + model, so the Reel production does not pay twice.
+Every analysis carries its provenance (asset hash, provider, model, prompt
+version, date) and one of four explicit states:
 
-Without a verified vision model the agent still works, but it says so: it derives
-the description from the real pixel statistics and the existing analysis, marks
-``source="deterministic"`` and never pretends an image was seen by a model.
+* ``verified``      — a vision-VERIFIED model really looked at the pixels;
+* ``deterministic`` — derived from real pixel statistics, no model used;
+* ``stale``         — produced by a fallback or by a model that is no longer the
+                      configured one, and a better vision model is now available;
+* ``unavailable``   — the asset cannot be read (missing file / unsupported).
+
+When a Vision model becomes verified, fallback analyses are automatically
+upgraded. There is no permanent cap on "the first N assets": the whole Vault can
+be re-analysed, in batches, without re-paying for valid verified analyses.
 """
 
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
 from kora_studio.ai_engine.base import EngineError
 
 CACHE_KEY = "visual_intelligence_cache"
+PROMPT_VERSION = "vi-2.8.0"
+
+STATES = ("verified", "deterministic", "stale", "unavailable")
 
 PROMPT = (
     "Guarda la fotografia allegata del KORA Beach Club (Policoro) e descrivi SOLO ciò che vedi. "
@@ -28,13 +37,18 @@ PROMPT = (
 )
 
 
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
 class VisualIntelligence:
-    """Vision review of the vault and scene-level asset decisions."""
+    """Vision review of the vault, with provenance, states and auto-upgrade."""
 
     def __init__(self, vault: Any, engine: Any = None, db: Any = None) -> None:
         self.vault = vault
         self.engine = engine
         self.db = db if db is not None else getattr(vault, "db", None)
+        self.last_run: dict[str, Any] = {}
 
     def attach_engine_manager(self, engine: Any) -> None:
         self.engine = engine
@@ -53,10 +67,6 @@ class VisualIntelligence:
             return
         cache = self._cache()
         cache[key] = value
-        # keep the cache bounded
-        if len(cache) > 400:
-            for stale in list(cache.keys())[:100]:
-                cache.pop(stale, None)
         try:
             self.db.set_preference(CACHE_KEY, cache)
         except Exception:
@@ -70,22 +80,130 @@ class VisualIntelligence:
                 return Path(value)
         return None
 
+    @staticmethod
+    def _cache_key(asset: dict[str, Any]) -> str:
+        return f"{asset.get('sha256') or asset.get('id')}"
+
+    # ------------------------------------------------------- current signature
+    def current_vision_signature(self) -> Optional[dict[str, Any]]:
+        """The vision-verified model the engine would actually use right now."""
+        engine = self.engine
+        if engine is None:
+            return None
+        try:
+            if hasattr(engine, "routing_report"):
+                report = engine.routing_report("visual_intelligence", requires_vision=True)
+                selected = report.get("selected")
+                if selected:
+                    return {
+                        "provider": selected.get("provider"),
+                        "model": selected.get("model"),
+                        "billing": selected.get("billing"),
+                        "auth_type": selected.get("auth_type") or "",
+                    }
+            entry = engine.resolve("visual_intelligence", requires_vision=True)
+            if entry:
+                return {
+                    "provider": entry.get("provider"),
+                    "model": entry.get("model"),
+                    "billing": entry.get("billing"),
+                    "auth_type": entry.get("auth_type") or "",
+                }
+        except Exception:
+            return None
+        return None
+
+    def _provenance(
+        self, asset: dict[str, Any], signature: Optional[dict[str, Any]], state: str
+    ) -> dict[str, Any]:
+        return {
+            "sha256": asset.get("sha256"),
+            "provider": (signature or {}).get("provider") or "deterministic",
+            "model": (signature or {}).get("model") or "pixel_statistics",
+            "prompt_version": PROMPT_VERSION,
+            "created_at": _now(),
+            "analysis_state": state,
+        }
+
+    def resolve_state(self, cached: Optional[dict[str, Any]], current: Optional[dict[str, Any]]) -> str:
+        """Map a cache entry to one of the four explicit states."""
+        if not cached:
+            return "unavailable" if current is None else "unavailable"
+        prov = cached.get("provenance") or {}
+        if not prov:
+            # legacy cache entry (pre-2.8): no provenance, therefore not trustworthy
+            return "stale"
+        declared = cached.get("analysis_state") or prov.get("analysis_state")
+        if declared in STATES:
+            state = declared
+        elif cached.get("vision_verified"):
+            state = "verified"
+        else:
+            state = "deterministic"
+        if state == "unavailable":
+            return "unavailable"
+        if current is None:
+            # no vision model at all: a verified analysis stays valid, a fallback stays fallback
+            return "verified" if state == "verified" else ("stale" if state == "stale" else "deterministic")
+        same = (
+            prov.get("provider") == current.get("provider")
+            and prov.get("model") == current.get("model")
+            and prov.get("prompt_version") == PROMPT_VERSION
+        )
+        if state == "verified":
+            return "verified" if same else "stale"
+        # a better model exists: the fallback (or old model) analysis must be upgraded
+        return "stale"
+
     # ------------------------------------------------------------------ review
     def review_asset(
         self,
         asset: dict[str, Any],
         production_id: Optional[str] = None,
         refresh: bool = False,
+        allow_engine: bool = True,
     ) -> dict[str, Any]:
-        path = self._asset_path(asset)
-        key = f"{asset.get('sha256') or asset.get('id')}"
+        key = self._cache_key(asset)
         cached = self._cache().get(key)
-        if cached and not refresh:
-            return cached
+        current = self.current_vision_signature()
+        state = self.resolve_state(cached, current)
+
+        if cached and not refresh and state in ("verified", "deterministic"):
+            return {**cached, "cache_hit": True, "analysis_state": state}
+
+        path = self._asset_path(asset)
+        declared_path = asset.get("working_path") or asset.get("original_path")
+        if path is None:
+            review = self._deterministic_review(asset)
+            if declared_path:
+                # the asset declares a file that cannot be read: say it, don't invent pixels
+                review.update(
+                    {
+                        "analysis_state": "unavailable",
+                        "provenance": self._provenance(asset, None, "unavailable"),
+                        "notes": "File immagine dichiarato ma non leggibile: nessuna analisi dei pixel.",
+                    }
+                )
+            else:
+                review["notes"] = (
+                    "Analisi deterministica dai metadati reali dell'asset (nessun file immagine associato, "
+                    "nessun modello visivo disponibile)."
+                )
+            self._store(key, review)
+            return {**review, "cache_hit": False}
+
         fallback = self._deterministic_review(asset)
-        if self.engine is None or path is None:
-            self._store(key, fallback)
-            return fallback
+        engine_ready = allow_engine and self.engine is not None and current is not None
+        if not engine_ready:
+            review = {
+                **fallback,
+                "analysis_state": "deterministic" if current is None else (state if state == "stale" else "deterministic"),
+                "provenance": self._provenance(asset, None, "deterministic"),
+                "fallback_reason": "nessun modello con visione verificata configurato" if current is None else "",
+            }
+            self._store(key, review)
+            return {**review, "cache_hit": False}
+
         messages = [
             {"role": "system", "content": "Sei il Visual Intelligence di KORA: descrivi solo ciò che vedi."},
             {"role": "user", "content": PROMPT},
@@ -100,9 +218,18 @@ class VisualIntelligence:
                 image_paths=[path],
                 production_id=production_id,
             )
-        except EngineError:
-            self._store(key, fallback)
-            return fallback
+        except EngineError as exc:
+            # keep the old analysis, but declare it stale (never fake an upgrade)
+            base = cached or fallback
+            review = {
+                **base,
+                "analysis_state": "stale",
+                "provenance": {**(base.get("provenance") or self._provenance(asset, None, "stale")),
+                               "analysis_state": "stale", "checked_at": _now()},
+                "fallback_reason": f"motore visivo non disponibile: {str(exc)[:160]}",
+            }
+            self._store(key, review)
+            return {**review, "cache_hit": False}
         try:
             start = result.text.find("{")
             end = result.text.rfind("}")
@@ -110,8 +237,14 @@ class VisualIntelligence:
         except ValueError:
             data = {}
         if not isinstance(data, dict) or not data.get("description"):
-            self._store(key, fallback)
-            return fallback
+            review = {
+                **fallback,
+                "analysis_state": "stale" if state == "stale" else "deterministic",
+                "provenance": self._provenance(asset, None, "deterministic"),
+                "fallback_reason": "risposta del modello non interpretabile come JSON",
+            }
+            self._store(key, review)
+            return {**review, "cache_hit": False}
         review = {
             "description": str(data.get("description"))[:400],
             "subjects": [str(s)[:40] for s in (data.get("subjects") or [])][:8],
@@ -124,9 +257,18 @@ class VisualIntelligence:
             "notes": str(data.get("notes") or "")[:200],
             "source": f"engine:{result.provider}/{result.model}",
             "vision_verified": bool(result.raw.get("vision", True)),
+            "analysis_state": "verified",
+            "provenance": {
+                "sha256": asset.get("sha256"),
+                "provider": current.get("provider"),
+                "model": result.model or current.get("model"),
+                "prompt_version": PROMPT_VERSION,
+                "created_at": _now(),
+                "analysis_state": "verified",
+            },
         }
         self._store(key, review)
-        return review
+        return {**review, "cache_hit": False}
 
     def _deterministic_review(self, asset: dict[str, Any]) -> dict[str, Any]:
         analysis = asset.get("analysis") or {}
@@ -150,6 +292,15 @@ class VisualIntelligence:
             "notes": "Analisi deterministica su statistiche reali dell'immagine (nessun modello visivo disponibile).",
             "source": "deterministic",
             "vision_verified": False,
+            "analysis_state": "deterministic",
+            "provenance": {
+                "sha256": asset.get("sha256"),
+                "provider": "deterministic",
+                "model": "pixel_statistics",
+                "prompt_version": PROMPT_VERSION,
+                "created_at": _now(),
+                "analysis_state": "deterministic",
+            },
         }
 
     # ------------------------------------------------------------------ choice
@@ -188,16 +339,88 @@ class VisualIntelligence:
         scored.sort(key=lambda pair: pair[0], reverse=True)
         return [asset for _, asset in scored[:limit]]
 
-    def annotate_vault(self, production_id: Optional[str] = None, limit: int = 12) -> int:
-        """Attach a vision review to the newest assets that do not have one yet."""
-        updated = 0
-        for asset in self.vault.list_assets()[:limit]:
-            if (asset.get("analysis") or {}).get("multimodal", {}).get("vision_review"):
+    # -------------------------------------------------------------- vault runs
+    def vault_status(self) -> dict[str, Any]:
+        """Provenance overview of the whole Vault, asset by asset."""
+        cache = self._cache()
+        current = self.current_vision_signature()
+        rows: list[dict[str, Any]] = []
+        counts = {state: 0 for state in STATES}
+        skipped_media = 0
+        for asset in self.vault.list_assets():
+            if asset.get("media_type") != "image":
+                # vision provenance only applies to photographs (audio/video keep their own data)
+                skipped_media += 1
                 continue
-            review = self.review_asset(asset, production_id=production_id)
+            cached = cache.get(self._cache_key(asset))
+            declared = asset.get("working_path") or asset.get("original_path")
+            state = self.resolve_state(cached, current) if cached else (
+                "unavailable" if (declared and self._asset_path(asset) is None) else "deterministic"
+            )
+            counts[state] = counts.get(state, 0) + 1
+            rows.append(
+                {
+                    "asset_id": asset["id"],
+                    "filename": asset.get("filename"),
+                    "analysis_state": state,
+                    "provenance": (cached or {}).get("provenance"),
+                    "vision_verified": bool((cached or {}).get("vision_verified")),
+                }
+            )
+        return {
+            "current_vision_signature": current,
+            "counts": counts,
+            "total": len(rows),
+            "skipped_non_image_assets": skipped_media,
+            "assets": rows,
+        }
+
+    def annotate_vault(
+        self,
+        production_id: Optional[str] = None,
+        limit: Optional[int] = None,
+        force: bool = False,
+        include_images_only: bool = True,
+    ) -> dict[str, Any]:
+        """Analyse every asset that needs it (no permanent first-N cap).
+
+        ``limit`` is a per-run batch size, never a permanent ceiling.
+        """
+        assets = [
+            a
+            for a in self.vault.list_assets()
+            if not include_images_only or a.get("media_type") == "image"
+        ]
+        stats = {"scanned": len(assets), "analyzed": 0, "verified": 0, "deterministic": 0,
+                 "stale": 0, "unavailable": 0, "skipped": 0, "limit": limit, "force": force}
+        processed = 0
+        for asset in assets:
+            if limit is not None and processed >= limit:
+                stats["skipped"] += 1
+                continue
+            cached = self._cache().get(self._cache_key(asset))
+            state = self.resolve_state(cached, self.current_vision_signature())
+            needs = force or cached is None or state in ("stale", "unavailable")
+            if not needs:
+                stats["skipped"] += 1
+                continue
+            review = self.review_asset(asset, production_id=production_id, refresh=force)
+            processed += 1
+            stats["analyzed"] += 1
+            stats[review.get("analysis_state", "deterministic")] = stats.get(review.get("analysis_state", "deterministic"), 0) + 1
             try:
                 self.vault.set_vision_review(asset["id"], review)
-                updated += 1
             except Exception:
-                continue
-        return updated
+                pass
+        self.last_run = stats
+        return stats
+
+    def upgrade_fallback_analyses(self, production_id: Optional[str] = None) -> dict[str, Any]:
+        """Called after a vision model becomes verified: upgrade stale/fallback rows."""
+        if self.current_vision_signature() is None:
+            return {"upgraded": 0, "reason": "nessun modello visivo verificato"}
+        return self.annotate_vault(production_id=production_id, limit=None, force=False)
+
+    def reanalyze_vault_all(self, production_id: Optional[str] = None) -> dict[str, Any]:
+        """Full Vault re-analysis with the currently configured vision model."""
+        return self.annotate_vault(production_id=production_id, limit=None, force=True)

@@ -182,9 +182,26 @@ class AIMediaLab:
         fps: int = DEFAULT_FPS,
         width: int = DEFAULT_WIDTH,
         height: int = DEFAULT_HEIGHT,
+        shot_plan: Optional[dict[str, Any]] = None,
     ) -> Path:
-        """Mode B — Conservative deterministic camera motion on an authentic photograph."""
+        """Mode B — Conservative deterministic camera motion on an authentic photograph.
+
+        When a Smart Shot Generator plan is provided, the real derived framing is
+        used: the photo is cropped to the analysed 9:16 window and the zoompan
+        motion follows the plan's keyframes, zoom ramp, easing and depth drift.
+        """
         duration_sec = duration_frames / fps
+        if shot_plan and shot_plan.get("crop") and shot_plan.get("keyframes"):
+            return self._animate_with_shot_plan(
+                asset_path=asset_path,
+                output_path=output_path,
+                duration_frames=duration_frames,
+                shot_plan=shot_plan,
+                fps=fps,
+                width=width,
+                height=height,
+            )
+
         # Render at 25fps using smooth subpixel zoompan on high-res pre-scaled canvas
         # Pre-scale to cover 1080x1920 with generous headroom (1440x2560) for smooth pan/zoom
         if motion == CameraMotion.SLOW_PULL_OUT.value:
@@ -254,6 +271,84 @@ class AIMediaLab:
             ],
             timeout=180,
         )
+        return output_path
+
+    def _animate_with_shot_plan(
+        self,
+        *,
+        asset_path: Path,
+        output_path: Path,
+        duration_frames: int,
+        shot_plan: dict[str, Any],
+        fps: int,
+        width: int,
+        height: int,
+    ) -> Path:
+        """Apply the derived shot: real crop + keyframed zoompan motion."""
+        from kora_studio.agents.smart_shot_generator import zoompan_expressions
+
+        duration_sec = duration_frames / fps
+
+        crop = shot_plan["crop"]
+        with Image.open(asset_path) as raw:
+            img = ImageOps.exif_transpose(raw).convert("RGB")
+            w, h = img.size
+            left = int(round(crop["x"] * w))
+            top = int(round(crop["y"] * h))
+            cw = max(64, min(w - left, int(round(crop["w"] * w))))
+            ch = max(64, min(h - top, int(round(crop["h"] * h))))
+            cropped = img.crop((left, top, left + cw, top + ch))
+            # normalise to the working canvas ratio (9:16) without stretching
+            target_ratio = width / height
+            if cw / ch > target_ratio:
+                new_w = int(ch * target_ratio)
+                cropped = cropped.crop(((cw - new_w) // 2, 0, (cw - new_w) // 2 + new_w, ch))
+            elif cw / ch < target_ratio:
+                new_h = int(cw / target_ratio)
+                cropped = cropped.crop((0, max(0, (ch - new_h) // 2), cw, max(0, (ch - new_h) // 2) + new_h))
+            prepared = CACHE_DIR / f"shot_{uuid.uuid4().hex[:8]}.png"
+            prepared.parent.mkdir(parents=True, exist_ok=True)
+            cropped.save(prepared, "PNG")
+
+        z_expr, x_expr, y_expr = zoompan_expressions(shot_plan, duration_frames)
+        vf = (
+            f"scale={width * 2}:{height * 2}:force_original_aspect_ratio=increase,"
+            f"crop={width * 2}:{height * 2},"
+            f"zoompan=z='{z_expr}':x='{x_expr}':y='{y_expr}':d={duration_frames}:s={width}x{height}:fps={fps},"
+            f"setsar=1,format=yuv420p"
+        )
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        run_ffmpeg(
+            [
+                "-y",
+                "-loglevel",
+                "error",
+                "-loop",
+                "1",
+                "-i",
+                str(prepared),
+                "-vf",
+                vf,
+                "-t",
+                f"{duration_sec:.4f}",
+                "-r",
+                str(fps),
+                "-c:v",
+                "libx264",
+                "-preset",
+                "medium",
+                "-crf",
+                "18",
+                "-pix_fmt",
+                "yuv420p",
+                str(output_path),
+            ],
+            timeout=180,
+        )
+        try:
+            prepared.unlink(missing_ok=True)
+        except Exception:
+            pass
         return output_path
 
     def request_image_to_video(

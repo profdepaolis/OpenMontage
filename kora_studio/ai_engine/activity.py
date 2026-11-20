@@ -46,6 +46,13 @@ class AIActivityLog:
         error_kind: Optional[str] = None,
         error_message: str = "",
         cancelled: bool = False,
+        estimated_cost_eur: Optional[float] = None,
+        unit_price_per_1k_eur: Optional[float] = None,
+        cost_basis: str = "unknown",
+        attachments: int = 0,
+        auth_type: str = "",
+        request_status: str = "completed",
+        vision_image: bool = False,
     ) -> str:
         call_id = f"ai_{uuid.uuid4().hex[:12]}"
         if self.db is None:
@@ -70,6 +77,13 @@ class AIActivityLog:
             "error_message": (error_message or "")[:500],
             "cancelled": 1 if cancelled else 0,
             "created_at": _utcnow(),
+            "estimated_cost_eur": estimated_cost_eur,
+            "unit_price_per_1k_eur": unit_price_per_1k_eur,
+            "cost_basis": cost_basis or "unknown",
+            "attachments": int(attachments or 0),
+            "auth_type": auth_type or "",
+            "request_status": request_status or "completed",
+            "vision_image": 1 if vision_image else 0,
         }
         try:
             with self.db.session() as conn:
@@ -78,11 +92,15 @@ class AIActivityLog:
                     INSERT INTO ai_activity (
                         id, production_id, agent, provider, model, started_at, duration_ms,
                         outcome, attempts, fallback_used, fallback_from, cost_eur, cost_known,
-                        billing, execution, error_kind, error_message, cancelled, created_at
+                        billing, execution, error_kind, error_message, cancelled, created_at,
+                        estimated_cost_eur, unit_price_per_1k_eur, cost_basis, attachments,
+                        auth_type, request_status, vision_image
                     ) VALUES (
                         :id, :production_id, :agent, :provider, :model, :started_at, :duration_ms,
                         :outcome, :attempts, :fallback_used, :fallback_from, :cost_eur, :cost_known,
-                        :billing, :execution, :error_kind, :error_message, :cancelled, :created_at
+                        :billing, :execution, :error_kind, :error_message, :cancelled, :created_at,
+                        :estimated_cost_eur, :unit_price_per_1k_eur, :cost_basis, :attachments,
+                        :auth_type, :request_status, :vision_image
                     )
                     """,
                     payload,
@@ -125,6 +143,11 @@ class AIActivityLog:
             item["fallback_used"] = bool(item.get("fallback_used"))
             item["cost_known"] = bool(item.get("cost_known"))
             item["cancelled"] = bool(item.get("cancelled"))
+            item["vision_image"] = bool(item.get("vision_image"))
+            # explicit three-level cost semantics for the monitor
+            item["unit_price_per_1k_eur"] = item.get("unit_price_per_1k_eur")
+            item["estimated_cost_eur"] = item.get("estimated_cost_eur")
+            item["actual_cost_eur"] = item.get("cost_eur") if item.get("cost_known") else None
             out.append(item)
         return out
 
@@ -133,6 +156,7 @@ class AIActivityLog:
         total = len(rows)
         ok = sum(1 for r in rows if r.get("outcome") == "ok")
         costs = [r["cost_eur"] for r in rows if r.get("cost_known") and r.get("cost_eur") is not None]
+        estimates = [r["estimated_cost_eur"] for r in rows if r.get("estimated_cost_eur") is not None]
         unknown = sum(1 for r in rows if not r.get("cost_known"))
         fallbacks = sum(1 for r in rows if r.get("fallback_used"))
         return {
@@ -141,8 +165,13 @@ class AIActivityLog:
             "errors": total - ok,
             "fallbacks": fallbacks,
             "known_cost_eur": round(sum(costs), 5),
+            "actual_cost_eur": round(sum(costs), 5),
+            "estimated_cost_eur": round(sum(estimates), 5),
             "unknown_cost_calls": unknown,
-            "note": "Costo reale solo dove il prezzo è pubblicato; altrove «sconosciuto» (non inventato).",
+            "note": (
+                "Tariffa unitaria, costo stimato e costo reale sono distinti: il costo reale è 0 solo per "
+                "abbonamenti/locali verificati, altrimenti è «stimato» o «sconosciuto» (mai inventato)."
+            ),
         }
 
     def export_json(self, limit: int = MAX_ROWS_RETURNED) -> str:

@@ -92,6 +92,12 @@ class StoryboardScene(BaseModel):
     approval_status: str = "approvata"
     is_outro: bool = False
     crop_focus: Optional[dict[str, float]] = None  # x, y, zoom
+    # Smart Shot Generator output: the real derived framing consumed by the editor
+    shot_plan: Optional[dict[str, Any]] = None
+    # Provenance of the plan: smart_shot | story_director_fallback | manual
+    shot_source: str = "smart_shot"
+    preview_status: str = "pending"  # pending | previewed | approved
+
 
 
 class CreativeRequestPayload(BaseModel):

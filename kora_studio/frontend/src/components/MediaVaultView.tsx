@@ -40,6 +40,38 @@ const CATEGORIES = [
 
 export function MediaVaultView({ assets, onRefresh }: MediaVaultViewProps) {
   const [query, setQuery] = useState("");
+  const [vision, setVision] = useState<{
+    current_vision_signature: Record<string, string> | null;
+    counts: Record<string, number>;
+    total: number;
+  } | null>(null);
+  const [visionBusy, setVisionBusy] = useState(false);
+  const [visionMsg, setVisionMsg] = useState<string | null>(null);
+
+  const loadVision = async () => {
+    try {
+      setVision(await koraApi.visionStatus());
+    } catch {
+      setVision(null);
+    }
+  };
+
+  const handleVisionReanalyze = async () => {
+    setVisionBusy(true);
+    setVisionMsg(null);
+    try {
+      const res = await koraApi.visionReanalyze(true);
+      setVisionMsg(
+        `Analisi Vault: ${res.analyzed ?? 0} asset elaborati, ${res.verified ?? 0} verificati, ` +
+          `${res.deterministic ?? 0} deterministici, ${res.stale ?? 0} da aggiornare.`
+      );
+      await loadVision();
+    } catch (e) {
+      setVisionMsg((e as Error).message);
+    } finally {
+      setVisionBusy(false);
+    }
+  };
   const [selectedCategory, setSelectedCategory] = useState("Tutti");
   const [searchResults, setSearchResults] = useState<MediaAsset[] | null>(null);
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
@@ -225,6 +257,47 @@ export function MediaVaultView({ assets, onRefresh }: MediaVaultViewProps) {
             />
           </label>
         </div>
+      </div>
+
+      {/* Visual Intelligence provenance */}
+      <div className="rounded-2xl border border-[#DDD4C4] bg-white p-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h3 className="text-sm font-semibold text-[#1D1B18]">Visual Intelligence · provenienza</h3>
+            <p className="text-[11px] text-[#6C6459]">
+              {vision?.current_vision_signature
+                ? `Modello visivo attivo: ${vision.current_vision_signature.provider}/${vision.current_vision_signature.model}`
+                : "Nessun modello con visione verificata: analisi dichiarate come deterministiche."}
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => void loadVision()}
+              className="rounded-xl border border-[#DDD4C4] bg-[#FAF7F2] px-3 py-2 text-[11px] font-medium text-[#1D1B18]"
+            >
+              Stato analisi
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleVisionReanalyze()}
+              disabled={visionBusy}
+              className="rounded-xl bg-[#1D1B18] px-3 py-2 text-[11px] font-medium text-white disabled:opacity-50"
+            >
+              {visionBusy ? "Rianalisi…" : "Rianalizza tutto il Vault"}
+            </button>
+          </div>
+        </div>
+        {vision && (
+          <div className="mt-2 flex flex-wrap gap-3 text-[11px] text-[#4A443C]">
+            <span>verificate: {vision.counts.verified ?? 0}</span>
+            <span>deterministiche: {vision.counts.deterministic ?? 0}</span>
+            <span>da aggiornare: {vision.counts.stale ?? 0}</span>
+            <span>non disponibili: {vision.counts.unavailable ?? 0}</span>
+            <span>totale foto: {vision.total}</span>
+          </div>
+        )}
+        {visionMsg && <p className="mt-2 text-[11px] text-[#224C66]">{visionMsg}</p>}
       </div>
 
       {/* Google Veo / Flow Lab */}

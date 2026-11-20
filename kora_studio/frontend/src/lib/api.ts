@@ -12,6 +12,8 @@ import type {
   JobRecord,
   MediaAsset,
   ProjectRecord,
+  PreviewManifest,
+  PreviewSceneCard,
   ProviderRecord,
   StoryboardScene,
   ThemeSuggestionResponse,
@@ -198,6 +200,43 @@ export const koraApi = {
     apiFetch<{ project: ProjectRecord; job: JobRecord }>(`/api/projects/${id}/produce`, {
       method: "POST",
       body: JSON.stringify(opts || {}),
+    }),
+  createPreview: (id: string, force = false) =>
+    apiFetch<PreviewManifest>(`/api/projects/${id}/preview?force=${force ? "true" : "false"}`, {
+      method: "POST",
+    }),
+  previewManifest: (id: string) => apiFetch<PreviewManifest>(`/api/projects/${id}/preview`),
+  previewVideoUrl: (id: string) => `/api/projects/${id}/preview/video`,
+  previewThumbUrl: (id: string, scene: number, kind: "source" | "derived") =>
+    `/api/projects/${id}/preview/scene/${scene}/thumb/${kind}`,
+  reviseScene: (id: string, scene: number, instruction: string) =>
+    apiFetch<{
+      applied: boolean;
+      scene_number: number;
+      proposal: { changes: Record<string, unknown>; source: string; note: string };
+      preserved_approved_scenes: number[];
+      preview?: PreviewManifest;
+      card?: PreviewSceneCard;
+    }>(`/api/projects/${id}/scenes/${scene}/revise`, {
+      method: "POST",
+      body: JSON.stringify({ instruction, regenerate_preview: true }),
+    }),
+  approveScene: (id: string, scene: number, approved = true) =>
+    apiFetch<{ scene_number: number; approval_status: string; approved_scenes: number[] }>(
+      `/api/projects/${id}/scenes/${scene}/approve`,
+      { method: "POST", body: JSON.stringify({ approved }) }
+    ),
+  visionStatus: () =>
+    apiFetch<{
+      current_vision_signature: Record<string, string> | null;
+      counts: Record<string, number>;
+      total: number;
+      skipped_non_image_assets: number;
+    }>("/api/vault/vision/status"),
+  visionReanalyze: (force = true) =>
+    apiFetch<Record<string, number>>("/api/vault/vision/reanalyze", {
+      method: "POST",
+      body: JSON.stringify({ force }),
     }),
   previewRevision: (id: string, instruction: string) =>
     apiFetch<{
