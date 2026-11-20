@@ -469,3 +469,104 @@ def test_gemini_invalid_key_produces_readable_fallback_reason(isolated_env, monk
     assert "Motore deterministico locale KORA attivo" in reason
     assert "Google Gemini" in reason
     assert "non autorizzata" in reason
+
+
+class _FakeElResp:
+    def __init__(self, status_code: int, payload: dict | None = None, content: bytes = b"", text: str = ""):
+        self.status_code = status_code
+        self._payload = payload or {}
+        self.content = content
+        self.text = text or ("__PAYLOAD__" if payload else "")
+
+    def json(self):
+        return self._payload
+
+
+def test_elevenlabs_free_plan_switches_to_own_premade_voice(isolated_env, monkeypatch):
+    """Piano Free + voce di libreria (402): KORA usa automaticamente una voce premade del proprio account."""
+    import requests as _requests
+
+    from kora_studio.agents.voice_director import VoiceDirector
+
+    db = Database(isolated_env["db_path"])
+    vault = MediaVault(db)
+    vault.seed_kora_authentic_assets()
+    pm = ProviderManager(db)
+    pm.ensure_seeded()
+    pm.set_api_key("elevenlabs_api", "fake-eleven-key")
+    vd = VoiceDirector(vault, pm)
+    vd.set_elevenlabs_voice_id("brando", "LIBRARY_BRANDO")
+
+    plan_body = (
+        '{"detail":{"type":"payment_required","code":"paid_plan_required","message":'
+        '"Free users cannot use library voices via the API. Please upgrade your subscription to use this voice."}}'
+    )
+    posted: list[str] = []
+
+    def _fake_post(url, headers=None, json=None, timeout=None):
+        posted.append(url)
+        if url.endswith("LIBRARY_BRANDO"):
+            return _FakeElResp(402, text=plan_body)
+        if url.endswith("PREMADE_MALE_IT"):
+            return _FakeElResp(200, content=b"ID3-fake-mp3-payload")
+        return _FakeElResp(404, text="not found")
+
+    def _fake_get(url, headers=None, timeout=None, params=None):
+        assert "/v1/voices" in url
+        return _FakeElResp(
+            200,
+            payload={
+                "voices": [
+                    {"voice_id": "ANOTHER_LIBRARY", "category": "library", "labels": {"gender": "male", "language": "it"}},
+                    {"voice_id": "PREMADE_MALE_IT", "category": "premade", "labels": {"gender": "male", "language": "it"}},
+                ]
+            },
+        )
+
+    monkeypatch.setattr(_requests, "post", _fake_post)
+    monkeypatch.setattr(_requests, "get", _fake_get)
+
+    dest = isolated_env["tmp_path"] / "el_out.mp3"
+    out = vd._synthesize_elevenlabs("brando", "C'è un'ora davanti al mare.", dest)
+
+    assert out is not None and out.is_file()
+    assert dest.read_bytes().startswith(b"ID3")
+    assert posted[0].endswith("LIBRARY_BRANDO")
+    assert posted[-1].endswith("PREMADE_MALE_IT")
+    assert vd._elevenlabs_note and "piano a pagamento" in vd._elevenlabs_note
+    assert pm.db.get_preference("elevenlabs_fallback_voice_brando") == "PREMADE_MALE_IT"
+
+
+def test_elevenlabs_plan_block_without_premade_gives_actionable_error(isolated_env, monkeypatch):
+    """Senza voci premade/clonate il messaggio deve essere operativo, non un JSON grezzo."""
+    import requests as _requests
+
+    from kora_studio.agents.voice_director import VoiceDirector
+
+    db = Database(isolated_env["db_path"])
+    vault = MediaVault(db)
+    vault.seed_kora_authentic_assets()
+    pm = ProviderManager(db)
+    pm.ensure_seeded()
+    pm.set_api_key("elevenlabs_api", "fake-eleven-key")
+    vd = VoiceDirector(vault, pm)
+    vd.set_elevenlabs_voice_id("tiziana", "LIBRARY_TIZIANA")
+
+    monkeypatch.setattr(
+        _requests,
+        "post",
+        lambda *a, **k: _FakeElResp(402, text='{"detail":{"code":"paid_plan_required","message":"Free users cannot use library voices via the API."}}'),
+    )
+    monkeypatch.setattr(
+        _requests,
+        "get",
+        lambda *a, **k: _FakeElResp(200, payload={"voices": [{"voice_id": "LIB_ONLY", "category": "library", "labels": {"gender": "female"}}]}),
+    )
+
+    import pytest as _pytest
+
+    with _pytest.raises(RuntimeError) as excinfo:
+        vd._synthesize_elevenlabs("tiziana", "Buongiorno dal KORA.", isolated_env["tmp_path"] / "x.mp3")
+    message = str(excinfo.value)
+    assert "libreria ElevenLabs" in message
+    assert "voce 'premade' o clonate" in message or "premade" in message

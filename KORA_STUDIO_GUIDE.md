@@ -112,3 +112,15 @@ KORA_ALLOWED_ORIGIN="https://kora.miodominio.it"  # origini CORS aggiuntive
 ```
 
 Senza queste variabili qualsiasi `Host`/`Origin` diverso dal locale resta bloccato con `403`.
+
+---
+
+## 5. Messaggi frequenti (e cosa significano davvero)
+
+| Messaggio | Significato | Azione |
+|---|---|---|
+| `Google Gemini: 404 … generateContent` | Il modello configurato non è abilitato per la tua chiave/progetto. | Nessuna: KORA interroga `ListModels`, prova in catena i modelli disponibili, memorizza quello funzionante e lo mostra in *AI Providers*. |
+| `Motore deterministico locale KORA attivo (0 €)` | Nessun LLM esterno ha risposto: le proposte restano valide, generate offline. | Apri «dettagli motore» sotto il titolo delle proposte per la causa esatta. |
+| `ElevenLabs … paid_plan_required / library voices (402)` | Il piano Free non consente le voci della *libreria* via API. | KORA passa automaticamente a una voce `premade`/`clonata` del tuo account; per usare la voce esatta serve un Voice ID utilizzabile o un piano superiore. |
+| `Fallback utilizzato: Piper TTS locale gratuito` | Sintesi offline gratuita, nessun costo, timbro più sintetico. | Per la voce artistica: Voice ID ElevenLabs valido, OpenAI TTS, oppure registrazione originale in *Media Vault*. |
+| `Avvisi · fallback automatici` (badge ambra in Production) | Il job è proseguito correttamente sostituendo un servizio. | Rosso = bloccante; ambra = sostituzione automatica già gestita. |

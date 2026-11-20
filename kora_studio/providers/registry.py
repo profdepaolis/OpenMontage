@@ -346,7 +346,7 @@ class ProviderManager:
                 conn.execute(
                     """
                     UPDATE providers
-                    SET operational_status = CASE WHEN operational_status IN ('operativo','errore') AND ? != '' THEN operational_status ELSE ? END,
+                    SET operational_status = CASE WHEN operational_status IN ('operativo','errore','limitato') AND ? != '' THEN operational_status ELSE ? END,
                         quota_status = CASE WHEN ? = '' THEN 'Non verificabile' ELSE quota_status END,
                         last_check = COALESCE(last_check, ?)
                     WHERE id = ?
@@ -387,7 +387,20 @@ class ProviderManager:
                 if r.status_code == 200:
                     d = r.json()
                     rem = int(d.get("character_limit", 0)) - int(d.get("character_count", 0))
+                    tier = str(d.get("tier") or "").strip().lower()
+                    is_free = tier in ("free", "trial") or (
+                        not d.get("can_extend_character_limit") and tier == ""
+                    )
                     quota = f"{max(0, rem)} caratteri residui"
+                    if is_free:
+                        # Il piano Free accetta la chiave ma rifiuta le voci di libreria via API (HTTP 402).
+                        status = "limitato"
+                        quota = f"{max(0, rem)} caratteri residui · piano Free"
+                        errors.append(
+                            "Piano ElevenLabs Free: le voci della libreria non sono utilizzabili via API "
+                            "(errore 402). Usa un Voice ID di una voce 'premade' del tuo account o passa a un "
+                            "piano a pagamento; in alternativa KORA usa automaticamente Piper TTS locale."
+                        )
                 elif r.status_code in (401, 403):
                     status = "errore"
                     errors.append("API key ElevenLabs non valida (401/403)")

@@ -31,6 +31,12 @@ export function ProductionView({
   onOpenPreview,
 }: ProductionViewProps) {
   const job = activeJob || jobs[0] || null;
+  const warnCount = (job?.logs ?? []).filter((l) =>
+    ["WARN", "WARNING"].includes((l.level || "").toUpperCase())
+  ).length;
+  const errorCount = (job?.logs ?? []).filter(
+    (l) => (l.level || "").toUpperCase() === "ERROR"
+  ).length;
 
   const handleCancel = async (id: string) => {
     await koraApi.cancelJob(id);
@@ -152,14 +158,54 @@ export function ProductionView({
 
           {/* Agent Logs */}
           <div className="rounded-2xl border border-[#DDD4C4] bg-white p-5">
-            <h4 className="text-sm font-medium text-[#1D1B18]">Log KORA Director e Agenti</h4>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h4 className="text-sm font-medium text-[#1D1B18]">Log KORA Director e Agenti</h4>
+              <div className="flex flex-wrap items-center gap-1.5 text-[10px]">
+                {warnCount > 0 && (
+                  <span className="rounded-full bg-amber-50 px-2 py-0.5 font-medium text-amber-800">
+                    {warnCount} avvisi · fallback automatici
+                  </span>
+                )}
+                {errorCount > 0 && (
+                  <span className="rounded-full bg-red-50 px-2 py-0.5 font-medium text-red-700">
+                    {errorCount} errori
+                  </span>
+                )}
+                {warnCount === 0 && errorCount === 0 && (
+                  <span className="rounded-full bg-[#F1F7EF] px-2 py-0.5 font-medium text-[#2F5D3A]">
+                    nessun avviso
+                  </span>
+                )}
+              </div>
+            </div>
             <div className="mt-3 max-h-64 overflow-y-auto space-y-1.5 font-mono text-[11px]">
-              {job.logs.map((l, idx) => (
-                <div key={idx} className="flex gap-2 rounded bg-[#FAF7F2] px-3 py-1.5">
-                  <span className="text-[#9A8052] shrink-0">[{l.agent}]</span>
-                  <span className="text-[#1D1B18]">{l.message}</span>
-                </div>
-              ))}
+              {job.logs.map((l, idx) => {
+                const level = (l.level || "INFO").toUpperCase();
+                const isError = level === "ERROR";
+                const isWarn = level === "WARN" || level === "WARNING";
+                return (
+                  <div
+                    key={idx}
+                    className={`flex gap-2 rounded px-3 py-1.5 ${
+                      isError ? "bg-red-50" : isWarn ? "bg-amber-50/70" : "bg-[#FAF7F2]"
+                    }`}
+                  >
+                    {(isError || isWarn) && (
+                      <AlertTriangle
+                        className={`mt-0.5 h-3 w-3 shrink-0 ${isError ? "text-red-600" : "text-amber-600"}`}
+                      />
+                    )}
+                    <span
+                      className={`shrink-0 ${
+                        isError ? "text-red-700" : isWarn ? "text-amber-800" : "text-[#9A8052]"
+                      }`}
+                    >
+                      [{l.agent}]
+                    </span>
+                    <span className={isError ? "text-red-900" : "text-[#1D1B18]"}>{l.message}</span>
+                  </div>
+                );
+              })}
             </div>
           </div>
         </div>

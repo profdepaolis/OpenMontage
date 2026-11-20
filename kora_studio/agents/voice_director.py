@@ -193,6 +193,79 @@ class VoiceDirector:
         # or contains the exact archived reference line.
         return "dove il tempo torna tuo" in lowered and "kora" in lowered
 
+    @staticmethod
+    def _is_elevenlabs_plan_block(status_code: int, body: str) -> bool:
+        """Piano Free/limiti account: ElevenLabs rifiuta le voci "library" via API (HTTP 402/403)."""
+        if status_code not in (402, 403):
+            return False
+        lowered = (body or "").lower()
+        return any(
+            marker in lowered
+            for marker in (
+                "paid_plan_required",
+                "payment_required",
+                "library voices",
+                "upgrade your subscription",
+                "insufficient_credits",
+                "quota_exceeded",
+            )
+        )
+
+    def _elevenlabs_premade_voice(self, voice_id: str, key: str) -> Optional[str]:
+        """Cerca una voce *premade* del proprio account (usabile anche dal piano Free)."""
+        import requests as _rq
+
+        try:
+            res = _rq.get(
+                "https://api.elevenlabs.io/v1/voices",
+                headers={"xi-api-key": key},
+                timeout=12,
+            )
+            if res.status_code != 200:
+                return None
+            voices = res.json().get("voices") or []
+        except Exception:
+            return None
+
+        wanted_gender = "female" if voice_id in ("tiziana", "felice") else "male"
+
+        def _rank(v: dict[str, Any]) -> tuple[int, int]:
+            labels = v.get("labels") or {}
+            category = str(v.get("category") or "")
+            gender = str(labels.get("gender") or "").lower()
+            language = str(labels.get("language") or "").lower()
+            score = 0
+            if category == "premade":
+                score += 4
+            elif category in ("cloned", "professional"):
+                score += 5  # voci proprie dell'utente: sempre utilizzabili
+            if wanted_gender in gender:
+                score += 2
+            if "it" in language or "italian" in language:
+                score += 1
+            if category == "library":
+                score -= 10  # inutilizzabili sul piano Free
+            return (-score, len(str(v.get("name") or "")))
+
+        usable = [
+            v
+            for v in voices
+            if str(v.get("category") or "") in ("premade", "cloned", "professional")
+            and str(v.get("voice_id") or "").strip()
+        ]
+        if not usable:
+            return None
+        usable.sort(key=_rank)
+        best = usable[0]
+        fallback_id = str(best.get("voice_id")).strip()
+        try:
+            self.providers.db.set_preference(
+                f"elevenlabs_fallback_voice_{voice_id}", fallback_id
+            )
+        except Exception:
+            pass
+        return fallback_id
+
     def _synthesize_elevenlabs(
         self, voice_id: str, text: str, dest: Path
     ) -> Optional[Path]:
@@ -200,21 +273,57 @@ class VoiceDirector:
         el_voice_id = self._get_elevenlabs_voice_id(voice_id)
         if not key or not el_voice_id:
             return None
-        r = requests.post(
-            f"https://api.elevenlabs.io/v1/text-to-speech/{el_voice_id}",
-            headers={"xi-api-key": key, "Content-Type": "application/json"},
-            json={
-                "text": text,
-                "model_id": "eleven_multilingual_v2",
-                "voice_settings": {"stability": 0.55, "similarity_boost": 0.78},
-            },
-            timeout=45,
-        )
+
+        def _post(voice_uid: str) -> Any:
+            return requests.post(
+                f"https://api.elevenlabs.io/v1/text-to-speech/{voice_uid}",
+                headers={"xi-api-key": key, "Content-Type": "application/json"},
+                json={
+                    "text": text,
+                    "model_id": "eleven_multilingual_v2",
+                    "voice_settings": {"stability": 0.55, "similarity_boost": 0.78},
+                },
+                timeout=45,
+            )
+
+        r = _post(el_voice_id)
+        if r.status_code != 200 and self._is_elevenlabs_plan_block(r.status_code, r.text):
+            # Recupero automatico: la voce scelta è di libreria (non usabile sul piano Free).
+            fallback_uid = self._elevenlabs_premade_voice(voice_id, key)
+            if fallback_uid and fallback_uid != el_voice_id:
+                retry = _post(fallback_uid)
+                if retry.status_code == 200:
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    dest.write_bytes(retry.content)
+                    self._elevenlabs_note = (
+                        "ElevenLabs: la voce di libreria selezionata richiede un piano a pagamento (errore 402). "
+                        f"Utilizzata una voce disponibile nel tuo account ({fallback_uid}) come sostituta, "
+                        "finché non imposti un Voice ID utilizzabile o passi a un piano superiore."
+                    )
+                    return dest
         if r.status_code != 200:
-            raise RuntimeError(f"ElevenLabs API error {r.status_code}: {r.text[:200]}")
+            detail = self._elevenlabs_error_text(r.status_code, r.text)
+            raise RuntimeError(detail)
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(r.content)
         return dest
+
+    @staticmethod
+    def _elevenlabs_error_text(status_code: int, body: str) -> str:
+        """Traduce la risposta ElevenLabs in un'indicazione operativa per l'utente."""
+        raw = body or ""
+        lowered = raw.lower()
+        if "library voices" in lowered or "paid_plan_required" in lowered:
+            return (
+                "la voce scelta appartiene alla libreria ElevenLabs e il tuo piano non consente l'uso via API "
+                "(errore 402). Imposta in AI Providers un Voice ID del tuo account (voci 'premade' o clonate) "
+                "oppure passa a un piano a pagamento."
+            )
+        if "insufficient_credits" in lowered or "quota_exceeded" in lowered:
+            return "crediti caratteri ElevenLabs esauriti per questo mese (errore 402/429)."
+        if status_code in (401, 403):
+            return "chiave ElevenLabs non valida o priva di permessi (401/403)."
+        return f"errore API {status_code}: {raw[:180]}"
 
     def _synthesize_openai_tts(
         self, voice_id: str, text: str, dest: Path
@@ -387,6 +496,7 @@ class VoiceDirector:
         substituted = False
         substitution_notice: Optional[str] = None
         el_failure_reason: Optional[str] = None
+        self._elevenlabs_note: Optional[str] = None
         source_used = ""
 
         # 1. Primary: Official ElevenLabs API (synthesizes exact new script in requested voice)
@@ -407,8 +517,11 @@ class VoiceDirector:
                     self.providers.cost_guard.record_usage(
                         "elevenlabs_api", "text_to_speech", est_el, est_el, True, "completed"
                     )
+                    if self._elevenlabs_note:
+                        substituted = True
+                        substitution_notice = self._elevenlabs_note
                 except Exception as exc:
-                    el_failure_reason = f"ElevenLabs ha restituito errore: {exc}"
+                    el_failure_reason = f"ElevenLabs non utilizzabile: {exc}"
             else:
                 el_failure_reason = (
                     f"ElevenLabs configurato ma bloccato dal Cost Guard: {auth['reason']} "
