@@ -35,6 +35,8 @@ export function ProvidersView({ providers, budget, voices, onRefresh }: Provider
       category: string;
       preview_url?: string;
       labels?: Record<string, string>;
+      usable_on_free_plan?: boolean;
+      library_voice?: boolean;
     }>
   >([]);
   const [audioPreviewUrl, setAudioPreviewUrl] = useState<string | null>(null);
@@ -460,14 +462,31 @@ export function ProvidersView({ providers, budget, voices, onRefresh }: Provider
               <div className="text-[11px] font-medium text-[#6C6459]">
                 Catalogo voci ElevenLabs ({accountVoices.length}) — ascolta e assegna:
               </div>
+              <p className="text-[10px] text-[#6C6459]">
+                KORA accetta solo voci «ok anche Free» (premade, clonate o professional) quando l&apos;account è
+                Free; le voci di libreria rispondono 402 e vengono sostituite automaticamente.
+              </p>
               {accountVoices.map((av) => (
                 <div
                   key={av.voice_id}
                   className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-white px-2.5 py-1.5 text-[11px]"
                 >
-                  <div>
+                  <div className="flex flex-wrap items-center gap-1.5">
                     <span className="font-medium text-[#1D1B18]">{av.name}</span>{" "}
                     <span className="text-[#6C6459]">({av.category || "voice"})</span>
+                    {av.library_voice && (
+                      <span
+                        className="rounded-full bg-amber-50 px-1.5 py-0.5 text-[9px] font-medium text-amber-800"
+                        title="Le voci della libreria comunitaria non sono utilizzabili via API con il piano Free (HTTP 402)."
+                      >
+                        libreria · serve piano a pagamento
+                      </span>
+                    )}
+                    {av.usable_on_free_plan && (
+                      <span className="rounded-full bg-emerald-50 px-1.5 py-0.5 text-[9px] font-medium text-emerald-800">
+                        ok anche Free
+                      </span>
+                    )}
                   </div>
                   <div className="flex items-center gap-1.5">
                     {av.preview_url && (

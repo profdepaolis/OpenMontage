@@ -654,17 +654,24 @@ class ProviderManager:
         if r.status_code != 200:
             raise RuntimeError(f"Errore ElevenLabs ({r.status_code}): impossibile leggere le voci.")
         data = r.json()
-        return [
-            {
-                "voice_id": v.get("voice_id", ""),
-                "name": v.get("name", ""),
-                "category": v.get("category", ""),
-                "preview_url": v.get("preview_url", ""),
-                "labels": v.get("labels", {}),
-            }
-            for v in data.get("voices", [])
-            if v.get("voice_id")
-        ]
+        out: list[dict[str, Any]] = []
+        for v in data.get("voices", []):
+            if not v.get("voice_id"):
+                continue
+            category = str(v.get("category") or "")
+            out.append(
+                {
+                    "voice_id": v.get("voice_id", ""),
+                    "name": v.get("name", ""),
+                    "category": category,
+                    "preview_url": v.get("preview_url", ""),
+                    "labels": v.get("labels", {}),
+                    # Le voci di libreria comunitaria non sono usabili via API sui piani gratuiti (HTTP 402).
+                    "usable_on_free_plan": category in ("premade", "cloned", "professional"),
+                    "library_voice": category == "library",
+                }
+            )
+        return out
 
     def _row_to_dict(self, row: Any) -> dict[str, Any]:
         has_key = False
