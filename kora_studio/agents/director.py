@@ -18,6 +18,8 @@ from kora_studio.agents.quality_controller import QualityController
 from kora_studio.agents.revision_engine import RevisionEngine
 from kora_studio.agents.sound_designer import SoundDesigner
 from kora_studio.agents.voice_director import VoiceDirector
+from kora_studio.ai_engine.context import BrandContextBuilder
+from kora_studio.ai_engine.manager import AIEngineManager
 from kora_studio.brand.brand_brain import BrandBrain
 from kora_studio.config import DEFAULT_FPS, PROJECTS_DIR, ensure_directories
 from kora_studio.db.database import Database, utcnow_iso
@@ -48,6 +50,14 @@ class KoraDirector:
         self.creative = CreativeDirector(
             self.db, self.brand_brain, self.vault, providers=self.providers
         )
+        self.brand_context = BrandContextBuilder(
+            self.brand_brain, history_provider=self.creative.anti_rep.get_history
+        )
+        self.ai_engine = AIEngineManager(
+            providers=self.providers, db=self.db, context_builder=self.brand_context
+        )
+        self.creative.brand_context = self.brand_context
+        self.creative.attach_engine_manager(self.ai_engine)
         self.curator = MediaCurator(self.vault)
         self.media_lab = AIMediaLab(self.vault, self.brand_brain, self.providers)
         self.voice_director = VoiceDirector(self.vault, self.providers)

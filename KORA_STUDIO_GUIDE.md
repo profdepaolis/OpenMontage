@@ -25,6 +25,50 @@ KORA STUDIO è un'applicazione web privata e modulare costruita sopra l'ecosiste
 
 ---
 
+## 1-bis. AI Engine Manager (motori AI configurabili)
+
+KORA non è legata a un solo fornitore: **Impostazioni → AI Engine Manager** (voce *AI Engine Manager* nel menu)
+permette di scegliere, verificare e cambiare motore **senza riavviare l'applicazione**.
+
+### Motori supportati
+| Provider | Tipo | Note |
+|---|---|---|
+| `opencode` | CLI locale | `opencode run --format json`, agente dedicato `kora` con permessi minimi |
+| `codex` | CLI locale | `codex exec --json`, sandbox in sola lettura quando supportata |
+| `ollama_local` | HTTP locale | **opzionale**: se manca, KORA funziona lo stesso |
+| `gemini_api` / `openai_api` / `openrouter` / `claude_api` / `deepseek_api` | API | modelli letti realmente dall'API al momento della verifica |
+| `custom_openai` | HTTP | LM Studio, llama.cpp, vLLM o qualsiasi endpoint `/v1/chat/completions` |
+
+### Stati mostrati (mai inventati)
+`indisponibile` → non installato / chiave assente / endpoint irraggiungibile · `installato` → presente ma non
+autenticato · `autenticato` → credenziali valide · `operativo` → **solo dopo una generazione reale riuscita**
+(test testo o multimodale). Il badge non diventa mai verde perché il provider compare in elenco.
+
+### Cosa si può fare dalla pagina
+- scegliere il **provider principale** e la **strategia** (`auto`, `massima qualità`, `minimo costo`, `solo locale`);
+- impostare il **budget massimo** (0–20 €) e l'autorizzazione esplicita alle chiamate a pagamento (default: 0 €);
+- salvare la **API key** (cifrata nel backend, mai restituita al frontend) o l'indirizzo di un endpoint locale;
+- **Verifica**, **Test testo**, **Test multimodale** (usa una foto reale del Vault), **Elenca modelli reali**;
+- assegnare a **ciascuno dei 9 agenti** il motore principale (*Eredita*) oppure un provider/modello specifico;
+  gli agenti con visione (Visual Intelligence, AI Media Lab, Quality Guardian) non vengono mai indirizzati su
+  modelli solo testo.
+
+### Garanzie di sicurezza e memoria
+- i token di OpenCode/Codex **non vengono letti né copiati**: il lavoro è delegato al CLI ufficiale, con
+  argomenti validati (mai una shell), `cwd` dedicata (`kora_data/ai_engine_workspace`) e timeout rigido;
+- ogni chiamata riceve lo **stesso profilo KORA versionato** (brand, regole di autenticità, stagione,
+  cronologia creativa) letto dal database locale: l'output non dipende dalla memoria di un account ChatGPT
+  o da sessioni OpenCode precedenti;
+- senza autorizzazione esplicita nessuna chiamata a pagamento viene eseguita: KORA usa abbonamenti, quote
+  gratuite e motori locali, dichiarando l'eventuale fallback.
+
+### Endpoint API
+`GET /api/ai-engine/status` · `PUT /api/ai-engine/settings` · `POST /api/ai-engine/verify/{provider}` ·
+`POST /api/ai-engine/test` · `GET /api/ai-engine/models?provider=…` · `POST /api/ai-engine/key/{provider}` ·
+`PUT /api/ai-engine/agent/{agent_id}` · `GET /api/ai-engine/routing?agent_id=…`
+
+---
+
 ## 2. Installazione, Avvio e Comandi CLI
 
 ### macOS / Linux

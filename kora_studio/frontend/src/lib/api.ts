@@ -1,4 +1,8 @@
 import type {
+  AIEngineModel,
+  AIEngineSettings,
+  AIEngineStatus,
+  AIEngineTestResult,
   BudgetSettings,
   CreativeConcept,
   CreativeRequestPayload,
@@ -353,6 +357,39 @@ export const koraApi = {
         paid_budget_eur: paidBudgetEur,
         monthly_cap_eur: monthlyCapEur,
       }),
+    }),
+
+  // AI Engine Manager (provider universali, routing, agenti)
+  engineStatus: (refresh = false) =>
+    apiFetch<AIEngineStatus>(`/api/ai-engine/status${refresh ? "?refresh=true" : ""}`),
+  engineUpdateSettings: (patch: Partial<AIEngineSettings>) =>
+    apiFetch<AIEngineStatus & AIEngineSettings & { status: AIEngineStatus }>("/api/ai-engine/settings", {
+      method: "PUT",
+      body: JSON.stringify(patch),
+    }),
+  engineVerify: (providerId: string) =>
+    apiFetch<AIEngineStatus["providers"][number]>(`/api/ai-engine/verify/${providerId}`, {
+      method: "POST",
+    }),
+  engineTest: (payload: { provider: string; multimodal?: boolean; model?: string; prompt?: string }) =>
+    apiFetch<AIEngineTestResult>("/api/ai-engine/test", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  engineModels: (providerId: string) =>
+    apiFetch<AIEngineModel[]>(`/api/ai-engine/models?provider=${encodeURIComponent(providerId)}`),
+  engineSetKey: (providerId: string, apiKey: string) =>
+    apiFetch<AIEngineStatus["providers"][number]>(`/api/ai-engine/key/${providerId}`, {
+      method: "POST",
+      body: JSON.stringify({ api_key: apiKey }),
+    }),
+  engineSetAgent: (
+    agentId: string,
+    conf: { mode: "inherit" | "provider"; provider?: string; model?: string }
+  ) =>
+    apiFetch<{ agent: AIEngineStatus["agents"][number] }>(`/api/ai-engine/agent/${agentId}`, {
+      method: "PUT",
+      body: JSON.stringify(conf),
     }),
 
   // Backup

@@ -25,6 +25,7 @@ from kora_studio.db.models import (
     SceneTransition,
     StoryboardScene,
 )
+from kora_studio.ai_engine.context import BrandContextBuilder
 from kora_studio.providers.registry import ProviderManager
 from kora_studio.vault.media_vault import MediaVault
 
@@ -230,6 +231,68 @@ class CreativeDirector:
         self.vault = vault
         self.providers = providers
         self.anti_rep = AntiRepetitionEngine(db)
+        self.ai_engine: Any = None
+        self.brand_context: Any = None
+
+    def attach_engine_manager(self, engine_manager: Any) -> None:
+        """Collega l'AI Engine Manager (provider/agenti configurabili senza riavvio)."""
+        self.ai_engine = engine_manager
+        self.brand_context = BrandContextBuilder(
+            self.brand_brain,
+            history_provider=lambda limit=8: self.anti_rep.get_history(limit),
+            season_provider=self._season_context,
+        )
+
+    def _call_engine_manager(
+        self, req: CreativeRequestPayload, count: int, valid_asset_ids: set[str]
+    ) -> tuple[Optional[list[CreativeConcept]], Optional[str]]:
+        """Prima scelta: AI Engine Manager con routing per agente. None se non disponibile/autorizzato."""
+        engine = getattr(self, "ai_engine", None)
+        if engine is None:
+            return None, None
+        try:
+            from kora_studio.ai_engine.base import EngineError
+        except Exception:  # pragma: no cover
+            return None, None
+        context = self._build_llm_context(req)
+        builder = getattr(self, "brand_context", None)
+        system_prompt = (
+            "Sei il Direttore Creativo di KORA Beach Club (Policoro). Rispetta l'identità luxury "
+            "mediterranea, calma ed evocativa. Niente slogan aggressivi, sconti o prezzi. Usa SOLO gli ID "
+            "asset reali dell'inventario. Rispondi SOLO con JSON valido: "
+            '{"concepts": [{"title","central_idea","message","primary_emotion","hook","narrative_arc",'
+            '"ending","voiceover_script","visual_mood","moodboard_tags","required_materials",'
+            '"available_asset_ids","missing_materials","objective","recommended_voice_id","duration_sec",'
+            '"feasibility_score","originality_score","preset"}]}'
+        )
+        if builder is not None:
+            try:
+                system_prompt = (
+                    builder.to_prompt_block(builder.build("creative_director")) + "\n\n" + system_prompt
+                )
+            except Exception:
+                pass
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {
+                "role": "user",
+                "content": json.dumps(
+                    {"richiesta": context, "numero_proposte": count}, ensure_ascii=False
+                ),
+            },
+        ]
+        try:
+            result = engine.call("creative_director", messages, json_mode=True, timeout=120)
+        except EngineError as exc:
+            return None, f"AI Engine: {exc}"
+        except Exception as exc:  # pragma: no cover
+            return None, f"AI Engine: errore inatteso ({exc.__class__.__name__})"
+        parsed = self._parse_and_validate_llm_concepts(
+            result.text, req, valid_asset_ids, result.provider
+        )
+        if not parsed:
+            return None, f"AI Engine ({result.provider}/{result.model}): risposta non interpretabile"
+        return parsed, None
 
     def _build_llm_context(self, req: CreativeRequestPayload) -> dict[str, Any]:
         """Assemble full KORA context: versioned brand profile, history, season, semantic vault, user request."""
@@ -317,6 +380,13 @@ class CreativeDirector:
 
         errors: list[str] = []
         valid_ids = {a["id"] for a in ctx["vault_inventory"]}
+
+        # 0. AI Engine Manager (provider/agenti configurabili, nessun riavvio richiesto)
+        engine_concepts, engine_error = self._call_engine_manager(req, count, valid_ids)
+        if engine_concepts:
+            return engine_concepts, engine_concepts[0].generation_engine or "ai_engine", None
+        if engine_error:
+            errors.append(engine_error)
 
         # 1. Free Local Ollama (0 EUR)
         ollama = self.providers.get_provider("ollama_local")
@@ -569,6 +639,22 @@ class CreativeDirector:
             raw["creative_request"] = req.model_dump()
             raw.setdefault("objective", req.objective or "Valorizzare l'identità KORA")
             raw.setdefault("recommended_voice_id", req.voice_id or "brando")
+            # Un motore esterno può omettere campi: completiamo con valori sicuri
+            # invece di scartare l'intera proposta (nessun dato inventato, solo placeholder neutri).
+            for field_name, field in CreativeConcept.model_fields.items():
+                if field_name in raw and raw[field_name] is not None:
+                    continue
+                annotation = str(field.annotation)
+                if "list" in annotation:
+                    raw[field_name] = []
+                elif "bool" in annotation:
+                    raw[field_name] = False
+                elif "int" in annotation and "float" not in annotation:
+                    raw[field_name] = 0
+                elif "float" in annotation or "int" in annotation:
+                    raw[field_name] = 0.75
+                else:
+                    raw[field_name] = ""
             concept = CreativeConcept(**raw)
             if not self.guardian.validate_copy(concept.voiceover_script)["approved"]:
                 continue

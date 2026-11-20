@@ -17,6 +17,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from kora_studio.agents.cinematic_editor import PRESET_DEFINITIONS
+from kora_studio.ai_engine.agents import AGENTS
+from kora_studio.ai_engine.manager import PROVIDER_ORDER as PROVIDER_IDS
 from kora_studio.agents.director import KoraDirector
 from kora_studio.agents.hyperframes_captions import (
     CAPTION_STYLES,
@@ -142,6 +144,14 @@ class CreateProjectRequest(BaseModel):
     auto_start: bool = True
 
 
+class AIEngineTestRequest(BaseModel):
+    provider: str
+    model: Optional[str] = None
+    prompt: str = "Rispondi solo con: KORA OK"
+    multimodal: bool = False
+    asset_id: Optional[str] = None
+
+
 class ProjectExportRequest(BaseModel):
     destination: str = Field(..., min_length=1)
     folder_name: Optional[str] = None
@@ -231,7 +241,7 @@ def create_app(db_path: Optional[Path] = None, auto_seed: bool = True) -> FastAP
         director.vault.seed_kora_authentic_assets()
         director.brand_brain.refresh_palette_from_vault()
 
-    app = FastAPI(title="KORA STUDIO", version="1.0.0")
+    app = FastAPI(title="KORA STUDIO", version="2.6.0")
     app.state.director = director
     app.state.backup_mgr = backup_mgr
 
@@ -868,6 +878,86 @@ def create_app(db_path: Optional[Path] = None, auto_seed: bool = True) -> FastAP
         return new_job
 
     # ---- AI Providers & Budget -------------------------------------------
+
+    # ---- AI Engine Manager (provider universali, routing, agenti) ---------
+    @app.get("/api/ai-engine/status", dependencies=[Depends(_require_local_trust)])
+    def ai_engine_status(refresh: bool = Query(False)) -> dict[str, Any]:
+        return director.ai_engine.status_board(refresh=refresh)
+
+    @app.get("/api/ai-engine/models", dependencies=[Depends(_require_local_trust)])
+    def ai_engine_models(provider: str = Query(...)) -> list[dict[str, Any]]:
+        try:
+            return director.ai_engine.models(provider)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+    @app.get("/api/ai-engine/routing", dependencies=[Depends(_require_local_trust)])
+    def ai_engine_routing(agent_id: str = Query(...), requires_vision: bool = Query(False)) -> dict[str, Any]:
+        if agent_id not in {a.id for a in AGENTS}:
+            raise HTTPException(status_code=400, detail=f"Agente non valido: {agent_id}")
+        plan = director.ai_engine.candidate_plan(agent_id, requires_vision=requires_vision)
+        chosen = director.ai_engine.resolve(agent_id, requires_vision=requires_vision)
+        return {"agent_id": agent_id, "plan": plan[:10], "selected": chosen}
+
+    @app.put("/api/ai-engine/settings", dependencies=[Depends(_require_local_trust)])
+    def ai_engine_update_settings(patch: dict[str, Any]) -> dict[str, Any]:
+        try:
+            director.ai_engine.update_settings(patch)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        board = director.ai_engine.status_board(refresh=True)
+        # impostazioni "piatte" per la UI + stato completo dei provider
+        return {**board, **board["settings"], "status": board}
+
+    @app.post("/api/ai-engine/verify/{provider_id}", dependencies=[Depends(_require_local_trust)])
+    def ai_engine_verify(provider_id: str) -> dict[str, Any]:
+        if provider_id not in {p for p in ("opencode", "codex", "ollama_local", "gemini_api", "openai_api",
+                                           "openrouter", "claude_api", "deepseek_api", "custom_openai")}:
+            raise HTTPException(status_code=400, detail=f"Provider non valido: {provider_id}")
+        probe = director.ai_engine.probe(provider_id, refresh=True)
+        return probe
+
+    @app.post("/api/ai-engine/test", dependencies=[Depends(_require_local_trust)])
+    def ai_engine_test(req: AIEngineTestRequest) -> dict[str, Any]:
+        if req.multimodal:
+            image_path = None
+            if req.asset_id:
+                asset = director.vault.get_asset(req.asset_id)
+                if asset:
+                    image_path = Path(asset["working_path"] or asset["original_path"])
+            if image_path is None:
+                photos = [a for a in director.vault.list_assets(media_type="photo")]
+                if photos:
+                    image_path = Path(photos[0]["working_path"] or photos[0]["original_path"])
+            if image_path is None:
+                return {"ok": False, "provider": req.provider, "detail": "Nessuna foto nel Vault per il test multimodale"}
+        else:
+            image_path = None
+        return director.ai_engine.test_provider(
+            req.provider, prompt=req.prompt, model=req.model, image_path=image_path
+        )
+
+    @app.post("/api/ai-engine/key/{provider_id}", dependencies=[Depends(_require_local_trust)])
+    def ai_engine_set_key(provider_id: str, req: ProviderKeyRequest) -> dict[str, Any]:
+        """Salva la chiave cifrata nel backend. Non viene mai restituita al frontend."""
+        if provider_id not in PROVIDER_IDS:
+            raise HTTPException(status_code=400, detail=f"Provider non valido: {provider_id}")
+        if provider_id in ("opencode", "codex", "ollama_local"):
+            raise HTTPException(
+                status_code=400,
+                detail="Questo motore usa l'autenticazione della CLI/installazione locale: nessuna chiave da salvare",
+            )
+        director.providers.set_api_key(provider_id, req.api_key)
+        director.ai_engine.invalidate(provider_id)
+        return director.ai_engine.probe(provider_id, refresh=True)
+
+    @app.put("/api/ai-engine/agent/{agent_id}", dependencies=[Depends(_require_local_trust)])
+    def ai_engine_set_agent(agent_id: str, conf: dict[str, Any]) -> dict[str, Any]:
+        try:
+            director.ai_engine.update_settings({"agents": {agent_id: conf}})
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        return {"agent": director.ai_engine.agent_configuration(agent_id)}
 
     @app.get("/api/providers", dependencies=[Depends(_require_local_trust)])
     def list_providers() -> list[dict[str, Any]]:

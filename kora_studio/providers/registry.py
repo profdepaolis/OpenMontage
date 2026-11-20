@@ -204,6 +204,32 @@ DEFAULT_PROVIDERS: list[dict[str, Any]] = [
         "is_free_local": False,
         "env_var": "ANTHROPIC_API_KEY",
     },
+    {
+        "id": "openrouter",
+        "name": "OpenRouter (gateway multi-modello, anche modelli gratuiti)",
+        "capabilities": ["llm", "llm_vision"],
+        "endpoint": "https://openrouter.ai/api/v1",
+        "auth_type": "Bearer API Key (OPENROUTER_API_KEY)",
+        "models": [],
+        "declared_costs": {},
+        "quota_status": "Non verificabile",
+        "limits_doc": "Gateway unico verso molti modelli; l'elenco modelli e i costi reali sono letti dall'API al momento della verifica.",
+        "is_free_local": False,
+        "env_var": "OPENROUTER_API_KEY",
+    },
+    {
+        "id": "custom_openai",
+        "name": "Endpoint OpenAI-compatibile personalizzato (LM Studio, llama.cpp, vLLM, ...)",
+        "capabilities": ["llm", "llm_vision"],
+        "endpoint": "http://127.0.0.1:1234/v1",
+        "auth_type": "Bearer token opzionale",
+        "models": [],
+        "declared_costs": {},
+        "quota_status": "Non verificabile",
+        "limits_doc": "Qualsiasi server locale che espone /v1/models e /v1/chat/completions. L'indirizzo si configura in Impostazioni → AI Engine Manager.",
+        "is_free_local": True,
+        "env_var": "CUSTOM_OPENAI_API_KEY",
+    },
 ]
 
 

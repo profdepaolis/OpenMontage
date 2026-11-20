@@ -9,6 +9,7 @@ import {
   Activity,
   PlaySquare,
   Cpu,
+  Gauge,
   Palette,
   Download,
 } from "lucide-react";
@@ -32,6 +33,7 @@ import { CreativeStudioView } from "@/components/CreativeStudioView";
 import { ProductionView } from "@/components/ProductionView";
 import { PreviewView } from "@/components/PreviewView";
 import { ProvidersView } from "@/components/ProvidersView";
+import { AIEngineView } from "@/components/AIEngineView";
 import { BrandProfileView } from "@/components/BrandProfileView";
 import { ExportView } from "@/components/ExportView";
 
@@ -43,6 +45,7 @@ const NAV_ITEMS: Array<{ id: NavSection; label: string; icon: React.ComponentTyp
   { id: "production", label: "Production", icon: Activity },
   { id: "preview", label: "Preview", icon: PlaySquare },
   { id: "providers", label: "AI Providers", icon: Cpu },
+  { id: "engine", label: "AI Engine Manager", icon: Gauge },
   { id: "brand", label: "Brand Profile", icon: Palette },
   { id: "export", label: "Export", icon: Download },
 ];
@@ -302,6 +305,8 @@ export default function KoraStudioPage() {
             onRefresh={() => refreshAll()}
           />
         )}
+
+        {section === "engine" && <AIEngineView />}
 
         {section === "brand" && <BrandProfileView />}
 

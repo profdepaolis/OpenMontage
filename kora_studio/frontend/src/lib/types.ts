@@ -6,6 +6,7 @@ export type NavSection =
   | "production"
   | "preview"
   | "providers"
+  | "engine"
   | "brand"
   | "export";
 
@@ -241,4 +242,88 @@ export interface ThemeSuggestionResponse {
   recommended_hyperframes: HyperframesConfig;
   rationale: string;
   theme_suggestions: string[];
+}
+
+// ---- AI Engine Manager ----------------------------------------------------
+export type AIEngineState =
+  | "indisponibile"
+  | "installato"
+  | "autenticato"
+  | "operativo"
+  | "errore";
+
+export type AIEngineStrategy = "auto" | "max_quality" | "min_cost" | "local_only";
+
+export interface AIEngineProvider {
+  provider: string;
+  label: string;
+  kind: "cli" | "http";
+  local: boolean;
+  subscription: boolean;
+  requires_key: boolean;
+  state: AIEngineState;
+  installed: boolean;
+  authenticated: boolean;
+  verified_operational: boolean;
+  version?: string | null;
+  binary?: string | null;
+  detail: string;
+  auth_detail: string;
+  account?: string | null;
+  models_count: number;
+  supports_vision: boolean;
+  docs_url: string;
+}
+
+export interface AIEngineAgent {
+  id: string;
+  label: string;
+  needs_vision: boolean;
+  description: string;
+  mode: "inherit" | "provider";
+  provider?: string | null;
+  model?: string | null;
+}
+
+export interface AIEngineSettings {
+  strategy: AIEngineStrategy;
+  primary_provider: string;
+  max_budget_eur: number;
+  allow_paid_calls: boolean;
+  allow_external_media: boolean;
+  providers: Record<string, { enabled?: boolean; model?: string; base_url?: string }>;
+  agents: Record<string, { mode: "inherit" | "provider"; provider?: string; model?: string }>;
+}
+
+export interface AIEngineStatus {
+  settings: AIEngineSettings;
+  providers: AIEngineProvider[];
+  agents: AIEngineAgent[];
+  strategies: AIEngineStrategy[];
+  ollama_installed: boolean;
+  ollama_required: boolean;
+  operational: string[];
+  budget: { max_budget_eur: number; allow_paid_calls: boolean; spent_note: string };
+}
+
+export interface AIEngineModel {
+  id: string;
+  label: string;
+  text: boolean;
+  vision: boolean;
+  free: boolean;
+  subscription: boolean;
+  cost_per_1k_eur: number;
+  source: string;
+}
+
+export interface AIEngineTestResult {
+  ok: boolean;
+  provider: string;
+  model?: string;
+  latency_ms?: number;
+  preview?: string;
+  multimodal?: boolean;
+  cost_eur?: number;
+  detail?: string;
 }
