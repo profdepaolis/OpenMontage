@@ -18,6 +18,7 @@ from kora_studio.db.models import (
     AuthenticityStatus,
     CreativeRequestPayload,
     ProductionMode,
+    StoryboardScene,
 )
 from kora_studio.providers.registry import ProviderManager
 from kora_studio.vault.media_vault import MediaVault
@@ -363,3 +364,74 @@ def test_scenario_11_security_and_multimodal_vault(isolated_env):
     director.create_job(p["id"], "render")
     r_dup = client.post(f"/api/projects/{p['id']}/produce", json={"sync": False})
     assert r_dup.status_code == 409
+
+
+def test_scenario_12_manual_elevenlabs_voiceover_roundtrip(isolated_env):
+    """Scenario 12: copione esportabile -> MP3 generato fuori -> import -> storyboard riallineato e usato nel render."""
+    import subprocess
+
+    from fastapi.testclient import TestClient
+
+    from kora_studio.api.app import create_app
+
+    director = _build_director(isolated_env)
+    concept = director.creative.surprise_me(duration_sec=20)[0]
+    project = director.create_project(
+        title="Voce manuale",
+        theme="Mattino lento sul mare",
+        mode="theme",
+        preset=concept.preset,
+        production_mode=ProductionMode.AUTO.value,
+        voice_id="brando",
+        target_duration_sec=20,
+        concept=concept,
+    )
+    pid = project["id"]
+    client = TestClient(create_app(db_path=isolated_env["db_path"], auto_seed=False))
+
+    # 1) Il copione è esportabile (testo per scena + full text per ElevenLabs)
+    r_script = client.get(f"/api/projects/{pid}/voiceover/script")
+    assert r_script.status_code == 200, r_script.text
+    script = r_script.json()
+    assert script["char_count"] > 80
+    assert len(script["segments"]) >= 3
+    assert all(seg["text"] for seg in script["segments"])
+    assert "elevenlabs" in script["elevenlabs_url"]
+
+    # 2) L'utente genera un MP3 altrove: qui simuliamo con un WAV di 15,4s
+    audio = isolated_env["tmp_path"] / "voce_manuale.wav"
+    subprocess.run(
+        [
+            str(isolated_env.get("ffmpeg") or "ffmpeg"),
+            "-y", "-loglevel", "error",
+            "-f", "lavfi", "-i", "sine=frequency=220:duration=15.4",
+            "-ar", "48000", "-ac", "2", str(audio),
+        ],
+        check=True,
+    )
+
+    # 3) Upload: storyboard riallineato alla durata reale della voce
+    with audio.open("rb") as fh:
+        r_up = client.post(
+            f"/api/projects/{pid}/voiceover/upload",
+            files={"file": ("voce_manuale.wav", fh, "audio/wav")},
+        )
+    assert r_up.status_code == 200, r_up.text
+    payload = r_up.json()
+    assert payload["voiceover"]["total_frames"] == 385  # 15.4s * 25fps
+    assert abs(payload["project"]["target_duration_sec"] - 15.4) < 0.05
+    assert sum(s["duration_frames"] for s in payload["project"]["storyboard"]) == 385
+
+    # 4) Il render usa la voce importata invece della sintesi automatica
+    scenes = [StoryboardScene(**s) for s in payload["project"]["storyboard"]]
+    voice = director.voice_director.prepare_voiceover(
+        scenes, "brando", isolated_env["tmp_path"] / "vo", project_id=pid
+    )
+    assert voice["source_used"] == "voce_importata_manuale"
+    assert voice["status"] == "pronta"
+    assert Path(voice["audio_path"]).is_file()
+
+    # 5) Rimozione: torna la sintesi automatica
+    r_del = client.delete(f"/api/projects/{pid}/voiceover")
+    assert r_del.status_code == 200
+    assert director.voice_director._project_voiceover_override(pid) is None

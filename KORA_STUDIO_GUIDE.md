@@ -124,3 +124,26 @@ Senza queste variabili qualsiasi `Host`/`Origin` diverso dal locale resta blocca
 | `ElevenLabs … paid_plan_required / library voices (402)` | Il piano Free non consente le voci della *libreria* via API. | KORA passa automaticamente a una voce `premade`/`clonata` del tuo account; per usare la voce esatta serve un Voice ID utilizzabile o un piano superiore. |
 | `Fallback utilizzato: Piper TTS locale gratuito` | Sintesi offline gratuita, nessun costo, timbro più sintetico. | Per la voce artistica: Voice ID ElevenLabs valido, OpenAI TTS, oppure registrazione originale in *Media Vault*. |
 | `Avvisi · fallback automatici` (badge ambra in Production) | Il job è proseguito correttamente sostituendo un servizio. | Rosso = bloccante; ambra = sostituzione automatica già gestita. |
+
+---
+
+## 6. Voce: flusso manuale (ElevenLabs, senza API a pagamento)
+
+Se il piano ElevenLabs non consente le voci di libreria via API (errore `402 paid_plan_required`), puoi comunque
+ottenere la voce artistica **senza spendere nulla in API**:
+
+1. **Preview → Voce del Reel → «1. Copia copione»** (oppure «Scarica .txt»): il testo parlato, scena per scena.
+2. **«2. Genera sul sito»**: incolla il copione su `elevenlabs.io/app/speech-synthesis`, scegli la voce
+   (anche una voce di *libreria*, che sul sito è utilizzabile) e scarica l'MP3.
+3. **«3. Carica MP3»**: KORA importa il file, **riallinea automaticamente le scene alla durata reale** della voce
+   (frame esatti a 25 fps) e lo usa al posto della sintesi automatica. Poi «Realizza Reel».
+
+Endpoint corrispondenti:
+`GET /api/projects/{id}/voiceover/script` · `POST /api/projects/{id}/voiceover/upload` (multipart `file`) ·
+`DELETE /api/projects/{id}/voiceover` (torna alla sintesi automatica).
+
+### Perché non VibeVoice (per ora)
+VibeVoice (Microsoft Research) è MIT ma **solo ricerca**, addestrato su **inglese e cinese**, richiede **GPU NVIDIA**
+(circa 7-8 GB VRAM per il modello 1.5B, 17-24 GB per il 7B). Su un MacBook Pro Intel (solo CPU) l'inferenza sarebbe
+di minuti per secondo di audio, senza supporto italiano. Alternative già integrate: **Piper TTS italiano** (offline,
+0 €, CPU) e appunto l'import manuale da ElevenLabs.

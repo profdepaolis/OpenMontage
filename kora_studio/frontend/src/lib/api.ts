@@ -216,6 +216,38 @@ export const koraApi = {
       method: "POST",
     }),
 
+  voiceoverScript: (id: string) =>
+    apiFetch<{
+      project_id: string;
+      title: string;
+      voice_id: string;
+      segments: Array<{ scene_number: number; text: string; start_sec: number; end_sec: number }>;
+      full_text: string;
+      segmented_text: string;
+      char_count: number;
+      target_duration_sec: number;
+      elevenlabs_url: string;
+      instructions: string;
+    }>(`/api/projects/${id}/voiceover/script`),
+  uploadVoiceover: (id: string, file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return apiFetch<{
+      project: ProjectRecord;
+      voiceover: {
+        filename: string;
+        path: string;
+        size_bytes: number;
+        duration_sec: number;
+        total_frames: number;
+      };
+    }>(`/api/projects/${id}/voiceover/upload`, { method: "POST", body: form });
+  },
+  clearVoiceover: (id: string) =>
+    apiFetch<{ project_id: string; cleared: boolean }>(`/api/projects/${id}/voiceover`, {
+      method: "DELETE",
+    }),
+
   // Jobs
   listJobs: (projectId?: string) =>
     apiFetch<JobRecord[]>(`/api/jobs${projectId ? `?project_id=${projectId}` : ""}`),

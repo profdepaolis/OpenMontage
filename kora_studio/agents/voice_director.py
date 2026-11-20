@@ -9,6 +9,7 @@ and explicitly labels any fallback when primary TTS is unavailable.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import re
 from pathlib import Path
@@ -266,6 +267,27 @@ class VoiceDirector:
             pass
         return fallback_id
 
+    def _project_voiceover_override(self, project_id: str) -> Optional[dict[str, Any]]:
+        """Restituisce la voce importata manualmente per il progetto (es. MP3 generato sul sito ElevenLabs)."""
+        try:
+            raw = self.providers.db.get_preference(f"voiceover_upload_{project_id}")
+        except Exception:
+            return None
+        if not raw:
+            return None
+        try:
+            data = json.loads(raw)
+        except (ValueError, TypeError):
+            return None
+        path = Path(str(data.get("path") or ""))
+        return data if path.is_file() else None
+
+    def clear_project_voiceover(self, project_id: str) -> None:
+        try:
+            self.providers.db.set_preference(f"voiceover_upload_{project_id}", "")
+        except Exception:
+            pass
+
     def _synthesize_elevenlabs(
         self, voice_id: str, text: str, dest: Path
     ) -> Optional[Path]:
@@ -498,12 +520,24 @@ class VoiceDirector:
         el_failure_reason: Optional[str] = None
         self._elevenlabs_note: Optional[str] = None
         source_used = ""
+        manual_voice_label: Optional[str] = None
+
+        # 0. Voce importata manualmente (MP3 prodotto altrove, es. sul sito ElevenLabs con il proprio piano)
+        if project_id:
+            uploaded = self._project_voiceover_override(project_id)
+            if uploaded:
+                try:
+                    self.normalize_audio(Path(str(uploaded["path"])), norm_out)
+                    source_used = "voce_importata_manuale"
+                    manual_voice_label = str(uploaded.get("label") or "MP3 importato dall'utente")
+                except Exception as exc:
+                    el_failure_reason = f"Voce importata non leggibile ({exc}): genero una sintesi alternativa."
 
         # 1. Primary: Official ElevenLabs API (synthesizes exact new script in requested voice)
         el_key = self.providers.get_decrypted_key("elevenlabs_api")
         primary_vid = "brando" if voice_id == "brando_tiziana" else voice_id
         el_voice_id = self._get_elevenlabs_voice_id(primary_vid)
-        if el_key and el_voice_id:
+        if not source_used and el_key and el_voice_id:
             est_el = round(max(0.01, (len(full_text) / 1000.0) * 0.18), 4)
             auth = self.providers.cost_guard.check_authorization(
                 est_el, explicit_user_authorization=explicit_paid_authorization
@@ -527,7 +561,7 @@ class VoiceDirector:
                     f"ElevenLabs configurato ma bloccato dal Cost Guard: {auth['reason']} "
                     "(Controlla 'Budget autorizzato (€)' in Provider AI, non solo il limite mensile)."
                 )
-        elif el_key and not el_voice_id:
+        elif not source_used and el_key and not el_voice_id:
             el_failure_reason = (
                 f"Chiave ElevenLabs salvata, ma nessun Voice ID associato a '{VOICE_CATALOG[voice_id]['label']}'."
             )
@@ -754,6 +788,7 @@ class VoiceDirector:
             "voice_id": voice_id,
             "voice_label": VOICE_CATALOG[voice_id]["label"],
             "source_used": source_used,
+            "manual_voice_label": manual_voice_label,
             "status": "pronta",
             "audio_path": str(norm_out),
             "duration_sec": actual_dur,

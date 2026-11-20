@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
-import { CheckCircle2, AlertTriangle, Sparkles, Wand2, ArrowRight, RotateCcw } from "lucide-react";
+import { CheckCircle2, AlertTriangle, Sparkles, Wand2, ArrowRight, RotateCcw, Copy, Upload, ExternalLink, Mic } from "lucide-react";
 import type { ProjectRecord } from "@/lib/types";
 import { koraApi } from "@/lib/api";
 
@@ -24,6 +24,15 @@ export function PreviewView({ project, onRevisionStarted, onRestored, onGoExport
   >([]);
   const [loading, setLoading] = useState(false);
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
+  const [scriptInfo, setScriptInfo] = useState<{
+    full_text: string;
+    segmented_text: string;
+    char_count: number;
+    elevenlabs_url: string;
+    instructions: string;
+  } | null>(null);
+  const [voiceBusy, setVoiceBusy] = useState(false);
+  const [voiceMsg, setVoiceMsg] = useState<string | null>(null);
 
   useEffect(() => {
     if (!project) return;
@@ -60,6 +69,60 @@ export function PreviewView({ project, onRevisionStarted, onRestored, onGoExport
       onRevisionStarted(res.job.id);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleLoadScript = async () => {
+    setVoiceBusy(true);
+    try {
+      const res = await koraApi.voiceoverScript(project.id);
+      setScriptInfo(res);
+      setVoiceMsg(`Copione pronto: ${res.char_count} caratteri, ${res.segments.length} scene.`);
+    } catch (e) {
+      setVoiceMsg((e as Error).message);
+    } finally {
+      setVoiceBusy(false);
+    }
+  };
+
+  const handleCopyScript = async () => {
+    let text = scriptInfo?.full_text;
+    if (!text) {
+      const res = await koraApi.voiceoverScript(project.id);
+      setScriptInfo(res);
+      text = res.full_text;
+    }
+    try {
+      await navigator.clipboard.writeText(text);
+      setVoiceMsg("Copione copiato: incollalo su elevenlabs.io e scarica l'MP3.");
+    } catch {
+      setVoiceMsg("Copia non consentita dal browser: usa «Scarica .txt».");
+    }
+  };
+
+  const handleDownloadScript = async () => {
+    const text = scriptInfo?.segmented_text || scriptInfo?.full_text || (await koraApi.voiceoverScript(project.id)).segmented_text;
+    const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `copione_${project.id}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleUploadVoiceover = async (file: File) => {
+    setVoiceBusy(true);
+    try {
+      const res = await koraApi.uploadVoiceover(project.id, file);
+      setVoiceMsg(
+        `Voce importata: ${res.voiceover.filename} · ${Number(res.voiceover.duration_sec).toFixed(2)}s · ` +
+          `${res.voiceover.total_frames} frame. Lo storyboard è stato riallineato: lancia «Realizza Reel» per usarla.`
+      );
+    } catch (e) {
+      setVoiceMsg((e as Error).message);
+    } finally {
+      setVoiceBusy(false);
     }
   };
 
@@ -126,6 +189,81 @@ export function PreviewView({ project, onRevisionStarted, onRestored, onGoExport
 
       {/* Natural Language Revisions, QC, and Version History */}
       <div className="lg:col-span-7 space-y-5">
+        {/* Voci: flusso manuale ElevenLabs (copia copione -> sito -> carica MP3) */}
+        <div className="rounded-2xl border border-[#DDD4C4] bg-white p-6">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <h3 className="flex items-center gap-2 font-editorial text-lg text-[#1D1B18]">
+                <Mic className="h-4 w-4 text-[#9A8052]" /> Voce del Reel
+              </h3>
+              <p className="mt-1 text-[11px] leading-relaxed text-[#6C6459]">
+                Registri o generi la voce dove preferisci (anche sul sito ElevenLabs col tuo piano), poi la importi
+                qui: KORA riallinea le scene alla durata reale e la usa al posto della sintesi automatica.
+              </p>
+            </div>
+          </div>
+
+          <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-3">
+            <button
+              type="button"
+              onClick={handleCopyScript}
+              disabled={voiceBusy}
+              className="flex items-center justify-center gap-1.5 rounded-xl border border-[#DDD4C4] bg-[#FAF7F2] px-3 py-2 text-xs font-medium text-[#1D1B18] hover:border-[#9A8052] disabled:opacity-50"
+            >
+              <Copy className="h-3.5 w-3.5 text-[#9A8052]" /> 1. Copia copione
+            </button>
+            <a
+              href={scriptInfo?.elevenlabs_url || "https://elevenlabs.io/app/speech-synthesis"}
+              target="_blank"
+              rel="noreferrer"
+              className="flex items-center justify-center gap-1.5 rounded-xl border border-[#DDD4C4] bg-white px-3 py-2 text-xs font-medium text-[#1D1B18] hover:border-[#9A8052]"
+            >
+              <ExternalLink className="h-3.5 w-3.5 text-[#9A8052]" /> 2. Genera sul sito
+            </a>
+            <label className="flex cursor-pointer items-center justify-center gap-1.5 rounded-xl bg-[#1D1B18] px-3 py-2 text-xs font-medium text-white hover:bg-[#224C66]">
+              <Upload className="h-3.5 w-3.5" /> 3. Carica MP3
+              <input
+                type="file"
+                accept="audio/mpeg,audio/wav,audio/mp4,audio/aac,audio/ogg,audio/flac,.mp3,.wav,.m4a,.ogg,.flac"
+                className="hidden"
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) void handleUploadVoiceover(f);
+                  e.target.value = "";
+                }}
+              />
+            </label>
+          </div>
+
+          <div className="mt-2 flex flex-wrap items-center gap-2 text-[10px] text-[#6C6459]">
+            <button type="button" onClick={handleLoadScript} className="underline decoration-dotted">
+              Mostra anteprima copione
+            </button>
+            <button type="button" onClick={handleDownloadScript} className="underline decoration-dotted">
+              Scarica .txt
+            </button>
+            <button
+              type="button"
+              onClick={async () => {
+                await koraApi.clearVoiceover(project.id);
+                setVoiceMsg("Voce importata rimossa: al prossimo render torna la sintesi automatica.");
+              }}
+              className="underline decoration-dotted"
+            >
+              Rimuovi voce importata
+            </button>
+          </div>
+
+          {scriptInfo && (
+            <pre className="mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap rounded-xl bg-[#FAF7F2] p-3 text-[10px] leading-relaxed text-[#4A443C]">
+              {scriptInfo.segmented_text}
+            </pre>
+          )}
+          {voiceMsg && (
+            <p className="mt-2 rounded-lg bg-[#FBF4E6] px-3 py-2 text-[11px] text-[#7A5C2E]">{voiceMsg}</p>
+          )}
+        </div>
+
         <div className="rounded-2xl border border-[#DDD4C4] bg-white p-6">
           <div className="flex items-center justify-between">
             <div>

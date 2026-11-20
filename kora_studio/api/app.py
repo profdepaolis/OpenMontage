@@ -542,6 +542,103 @@ def create_app(db_path: Optional[Path] = None, auto_seed: bool = True) -> FastAP
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc))
 
+    @app.get(
+        "/api/projects/{project_id}/voiceover/script",
+        dependencies=[Depends(_require_local_trust)],
+    )
+    def voiceover_script(project_id: str) -> dict[str, Any]:
+        """Copione parlato pronto da incollare sul sito ElevenLabs (o altro TTS) e reimportare come MP3."""
+        proj = director.get_project(project_id)
+        if not proj:
+            raise HTTPException(status_code=404, detail="Progetto non trovato")
+        segments: list[dict[str, Any]] = []
+        for sc in proj["storyboard"]:
+            text = (sc.get("spoken_text") or "").strip()
+            if not text:
+                continue
+            segments.append(
+                {
+                    "scene_number": sc.get("scene_number"),
+                    "text": text,
+                    "start_sec": sc.get("start_sec"),
+                    "end_sec": sc.get("end_sec"),
+                }
+            )
+        full_text = " ".join(seg["text"] for seg in segments)
+        return {
+            "project_id": project_id,
+            "title": proj["title"],
+            "voice_id": proj.get("voice_id"),
+            "segments": segments,
+            "full_text": full_text,
+            "segmented_text": "\n\n".join(seg["text"] for seg in segments),
+            "char_count": len(full_text),
+            "target_duration_sec": proj.get("target_duration_sec"),
+            "elevenlabs_url": "https://elevenlabs.io/app/speech-synthesis",
+            "instructions": (
+                "1) Copia il copione e incollalo su elevenlabs.io scegliendo la voce desiderata. "
+                "2) Scarica l'MP3. 3) Caricalo qui: KORA riallinea automaticamente le scene alla durata reale "
+                "della voce e lo usa al posto della sintesi automatica (nessun costo API)."
+            ),
+        }
+
+    @app.post(
+        "/api/projects/{project_id}/voiceover/upload",
+        dependencies=[Depends(_require_local_trust)],
+    )
+    def upload_voiceover(project_id: str, file: UploadFile = File(...)) -> dict[str, Any]:
+        """Importa un voiceover già pronto (MP3/WAV/M4A) e riallinea lo storyboard alla sua durata."""
+        proj = director.get_project(project_id)
+        if not proj:
+            raise HTTPException(status_code=404, detail="Progetto non trovato")
+        suffix = Path(file.filename or "voce.mp3").suffix.lower() or ".mp3"
+        if suffix not in (".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac"):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Formato audio non supportato ({suffix}). Usa MP3, WAV, M4A, AAC, OGG o FLAC.",
+            )
+        target_dir = KORA_DATA_DIR / "voiceovers"
+        target_dir.mkdir(parents=True, exist_ok=True)
+        dest = target_dir / f"{project_id}{suffix}"
+        written = 0
+        with dest.open("wb") as out:
+            while True:
+                chunk = file.file.read(1024 * 1024)
+                if not chunk:
+                    break
+                written += len(chunk)
+                if written > MAX_UPLOAD_BYTES:
+                    out.close()
+                    dest.unlink(missing_ok=True)
+                    raise HTTPException(status_code=413, detail="File audio troppo grande (max 150 MB).")
+                out.write(chunk)
+        try:
+            updated = director.apply_uploaded_voiceover(project_id, dest, file.filename or dest.name)
+        except Exception as exc:
+            dest.unlink(missing_ok=True)
+            raise HTTPException(status_code=400, detail=str(exc))
+        return {
+            "project": updated,
+            "voiceover": {
+                "filename": file.filename or dest.name,
+                "path": str(dest),
+                "size_bytes": written,
+                "duration_sec": updated.get("target_duration_sec"),
+                "total_frames": updated.get("total_frames"),
+            },
+        }
+
+    @app.delete(
+        "/api/projects/{project_id}/voiceover",
+        dependencies=[Depends(_require_local_trust)],
+    )
+    def clear_voiceover(project_id: str) -> dict[str, Any]:
+        proj = director.get_project(project_id)
+        if not proj:
+            raise HTTPException(status_code=404, detail="Progetto non trovato")
+        director.voice_director.clear_project_voiceover(project_id)
+        return {"project_id": project_id, "cleared": True}
+
     @app.post("/api/projects/{project_id}/produce")
     def produce_project(project_id: str, req: ProduceRequest) -> dict[str, Any]:
         proj = director.get_project(project_id)

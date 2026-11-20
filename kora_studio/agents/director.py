@@ -195,6 +195,95 @@ class KoraDirector:
             )
             return next_ver
 
+    def _scale_storyboard_frames(
+        self, scenes: list[StoryboardScene], total_frames: int, fps: int
+    ) -> list[StoryboardScene]:
+        """Ridistribuisce proporzionalmente i frame delle scene per adattarsi alla durata reale della voce."""
+        total_frames = max(len(scenes) * max(1, fps // 2), int(total_frames))
+        current = sum(
+            max(1, sc.duration_frames or int(round((sc.duration_sec or 3.0) * fps))) for sc in scenes
+        )
+        factor = (total_frames / current) if current else 1.0
+        alloc = [
+            max(fps // 2, int(round((sc.duration_frames or int(round((sc.duration_sec or 3.0) * fps))) * factor)))
+            for sc in scenes
+        ]
+        drift = total_frames - sum(alloc)
+        idx = 0
+        while drift != 0 and alloc:
+            slot = idx % len(alloc)
+            if drift > 0:
+                alloc[slot] += 1
+                drift -= 1
+            elif alloc[slot] > 1:
+                alloc[slot] -= 1
+                drift += 1
+            idx += 1
+            if idx > 10000:
+                break
+        cursor_frame = 0
+        cursor_sec = 0.0
+        for sc, frames in zip(scenes, alloc):
+            sc.start_frame = cursor_frame
+            sc.duration_frames = frames
+            sc.duration_sec = round(frames / fps, 3)
+            sc.start_sec = round(cursor_sec, 3)
+            sc.end_sec = round(cursor_sec + sc.duration_sec, 3)
+            cursor_frame += frames
+            cursor_sec = sc.end_sec
+        return scenes
+
+    def apply_uploaded_voiceover(
+        self, project_id: str, audio_path: Path, original_filename: str = ""
+    ) -> dict[str, Any]:
+        """Usa un MP3/WAV prodotto dall'utente (es. sul sito ElevenLabs) e riallinea lo storyboard alla sua durata."""
+        from kora_studio.media_tools import probe_media
+
+        proj = self.get_project(project_id)
+        if not proj:
+            raise KeyError(f"Progetto {project_id} non trovato.")
+        probe = probe_media(audio_path)
+        duration = float(probe["format"].get("duration", 0.0) or 0.0)
+        if duration <= 0.2:
+            raise ValueError("File audio non valido o troppo corto (durata non rilevabile).")
+
+        fps = max(1, int(proj.get("fps") or DEFAULT_FPS))
+        scenes = [StoryboardScene(**s) for s in proj["storyboard"]]
+        total_frames = int(round(duration * fps))
+        self._scale_storyboard_frames(scenes, total_frames, fps)
+        scaled_total = sum(sc.duration_frames for sc in scenes)
+
+        with self.db.session() as conn:
+            conn.execute(
+                "UPDATE projects SET storyboard_json = ?, total_frames = ?, target_duration_sec = ?, updated_at = ? WHERE id = ?",
+                (
+                    json.dumps([s.model_dump() for s in scenes], ensure_ascii=False),
+                    scaled_total,
+                    round(scaled_total / fps, 2),
+                    utcnow_iso(),
+                    project_id,
+                ),
+            )
+        self.db.set_preference(
+            f"voiceover_upload_{project_id}",
+            json.dumps(
+                {
+                    "path": str(audio_path),
+                    "filename": original_filename or audio_path.name,
+                    "label": f"Voce importata manualmente ({original_filename or audio_path.name})",
+                    "duration_sec": round(duration, 3),
+                    "uploaded_at": utcnow_iso(),
+                },
+                ensure_ascii=False,
+            ),
+        )
+        self.save_project_snapshot(
+            project_id,
+            f"Voce importata: {original_filename or audio_path.name} ({duration:.2f}s)",
+            "VoiceDirector",
+        )
+        return self.get_project(project_id)  # type: ignore
+
     def get_project_versions(self, project_id: str) -> list[dict[str, Any]]:
         with self.db.session() as conn:
             rows = conn.execute(
