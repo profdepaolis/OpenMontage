@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from kora_studio.agents.ai_media_lab import AIMediaLab, MediaCurator
+from kora_studio.agents.copywriter import Copywriter
 from kora_studio.agents.brand_guardian import BrandGuardian
 from kora_studio.agents.cinematic_editor import CinematicEditor
 from kora_studio.agents.colorist import Colorist
@@ -63,11 +64,17 @@ class KoraDirector:
         self.voice_director = VoiceDirector(self.vault, self.providers)
         self.colorist = Colorist()
         self.sound_designer = SoundDesigner(self.sound_library)
+        self.copywriter = Copywriter(self.ai_engine, guardian=self.guardian)
         self.editor = CinematicEditor(self.vault, self.media_lab, self.colorist)
         self.qc = QualityController(self.vault, self.guardian)
         self.export_manager = ExportManager(
-            self.vault, self.brand_brain, self.editor, self.sound_designer, self.qc
+            self.vault, self.brand_brain, self.editor, self.sound_designer, self.qc, self.copywriter
         )
+        # tutti gli agenti passano dall'AI Engine Manager (nessuna chiamata diretta)
+        self.guardian.attach_engine_manager(self.ai_engine)
+        for agent in (self.media_lab, self.voice_director, self.sound_designer, self.qc, self.guardian):
+            if hasattr(agent, "attach_engine_manager"):
+                agent.attach_engine_manager(self.ai_engine)
         self.revision_engine = RevisionEngine(self.vault, self.sound_library)
         self._lock = threading.Lock()
 

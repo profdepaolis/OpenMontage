@@ -152,6 +152,11 @@ class AIEngineTestRequest(BaseModel):
     asset_id: Optional[str] = None
 
 
+class AIEngineVisionTestRequest(BaseModel):
+    provider: str
+    model: Optional[str] = None
+
+
 class ProjectExportRequest(BaseModel):
     destination: str = Field(..., min_length=1)
     folder_name: Optional[str] = None
@@ -241,7 +246,7 @@ def create_app(db_path: Optional[Path] = None, auto_seed: bool = True) -> FastAP
         director.vault.seed_kora_authentic_assets()
         director.brand_brain.refresh_palette_from_vault()
 
-    app = FastAPI(title="KORA STUDIO", version="2.6.0")
+    app = FastAPI(title="KORA STUDIO", version="2.7.0")
     app.state.director = director
     app.state.backup_mgr = backup_mgr
 
@@ -910,12 +915,47 @@ def create_app(db_path: Optional[Path] = None, auto_seed: bool = True) -> FastAP
         return {**board, **board["settings"], "status": board}
 
     @app.post("/api/ai-engine/verify/{provider_id}", dependencies=[Depends(_require_local_trust)])
-    def ai_engine_verify(provider_id: str) -> dict[str, Any]:
-        if provider_id not in {p for p in ("opencode", "codex", "ollama_local", "gemini_api", "openai_api",
-                                           "openrouter", "claude_api", "deepseek_api", "custom_openai")}:
+    def ai_engine_verify(provider_id: str, live: bool = Query(False)) -> dict[str, Any]:
+        """Rileva installazione/autenticazione; con ``live=true`` esegue una generazione reale."""
+        if provider_id not in PROVIDER_IDS:
             raise HTTPException(status_code=400, detail=f"Provider non valido: {provider_id}")
         probe = director.ai_engine.probe(provider_id, refresh=True)
-        return probe
+        if not live:
+            return probe
+        if not probe.get("authenticated"):
+            return {**probe, "live_test": {"ok": False, "detail": "provider non autenticato: nessun test live"}}
+        live_result = director.ai_engine.test_provider(provider_id)
+        return {
+            **director.ai_engine.probe(provider_id, refresh=True),
+            "live_test": live_result,
+        }
+
+    @app.post("/api/ai-engine/vision-test", dependencies=[Depends(_require_local_trust)])
+    def ai_engine_vision_test(req: AIEngineVisionTestRequest) -> dict[str, Any]:
+        """Prova multimodale con immagine a contenuto noto: verifica reale della visione."""
+        if req.provider not in PROVIDER_IDS:
+            raise HTTPException(status_code=400, detail=f"Provider non valido: {req.provider}")
+        result = director.ai_engine.vision_probe(req.provider, model=req.model)
+        result["provider_status"] = director.ai_engine.probe(req.provider, refresh=True)
+        return result
+
+    @app.get("/api/ai-engine/activity", dependencies=[Depends(_require_local_trust)])
+    def ai_engine_activity(limit: int = Query(100, ge=1, le=500)) -> dict[str, Any]:
+        """AI Activity Monitor: una riga per chiamata, senza prompt né credenziali."""
+        engine = director.ai_engine
+        rows = engine.activity.list(limit=limit)
+        return {"calls": rows, "summary": engine.activity.summary(limit=limit)}
+
+    @app.post("/api/ai-engine/cancel/{production_id}", dependencies=[Depends(_require_local_trust)])
+    def ai_engine_cancel(production_id: str) -> dict[str, Any]:
+        return director.ai_engine.cancel(production_id)
+
+    @app.get("/api/ai-engine/media-services", dependencies=[Depends(_require_local_trust)])
+    def ai_engine_media_services() -> dict[str, Any]:
+        """Servizi media (voce/immagine/video) separati dai motori linguistici."""
+        from kora_studio.ai_engine.agents import MEDIA_SERVICES
+
+        return {"services": MEDIA_SERVICES, "note": "I motori di testo non producono media: servizi dedicati."}
 
     @app.post("/api/ai-engine/test", dependencies=[Depends(_require_local_trust)])
     def ai_engine_test(req: AIEngineTestRequest) -> dict[str, Any]:
@@ -933,9 +973,13 @@ def create_app(db_path: Optional[Path] = None, auto_seed: bool = True) -> FastAP
                 return {"ok": False, "provider": req.provider, "detail": "Nessuna foto nel Vault per il test multimodale"}
         else:
             image_path = None
-        return director.ai_engine.test_provider(
+        result = director.ai_engine.test_provider(
             req.provider, prompt=req.prompt, model=req.model, image_path=image_path
         )
+        if req.multimodal and not result.get("ok"):
+            # un test foto fallito non deve lasciare il provider "operativo"
+            result["provider_status"] = director.ai_engine.probe(req.provider, refresh=True)
+        return result
 
     @app.post("/api/ai-engine/key/{provider_id}", dependencies=[Depends(_require_local_trust)])
     def ai_engine_set_key(provider_id: str, req: ProviderKeyRequest) -> dict[str, Any]:

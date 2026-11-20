@@ -68,6 +68,37 @@ class AIMediaLab:
         self.brand_brain = brand_brain
         self.guardian = BrandGuardian(brand_brain)
         self.providers = providers
+        self.engine = None
+
+    def attach_engine_manager(self, engine: Any) -> None:
+        self.engine = engine
+        self.guardian.attach_engine_manager(engine)
+
+    def refine_detail_prompt(self, detail_description: str) -> dict[str, Any]:
+        """Prompt di dettaglio redatto dal modello, vincolato all'originale e validato."""
+        base = self.build_faithful_detail_prompt(detail_description)
+        if self.engine is None:
+            return {"prompt": base, "source": "deterministic"}
+        from kora_studio.ai_engine.base import EngineError
+
+        system = (
+            "Sei il Visual Intelligence di KORA. Riscrivi il prompt di ritaglio/dettaglio mantenendo "
+            "IDENTICI i vincoli: stessa fotografia, materiali e geometria reali, nessun elemento nuovo. "
+            "Rispondi solo con il prompt finale, massimo 120 parole, in italiano."
+        )
+        try:
+            result = self.engine.call(
+                "ai_media_lab",
+                [{"role": "system", "content": system}, {"role": "user", "content": base}],
+                timeout=45,
+            )
+        except EngineError as exc:
+            return {"prompt": base, "source": "deterministic", "error": str(exc)}
+        candidate = (result.text or "").strip()
+        guard = self.guardian.validate_generation_prompt(candidate)
+        if not candidate or not guard["approved"]:
+            return {"prompt": base, "source": "deterministic", "violations": guard.get("violations")}
+        return {"prompt": candidate, "source": f"engine:{result.provider}/{result.model}"}
 
     def build_faithful_detail_prompt(self, detail_description: str) -> str:
         """Exact KORA authenticity prompt for faithful detail generation/crop (Section 7 Mode A)."""

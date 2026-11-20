@@ -28,12 +28,19 @@ class ExportManager:
         editor: CinematicEditor,
         sound_designer: SoundDesigner,
         qc: QualityController,
+        copywriter: Any = None,
     ) -> None:
         self.vault = vault
         self.brand_brain = brand_brain
         self.editor = editor
         self.sound_designer = sound_designer
         self.qc = qc
+        self.copywriter = copywriter
+
+    def attach_engine_manager(self, engine: Any) -> None:
+        from kora_studio.agents.copywriter import Copywriter
+
+        self.copywriter = Copywriter(engine, guardian=None)
 
     def generate_vertical_cover(
         self,
@@ -116,7 +123,13 @@ class ExportManager:
         composited.save(output_png, "PNG")
         return output_png
 
-    def generate_instagram_caption(self, title: str, message: str, theme: str) -> dict[str, Any]:
+    def generate_instagram_caption(
+        self,
+        title: str,
+        message: str,
+        theme: str,
+        production_id: Optional[str] = None,
+    ) -> dict[str, Any]:
         profile = self.brand_brain.get_current()
         contact = profile.get("contact", {})
         loc = contact.get("address", "Lungomare destro · Policoro (MT)")
@@ -128,19 +141,33 @@ class ExportManager:
             f"📍 {loc}\n"
             f"📲 Info e WhatsApp {wa}"
         )
-        hashtags = [
-            "#KoraBeachClub",
-            "#TheArtOfBeing",
-            "#Policoro",
-            "#OspitalitàMediterranea",
-            "#Basilicata",
-            "#MareIonio",
-            "#TempoRitrovato",
-        ]
-        return {
+        template = {
             "caption": caption,
-            "hashtags": hashtags,
-            "full_post_text": f"{caption}\n\n{' '.join(hashtags)}",
+            "hashtags": [
+                "#KoraBeachClub",
+                "#TheArtOfBeing",
+                "#Policoro",
+                "#OspitalitàMediterranea",
+                "#Basilicata",
+                "#MareIonio",
+                "#TempoRitrovato",
+            ],
+        }
+        if self.copywriter is not None:
+            written = self.copywriter.write(
+                title=title,
+                message=message,
+                theme=theme,
+                contact=contact,
+                production_id=production_id,
+                fallback=template,
+            )
+            return written
+        return {
+            "caption": template["caption"],
+            "hashtags": template["hashtags"],
+            "full_post_text": f"{caption}\n\n{' '.join(template['hashtags'])}",
+            "source": "deterministic_template",
         }
 
     def export_bundle(
@@ -169,10 +196,15 @@ class ExportManager:
             work_dir=project_dir,
         )
         if not qc_report.passed:
-            raise RuntimeError(
-                "Esportazione bloccata dal Controllo Qualità: "
-                + "; ".join(c.name + ": " + c.detail for c in qc_report.checks if not c.passed)
-            )
+            detail = "; ".join(c.name + ": " + c.detail for c in qc_report.checks if not c.passed)
+            try:
+                diagnosis = self.qc.diagnose(qc_report)
+                hint = (diagnosis or {}).get("suggestion")
+                if hint:
+                    detail = f"{detail}. Diagnosi: {hint}"
+            except Exception:
+                pass
+            raise RuntimeError("Esportazione bloccata dal Controllo Qualità: " + detail)
 
         final_mp4 = export_dir / f"{project_id}_reel_final.mp4"
         if main_mp4.resolve() != final_mp4.resolve():
@@ -190,6 +222,7 @@ class ExportManager:
             project["title"],
             concept.get("message", project["theme"]),
             project["theme"],
+            production_id=project_id,
         )
         caption_txt = export_dir / f"{project_id}_caption_instagram.txt"
         caption_txt.write_text(ig["full_post_text"], encoding="utf-8")

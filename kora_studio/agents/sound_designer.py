@@ -13,8 +13,69 @@ from kora_studio.vault.sound_library import SoundLibrary
 class SoundDesigner:
     """Selects coherent, licensed SFX and music and mixes them safely under voiceover."""
 
-    def __init__(self, sound_library: SoundLibrary) -> None:
+    def __init__(self, sound_library: SoundLibrary, engine: Any = None) -> None:
         self.sound_library = sound_library
+        self.engine = engine
+
+    def attach_engine_manager(self, engine: Any) -> None:
+        self.engine = engine
+
+    def _engine_cues(
+        self,
+        scenes: list[StoryboardScene],
+        by_cat: dict[str, list[dict[str, Any]]],
+        production_id: Any = None,
+    ) -> Optional[dict[str, Any]]:
+        """Il Sound Director configurabile sceglie musica e cue dentro il catalogo REALE."""
+        if self.engine is None:
+            return None
+        import json
+
+        from kora_studio.ai_engine.base import EngineError
+
+        music = [s for s in self.sound_library.list_sounds() if s["category"].startswith("musica")]
+        prompt = (
+            "Sei il Sound Designer di KORA Beach Club. Scegli una traccia dal catalogo reale e, per ogni "
+            "scena, una categoria di suono presente nel catalogo. Nessun suono inventato. "
+            'Rispondi SOLO con JSON: {"music_id": str, "cues": [{"scene_number": int, "category": str, "why": str}]}'
+        )
+        payload = {
+            "scene": [
+                {"n": sc.scene_number, "goal": sc.narrative_goal, "asset": sc.selected_asset_id, "sec": sc.duration_sec}
+                for sc in scenes
+            ],
+            "music_catalog": [{"id": m["id"], "name": m["name"]} for m in music],
+            "sfx_categories": sorted(by_cat.keys()),
+        }
+        try:
+            result = self.engine.call(
+                "sound_designer",
+                [{"role": "system", "content": prompt}, {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}],
+                json_mode=True,
+                timeout=45,
+                production_id=production_id,
+            )
+        except EngineError:
+            return None
+        try:
+            start = result.text.find("{")
+            end = result.text.rfind("}")
+            data = json.loads(result.text[start : end + 1]) if start >= 0 and end > start else {}
+        except ValueError:
+            return None
+        if not isinstance(data, dict):
+            return None
+        valid_music = {m["id"] for m in music}
+        cues: dict[int, str] = {}
+        for cue in data.get("cues") or []:
+            if not isinstance(cue, dict):
+                continue
+            number = cue.get("scene_number")
+            category = cue.get("category")
+            if isinstance(number, int) and category in by_cat:
+                cues[number] = category
+        music_id = data.get("music_id") if data.get("music_id") in valid_music else None
+        return {"music_id": music_id, "cues": cues, "engine": f"{result.provider}/{result.model}"}
 
     def select_music(self, preset: str, preferred_music_id: Optional[str] = None) -> Optional[dict[str, Any]]:
         if preferred_music_id:
@@ -43,6 +104,7 @@ class SoundDesigner:
         music_start_sec: float = 0.0,
         music_volume: Optional[float] = None,
         voice_volume: float = 1.05,
+        production_id: Any = None,
     ) -> dict[str, Any]:
         all_sounds = self.sound_library.list_sounds()
         by_cat: dict[str, list[dict[str, Any]]] = {}
@@ -50,9 +112,14 @@ class SoundDesigner:
             by_cat.setdefault(s["category"], []).append(s)
 
         music = self.select_music(preset, preferred_music_id) if include_music else None
+        cues: Optional[dict[str, Any]] = None
+        if include_music and not preferred_music_id:
+            cues = self._engine_cues(scenes, by_cat, production_id=production_id)
+            if cues and cues.get("music_id"):
+                music = self.sound_library.get_sound(cues["music_id"]) or music
         sfx_cues: list[dict[str, Any]] = []
         for scene in scenes:
-            cat = scene.sfx_category
+            cat = (cues or {}).get("cues", {}).get(scene.scene_number, scene.sfx_category)
             if not cat or cat in ("nessuno", "none") or cat not in by_cat:
                 continue
             sfx = by_cat[cat][0]
@@ -76,6 +143,7 @@ class SoundDesigner:
 
         return {
             "music": music,
+            "cue_source": (cues or {}).get("engine", "deterministic") if include_music else "disabled",
             "include_music": include_music,
             "music_start_sec": max(0.0, float(music_start_sec)),
             "music_volume": music_volume,

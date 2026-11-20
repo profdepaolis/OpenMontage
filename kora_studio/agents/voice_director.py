@@ -94,6 +94,88 @@ class VoiceDirector:
         self.vault = vault
         self.providers = providers
 
+    def attach_engine_manager(self, engine: Any) -> None:
+        self.engine = engine
+
+    def adapt_script(
+        self,
+        script: str,
+        scene_durations: list[float],
+        voice_id: str = "brando",
+        production_id: Any = None,
+    ) -> dict[str, Any]:
+        """Adatta il copione alle pause e ai tempi reali delle scene (motore configurabile).
+
+        Il testo non viene mai riscritto nei fatti: vengono proposte pause e micro-cesure,
+        validate perché la durata stimata resti dentro i tempi delle scene.
+        """
+        if not script.strip():
+            return {"script": script, "pauses": [], "source": "empty"}
+        engine = getattr(self, "engine", None)
+        if engine is not None:
+            import json
+
+            from kora_studio.ai_engine.base import EngineError
+
+            prompt = (
+                "Sei il Voice Director di KORA. Adatta il copione alla lettura a voce, mantenendo "
+                "IDENTICHE le parole. Puoi solo inserire pause con «…» e indicare la durata di ogni scena. "
+                'Rispondi SOLO con JSON: {"script": str, "pauses": [{"after": str, "ms": int}], "notes": str}'
+            )
+            payload = {"copione": script, "durate_scene_sec": scene_durations, "voce": voice_id}
+            try:
+                result = engine.call(
+                    "voice_director",
+                    [
+                        {"role": "system", "content": prompt},
+                        {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+                    ],
+                    json_mode=True,
+                    timeout=60,
+                    production_id=production_id,
+                )
+            except EngineError as exc:
+                return {"script": script, "pauses": [], "source": "deterministic", "error": str(exc)}
+            try:
+                start = result.text.find("{")
+                end = result.text.rfind("}")
+                data = json.loads(result.text[start : end + 1]) if start >= 0 and end > start else {}
+            except ValueError:
+                data = {}
+            adapted = str((data or {}).get("script") or "").strip()
+            # guard: the words must stay the same (only punctuation may change)
+            if adapted and self._same_words(script, adapted):
+                return {
+                    "script": adapted,
+                    "pauses": (data or {}).get("pauses") or [],
+                    "notes": str((data or {}).get("notes") or "")[:200],
+                    "source": f"engine:{result.provider}/{result.model}",
+                }
+        return {
+            "script": script,
+            "pauses": self._natural_pauses(script, scene_durations),
+            "source": "deterministic",
+        }
+
+    @staticmethod
+    def _same_words(original: str, adapted: str) -> bool:
+        import re
+
+        words = lambda value: re.findall(r"[\wàèéìòù']+", value.lower())  # noqa: E731
+        return words(original) == words(adapted)
+
+    @staticmethod
+    def _natural_pauses(script: str, scene_durations: list[float]) -> list[dict[str, Any]]:
+        import re
+
+        pauses: list[dict[str, Any]] = []
+        for index, sentence in enumerate(re.split(r"(?<=[.!?])\s+", script.strip())):
+            if not sentence:
+                continue
+            target = scene_durations[index] if index < len(scene_durations) else 0
+            pauses.append({"after": sentence[:60], "ms": int(max(120, min(600, target * 40)))})
+        return pauses
+
     def _get_elevenlabs_voice_id(self, voice_id: str) -> Optional[str]:
         meta = VOICE_CATALOG.get(voice_id, {})
         if voice_id == "none":

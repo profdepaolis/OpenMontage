@@ -8,21 +8,26 @@ import {
   Cpu,
   Eye,
   KeyRound,
+  ListChecks,
   Loader2,
   RefreshCw,
   Shield,
   Sparkles,
+  Star,
   Terminal,
   Wallet,
   Wifi,
   WifiOff,
 } from "lucide-react";
 import type {
+  AIActivityCall,
+  AIActivitySummary,
   AIEngineAgent,
   AIEngineModel,
   AIEngineProvider,
   AIEngineStatus,
   AIEngineStrategy,
+  AIEngineTestResult,
 } from "@/lib/types";
 import { koraApi } from "@/lib/api";
 
@@ -54,6 +59,12 @@ export function AIEngineView() {
   const [primaryProvider, setPrimaryProvider] = useState("auto");
   const [budget, setBudget] = useState("0");
   const [allowPaid, setAllowPaid] = useState(false);
+  const [allowUnknown, setAllowUnknown] = useState(false);
+  const [fallback, setFallback] = useState<"off" | "free_only" | "authorized">("free_only");
+  const [activity, setActivity] = useState<AIActivityCall[]>([]);
+  const [activitySummary, setActivitySummary] = useState<AIActivitySummary | null>(null);
+  const [lastTest, setLastTest] = useState<Record<string, AIEngineTestResult>>({});
+  const [planInputs, setPlanInputs] = useState<Record<string, string>>({});
 
   const applyStatus = useCallback((next: AIEngineStatus) => {
     setStatus(next);
@@ -61,7 +72,20 @@ export function AIEngineView() {
     setPrimaryProvider(next.settings.primary_provider);
     setBudget(String(next.settings.max_budget_eur));
     setAllowPaid(next.settings.allow_paid_calls);
+    setAllowUnknown(next.settings.allow_unknown_costs);
+    setFallback(next.settings.fallback || "free_only");
+    setPlanInputs((prev) => ({ ...(next.settings.declared_subscriptions || {}), ...prev }));
     setBaseUrlInput(next.settings.providers?.custom_openai?.base_url || "");
+  }, []);
+
+  const loadActivity = useCallback(async (limit = 60) => {
+    try {
+      const res = await koraApi.engineActivity(limit);
+      setActivity(res.calls || []);
+      setActivitySummary(res.summary || null);
+    } catch {
+      // il registro non blocca la schermata dei motori
+    }
   }, []);
 
   const load = useCallback(
@@ -70,6 +94,7 @@ export function AIEngineView() {
       setError(null);
       try {
         applyStatus(await koraApi.engineStatus(refresh));
+        await loadActivity();
       } catch (err) {
         setError((err as Error).message);
       } finally {
@@ -107,16 +132,31 @@ export function AIEngineView() {
     }
   };
 
-  const verify = async (providerId: string) => {
+  const verify = async (providerId: string, live = false) => {
     setBusy(`probe:${providerId}`);
     setMsg(null);
+    setError(null);
     try {
-      const probe = await koraApi.engineVerify(providerId);
+      const probe = await koraApi.engineVerify(providerId, live);
       setStatus((prev) =>
         prev
           ? { ...prev, providers: prev.providers.map((p) => (p.provider === providerId ? probe : p)) }
           : prev
       );
+      if (live && probe.live_test) {
+        const test = probe.live_test;
+        setLastTest((prev) => ({ ...prev, [providerId]: test }));
+        if (test.ok) {
+          setMsg(
+            `${probe.label}: generazione reale riuscita in ${test.latency_ms ?? 0} ms con ${
+              test.model || "modello auto"
+            } → “${(test.preview || "").slice(0, 160)}”`
+          );
+        } else {
+          setError(`${probe.label}: test live non riuscito — ${test.detail || ""}`);
+        }
+        return;
+      }
       setMsg(`${probe.label}: stato «${STATE_STYLE[probe.state]?.label || probe.state}». ${probe.detail || ""}`);
     } catch (err) {
       setError((err as Error).message);
@@ -125,22 +165,65 @@ export function AIEngineView() {
     }
   };
 
-  const runTest = async (providerId: string, multimodal: boolean) => {
-    setBusy(`test:${providerId}:${multimodal ? "mm" : "text"}`);
+  const runTest = async (providerId: string, kind: "text" | "vault" | "probe", model?: string) => {
+    const busyKey = `test:${providerId}:${kind}`;
+    setBusy(busyKey);
     setMsg(null);
     setError(null);
     try {
-      const res = await koraApi.engineTest({ provider: providerId, multimodal });
+      const res: AIEngineTestResult =
+        kind === "probe"
+          ? await koraApi.engineVisionTest(providerId, model)
+          : await koraApi.engineTest({
+              provider: providerId,
+              model,
+              multimodal: kind === "vault",
+              prompt:
+                kind === "vault"
+                  ? "Descrivi in italiano, in una frase, ciò che vedi nella fotografia allegata (materiali, luce, ambiente)."
+                  : "Rispondi solo con: KORA OK",
+            });
+      setLastTest((prev) => ({ ...prev, [providerId]: res }));
       if (res.ok) {
+        const visionLine =
+          res.vision_verified === undefined || res.vision_verified === null
+            ? ""
+            : res.vision_verified
+              ? " · contenuto noto riconosciuto ✅"
+              : " · contenuto noto NON riconosciuto: visione non verificata";
         setMsg(
           `${res.provider} · ${res.model || "modello auto"} · ${res.latency_ms ?? 0} ms · ${
-            res.multimodal ? "test multimodale (immagine reale del Vault)" : "test testuale"
-          } → “${res.preview || ""}”`
+            kind === "probe"
+              ? "prova di visione su immagine a contenuto noto"
+              : kind === "vault"
+                ? "test su fotografia reale del Vault"
+                : "test testuale"
+          }${visionLine} → “${(res.preview || "").slice(0, 180)}”`
         );
       } else {
         setError(`${res.provider}: ${res.detail || "test non riuscito"}`);
       }
+      if (res.provider_status) {
+        const probe = res.provider_status;
+        setStatus((prev) =>
+          prev ? { ...prev, providers: prev.providers.map((p) => (p.provider === providerId ? probe : p)) } : prev
+        );
+      }
       await load(true);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const setPrimary = async (providerId: string) => {
+    setBusy(`primary:${providerId}`);
+    setMsg(null);
+    try {
+      const next = await koraApi.engineSetPrimary(providerId);
+      applyStatus(next.status);
+      setMsg(`Motore principale impostato su ${providerId}. Attivo subito, senza riavvio.`);
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -287,6 +370,18 @@ export function AIEngineView() {
             </select>
           </label>
           <label className="block text-xs text-[#6C6459]">
+            Fallback autorizzato
+            <select
+              value={fallback}
+              onChange={(e) => setFallback(e.target.value as "off" | "free_only" | "authorized")}
+              className="mt-1 w-full rounded-xl border border-[#E2D9C8] bg-[#FAF7F2] px-3 py-2 text-xs text-[#1D1B18]"
+            >
+              <option value="off">Nessun fallback (solo il motore scelto)</option>
+              <option value="free_only">Fallback solo su motori a costo zero</option>
+              <option value="authorized">Fallback anche su motori autorizzati a pagamento</option>
+            </select>
+          </label>
+          <label className="block text-xs text-[#6C6459]">
             Budget massimo mensile (€) — tetto rigido 20 €
             <input
               type="number"
@@ -313,6 +408,21 @@ export function AIEngineView() {
               </span>
             </span>
           </label>
+          <label className="flex items-start gap-2 rounded-xl border border-[#E2D9C8] bg-[#FAF7F2] p-3 text-xs text-[#4A443C]">
+            <input
+              type="checkbox"
+              checked={allowUnknown}
+              onChange={(e) => setAllowUnknown(e.target.checked)}
+              className="mt-0.5 h-4 w-4"
+            />
+            <span>
+              Autorizzo anche i motori con costo non verificabile.
+              <span className="mt-1 block text-[11px] text-[#9A8052]">
+                Disattivato (consigliato): con costi sconosciuti le chiamate vengono bloccate, anche a
+                budget disponibile.
+              </span>
+            </span>
+          </label>
         </div>
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <button
@@ -323,8 +433,10 @@ export function AIEngineView() {
                 {
                   primary_provider: primaryProvider,
                   strategy,
+                  fallback,
                   max_budget_eur: Number(budget || 0),
                   allow_paid_calls: allowPaid,
+                  allow_unknown_costs: allowUnknown,
                 },
                 "Impostazioni del motore salvate. Nessun riavvio necessario."
               )
@@ -385,8 +497,31 @@ export function AIEngineView() {
                   <span>Installato: {p.installed ? "sì" : "no"}</span>
                   <span>Autenticato: {p.authenticated ? "sì" : "no"}</span>
                   <span>Operativo verificato: {p.verified_operational ? "sì" : "no"}</span>
-                  <span>Visione: {p.supports_vision ? "sì" : "no"}</span>
+                  <span>Visione verificata: {p.supports_vision ? "sì" : "no"}</span>
+                  <span>Allegati immagini: {p.attachments ? p.attachment_mode || "sì" : "no"}</span>
                 </div>
+                <div className="mt-1 flex flex-wrap gap-2 text-[10px] text-[#6C6459]">
+                  <span>
+                    Fatturazione: {(p.billing_kinds || []).length ? (p.billing_kinds as string[]).join(" · ") : "sconosciuta"}
+                  </span>
+                  <span>Costo noto: {p.models_count - (p.unknown_cost_models ?? 0)}/{p.models_count}</span>
+                  <span>Visione documentata: {p.models_count - (p.unknown_vision_models ?? 0)}/{p.models_count}</span>
+                  <span>
+                    Ultimo test:{" "}
+                    {p.last_test_at
+                      ? `${new Date(p.last_test_at).toLocaleString("it-IT")}${
+                          p.last_test_ok === false ? " (fallito)" : " (riuscito)"
+                        }`
+                      : "mai eseguito"}
+                  </span>
+                  <span>Tempo di risposta: {p.last_latency_ms ? `${p.last_latency_ms} ms` : "non misurato"}</span>
+                </div>
+                {p.models_count > 0 && (p.unknown_cost_models ?? 0) > 0 && (
+                  <p className="mt-1 rounded-lg bg-amber-50 px-2 py-1 text-[10px] text-amber-900">
+                    {(p.unknown_cost_models ?? 0)} modelli con costo non verificabile: con budget 0 € o
+                    autorizzazione assente non vengono usati.
+                  </p>
+                )}
 
                 {isCustom && (
                   <div className="mt-3 flex gap-2">
@@ -407,6 +542,29 @@ export function AIEngineView() {
                       className="rounded-xl border border-[#E2D9C8] bg-[#FAF7F2] px-3 py-2 text-[11px] font-medium text-[#1D1B18]"
                     >
                       Salva indirizzo
+                    </button>
+                  </div>
+                )}
+
+                {(p.provider === "opencode" || p.provider === "codex") && (
+                  <div className="mt-3 flex gap-2">
+                    <input
+                      value={planInputs[p.provider] || ""}
+                      onChange={(e) => setPlanInputs((prev) => ({ ...prev, [p.provider]: e.target.value }))}
+                      placeholder="Piano dichiarato (es. ChatGPT Plus) — usato solo se la CLI non lo espone"
+                      className="flex-1 rounded-xl border border-[#E2D9C8] bg-[#FAF7F2] px-3 py-2 text-[11px]"
+                    />
+                    <button
+                      type="button"
+                      onClick={() =>
+                        saveSettings(
+                          { declared_subscriptions: { [p.provider]: (planInputs[p.provider] || "").trim() } },
+                          "Piano dichiarato registrato per i motori CLI."
+                        )
+                      }
+                      className="rounded-xl border border-[#E2D9C8] bg-[#FAF7F2] px-3 py-2 text-[11px] font-medium text-[#1D1B18]"
+                    >
+                      Salva piano
                     </button>
                   </div>
                 )}
@@ -443,33 +601,69 @@ export function AIEngineView() {
                     ) : (
                       <RefreshCw className="h-3 w-3" />
                     )}
-                    Verifica
+                    Rileva
                   </button>
                   <button
                     type="button"
-                    onClick={() => runTest(p.provider, false)}
-                    disabled={busy === `test:${p.provider}:text`}
-                    className="inline-flex items-center gap-1 rounded-xl border border-[#E2D9C8] bg-[#FAF7F2] px-2.5 py-1.5 text-[11px] font-medium text-[#1D1B18] disabled:opacity-50"
+                    onClick={() => verify(p.provider, true)}
+                    disabled={busy === `probe:${p.provider}` || !p.authenticated}
+                    title={p.authenticated ? "Esegue una generazione reale" : "Autentica prima il motore"}
+                    className="inline-flex items-center gap-1 rounded-xl border border-[#E2D9C8] bg-[#FAF7F2] px-2.5 py-1.5 text-[11px] font-medium text-[#1D1B18] disabled:opacity-40"
+                  >
+                    Test connessione
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => runTest(p.provider, "text")}
+                    disabled={busy === `test:${p.provider}:text` || !p.authenticated}
+                    className="inline-flex items-center gap-1 rounded-xl border border-[#E2D9C8] bg-[#FAF7F2] px-2.5 py-1.5 text-[11px] font-medium text-[#1D1B18] disabled:opacity-40"
                   >
                     Test testo
                   </button>
                   <button
                     type="button"
-                    onClick={() => runTest(p.provider, true)}
-                    disabled={busy === `test:${p.provider}:mm` || !p.supports_vision}
-                    title={p.supports_vision ? "" : "Nessun modello con visione rilevato su questo motore"}
+                    onClick={() => runTest(p.provider, "vault")}
+                    disabled={busy === `test:${p.provider}:vault` || !p.attachments}
+                    title={p.attachments ? "Analizza una fotografia reale del Vault" : "Il motore non trasferisce immagini"}
                     className="inline-flex items-center gap-1 rounded-xl border border-[#E2D9C8] bg-[#FAF7F2] px-2.5 py-1.5 text-[11px] font-medium text-[#1D1B18] disabled:opacity-40"
                   >
-                    <Eye className="h-3 w-3" /> Test multimodale
+                    <Eye className="h-3 w-3" /> Test foto
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => runTest(p.provider, "probe")}
+                    disabled={busy === `test:${p.provider}:probe` || !p.attachments}
+                    title="Immagine con contenuto noto: verifica reale della capacità visiva"
+                    className="inline-flex items-center gap-1 rounded-xl border border-[#E2D9C8] bg-[#FAF7F2] px-2.5 py-1.5 text-[11px] font-medium text-[#1D1B18] disabled:opacity-40"
+                  >
+                    Prova visione
                   </button>
                   <button
                     type="button"
                     onClick={() => loadModels(p.provider)}
                     className="rounded-xl border border-[#E2D9C8] bg-[#FAF7F2] px-2.5 py-1.5 text-[11px] font-medium text-[#1D1B18]"
                   >
-                    Elenca modelli reali
+                    Aggiorna modelli
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPrimary(p.provider)}
+                    disabled={busy === `primary:${p.provider}`}
+                    className="inline-flex items-center gap-1 rounded-xl border border-[#E2D9C8] bg-[#FAF7F2] px-2.5 py-1.5 text-[11px] font-medium text-[#1D1B18] disabled:opacity-50"
+                  >
+                    <Star className="h-3 w-3" /> Imposta primario
                   </button>
                 </div>
+
+                {lastTest[p.provider] && (
+                  <p className="mt-2 rounded-lg bg-[#FAF7F2] px-2 py-1 text-[10px] text-[#4A443C]">
+                    Ultima prova in questa sessione: {lastTest[p.provider].ok ? "riuscita" : "non riuscita"}
+                    {lastTest[p.provider].model ? ` · ${lastTest[p.provider].model}` : ""}
+                    {lastTest[p.provider].latency_ms ? ` · ${lastTest[p.provider].latency_ms} ms` : ""}
+                    {lastTest[p.provider].vision_verified === true ? " · visione verificata" : ""}
+                    {lastTest[p.provider].vision_verified === false ? " · visione non verificata" : ""}
+                  </p>
+                )}
 
                 {(models[p.provider]?.length ?? 0) > 0 && (
                   <div className="mt-2 flex flex-wrap gap-1.5">
@@ -484,13 +678,21 @@ export function AIEngineView() {
                           )
                         }
                         className="rounded-full border border-[#E2D9C8] bg-[#FAF7F2] px-2 py-1 text-[10px] text-[#4A443C] hover:bg-[#EFE8DB]"
-                        title={`${m.vision ? "visione" : "solo testo"} · ${
-                          m.free || m.subscription ? "incluso/0 €" : `~${m.cost_per_1k_eur} €/1k token`
-                        }`}
+                        title={[
+                          m.vision_verified
+                            ? "visione VERIFICATA con immagine a contenuto noto"
+                            : m.vision_documented ?? m.vision
+                              ? "visione documentata, non ancora verificata"
+                              : "capacità visiva non documentata",
+                          `esecuzione: ${m.execution}`,
+                          `fatturazione: ${m.billing}`,
+                          m.cost_known ? `costo ${m.cost_per_1k_eur} €/1k token` : "costo non verificabile",
+                          m.zero_cost ? "a costo zero" : "possibile costo",
+                        ].join(" · ")}
                       >
                         {m.label}
-                        {m.vision ? " · 👁" : ""}
-                        {m.free || m.subscription ? " · 0 €" : ""}
+                        {m.vision_verified ? " · 👁✓" : (m.vision_documented ?? m.vision) ? " · 👁?" : ""}
+                        {m.zero_cost ? " · 0 €" : m.cost_known ? "" : " · costo ?"}
                       </button>
                     ))}
                   </div>
@@ -582,6 +784,83 @@ export function AIEngineView() {
             );
           })}
         </div>
+      </section>
+
+      {/* AI Activity Monitor */}
+      <section className="rounded-2xl border border-[#EDE6D9] bg-white p-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h3 className="flex items-center gap-2 text-sm font-semibold text-[#1D1B18]">
+            <ListChecks className="h-4 w-4 text-[#9A8052]" /> Registro delle chiamate AI
+          </h3>
+          <button
+            type="button"
+            onClick={() => loadActivity(120)}
+            className="inline-flex items-center gap-1 rounded-xl border border-[#E2D9C8] bg-[#FAF7F2] px-2.5 py-1.5 text-[11px] font-medium text-[#1D1B18]"
+          >
+            <RefreshCw className="h-3 w-3" /> Aggiorna registro
+          </button>
+        </div>
+        <p className="mt-1 text-[11px] text-[#6C6459]">
+          Una riga per chiamata: produzione, agente, provider e modello reali, durata, esito, tentativi,
+          fallback e costo (0 €, stimato o sconosciuto). Nessun prompt e nessuna credenziale.
+        </p>
+        {activitySummary && (
+          <div className="mt-2 flex flex-wrap gap-3 text-[11px] text-[#4A443C]">
+            <span>Chiamate: {activitySummary.calls}</span>
+            <span>Riuscite: {activitySummary.ok}</span>
+            <span>Errori: {activitySummary.errors}</span>
+            <span>Fallback: {activitySummary.fallbacks}</span>
+            <span>Costo noto: {activitySummary.known_cost_eur.toFixed(3)} €</span>
+            <span>Costo sconosciuto: {activitySummary.unknown_cost_calls} chiamate</span>
+          </div>
+        )}
+        {activity.length === 0 ? (
+          <p className="mt-3 rounded-xl border border-dashed border-[#E2D9C8] bg-[#FAF7F2] p-3 text-[11px] text-[#6C6459]">
+            Nessuna chiamata registrata in questa installazione.
+          </p>
+        ) : (
+          <div className="mt-3 overflow-x-auto">
+            <table className="w-full min-w-[860px] text-left text-[11px]">
+              <thead className="text-[10px] uppercase tracking-wide text-[#9A8052]">
+                <tr>
+                  <th className="pb-1 pr-2">Ora</th>
+                  <th className="pb-1 pr-2">Produzione</th>
+                  <th className="pb-1 pr-2">Agente</th>
+                  <th className="pb-1 pr-2">Provider / modello</th>
+                  <th className="pb-1 pr-2">Durata</th>
+                  <th className="pb-1 pr-2">Esito</th>
+                  <th className="pb-1 pr-2">Tent.</th>
+                  <th className="pb-1 pr-2">Fallback</th>
+                  <th className="pb-1 pr-2">Costo</th>
+                </tr>
+              </thead>
+              <tbody className="text-[#4A443C]">
+                {activity.map((row) => (
+                  <tr key={row.id} className="border-t border-[#F2EBDF]">
+                    <td className="py-1 pr-2">{new Date(row.started_at).toLocaleString("it-IT")}</td>
+                    <td className="py-1 pr-2 font-mono text-[10px]">{row.production_id || "—"}</td>
+                    <td className="py-1 pr-2">{row.agent}</td>
+                    <td className="py-1 pr-2">
+                      {row.provider}
+                      <span className="text-[#9A8052]">/{row.model}</span>
+                    </td>
+                    <td className="py-1 pr-2">{row.duration_ms} ms</td>
+                    <td className="py-1 pr-2">
+                      {row.outcome === "ok" ? "✅ riuscita" : row.cancelled ? "⏹ annullata" : `⚠ ${row.outcome}`}
+                    </td>
+                    <td className="py-1 pr-2">{row.attempts}</td>
+                    <td className="py-1 pr-2">{row.fallback_used ? `sì (da ${row.fallback_from || "?"})` : "no"}</td>
+                    <td className="py-1 pr-2">
+                      {row.cost_known && row.cost_eur !== null && row.cost_eur !== undefined
+                        ? `${row.cost_eur.toFixed(4)} €`
+                        : "sconosciuto"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </section>
 
       <section className="rounded-2xl border border-[#EDE6D9] bg-[#FAF7F2] p-4 text-[11px] leading-relaxed text-[#6C6459]">

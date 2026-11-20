@@ -195,11 +195,64 @@ MIGRATIONS: list[tuple[int, str, str]] = [
             FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE
         );
 
+        CREATE TABLE IF NOT EXISTS ai_activity (
+            id TEXT PRIMARY KEY,
+            production_id TEXT NOT NULL DEFAULT '',
+            agent TEXT NOT NULL,
+            provider TEXT NOT NULL DEFAULT '',
+            model TEXT NOT NULL DEFAULT '',
+            started_at TEXT NOT NULL,
+            duration_ms INTEGER NOT NULL DEFAULT 0,
+            outcome TEXT NOT NULL,
+            attempts INTEGER NOT NULL DEFAULT 1,
+            fallback_used INTEGER NOT NULL DEFAULT 0,
+            fallback_from TEXT NOT NULL DEFAULT '',
+            cost_eur REAL,
+            cost_known INTEGER NOT NULL DEFAULT 0,
+            billing TEXT NOT NULL DEFAULT 'unknown',
+            execution TEXT NOT NULL DEFAULT 'unknown',
+            error_kind TEXT NOT NULL DEFAULT '',
+            error_message TEXT NOT NULL DEFAULT '',
+            cancelled INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_ai_activity_created ON ai_activity(created_at);
+        CREATE INDEX IF NOT EXISTS idx_ai_activity_production ON ai_activity(production_id);
+
         CREATE TABLE IF NOT EXISTS user_preferences (
             key TEXT PRIMARY KEY,
             value_json TEXT NOT NULL,
             updated_at TEXT NOT NULL
         );
+        """,
+    ),
+    (
+        2,
+        "ai_activity_monitor",
+        """
+        CREATE TABLE IF NOT EXISTS ai_activity (
+            id TEXT PRIMARY KEY,
+            production_id TEXT NOT NULL DEFAULT '',
+            agent TEXT NOT NULL,
+            provider TEXT NOT NULL DEFAULT '',
+            model TEXT NOT NULL DEFAULT '',
+            started_at TEXT NOT NULL,
+            duration_ms INTEGER NOT NULL DEFAULT 0,
+            outcome TEXT NOT NULL,
+            attempts INTEGER NOT NULL DEFAULT 1,
+            fallback_used INTEGER NOT NULL DEFAULT 0,
+            fallback_from TEXT NOT NULL DEFAULT '',
+            cost_eur REAL,
+            cost_known INTEGER NOT NULL DEFAULT 0,
+            billing TEXT NOT NULL DEFAULT 'unknown',
+            execution TEXT NOT NULL DEFAULT 'unknown',
+            error_kind TEXT NOT NULL DEFAULT '',
+            error_message TEXT NOT NULL DEFAULT '',
+            cancelled INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_ai_activity_created ON ai_activity(created_at);
+        CREATE INDEX IF NOT EXISTS idx_ai_activity_production ON ai_activity(production_id);
         """,
     ),
 ]

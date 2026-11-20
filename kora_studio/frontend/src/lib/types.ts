@@ -265,6 +265,9 @@ export interface AIEngineProvider {
   installed: boolean;
   authenticated: boolean;
   verified_operational: boolean;
+  last_test_at?: string | null;
+  last_test_ok?: boolean | null;
+  last_latency_ms?: number | null;
   version?: string | null;
   binary?: string | null;
   detail: string;
@@ -272,7 +275,13 @@ export interface AIEngineProvider {
   account?: string | null;
   models_count: number;
   supports_vision: boolean;
+  unknown_vision_models?: number;
+  unknown_cost_models?: number;
+  billing_kinds?: string[];
+  attachments?: boolean;
+  attachment_mode?: string | null;
   docs_url: string;
+  cost_summary?: { zero_cost_models: number; paid_models: number; unknown: number };
 }
 
 export interface AIEngineAgent {
@@ -288,9 +297,13 @@ export interface AIEngineAgent {
 export interface AIEngineSettings {
   strategy: AIEngineStrategy;
   primary_provider: string;
+  fallback: "off" | "free_only" | "authorized";
   max_budget_eur: number;
   allow_paid_calls: boolean;
+  allow_unknown_costs: boolean;
   allow_external_media: boolean;
+  declared_subscriptions: Record<string, string>;
+  declared_free_quota: Record<string, boolean>;
   providers: Record<string, { enabled?: boolean; model?: string; base_url?: string }>;
   agents: Record<string, { mode: "inherit" | "provider"; provider?: string; model?: string }>;
 }
@@ -300,21 +313,65 @@ export interface AIEngineStatus {
   providers: AIEngineProvider[];
   agents: AIEngineAgent[];
   strategies: AIEngineStrategy[];
+  fallback_modes: Array<"off" | "free_only" | "authorized">;
   ollama_installed: boolean;
   ollama_required: boolean;
   operational: string[];
   budget: { max_budget_eur: number; allow_paid_calls: boolean; spent_note: string };
+  activity?: AIActivitySummary;
+}
+
+export interface AIActivitySummary {
+  calls: number;
+  ok: number;
+  errors: number;
+  fallbacks: number;
+  known_cost_eur: number;
+  unknown_cost_calls: number;
+  note: string;
+}
+
+export interface AIActivityCall {
+  id: string;
+  production_id?: string | null;
+  agent: string;
+  provider: string;
+  model: string;
+  started_at: string;
+  duration_ms: number;
+  outcome: string;
+  attempts: number;
+  fallback_used: boolean;
+  fallback_from?: string | null;
+  cost_eur?: number | null;
+  cost_known: boolean;
+  billing: string;
+  execution: string;
+  error_kind?: string | null;
+  error_message?: string | null;
+  cancelled: boolean;
 }
 
 export interface AIEngineModel {
   id: string;
   label: string;
+  provider: string;
+  auth_type: string;
+  billing: string;
+  subscription_name?: string | null;
   text: boolean;
-  vision: boolean;
-  free: boolean;
-  subscription: boolean;
-  cost_per_1k_eur: number;
+  vision: boolean | null;
+  vision_documented?: boolean | null;
+  vision_known: boolean;
+  vision_verified: boolean;
+  execution: string;
+  zero_cost: boolean;
+  cost_known: boolean;
+  cost_per_1k_eur: number | null;
+  quota_status: string;
+  latency_ms?: number | null;
   source: string;
+  notes?: string;
 }
 
 export interface AIEngineTestResult {
@@ -324,6 +381,13 @@ export interface AIEngineTestResult {
   latency_ms?: number;
   preview?: string;
   multimodal?: boolean;
-  cost_eur?: number;
+  vision_verified?: boolean | null;
+  expected_content_seen?: boolean | null;
+  cost_eur?: number | null;
+  cost_known?: boolean;
+  billing?: string;
+  execution?: string;
   detail?: string;
+  provider_status?: AIEngineProvider;
+  probe?: { expected: string; path: string };
 }

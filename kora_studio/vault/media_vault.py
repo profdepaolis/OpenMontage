@@ -688,6 +688,24 @@ class MediaVault:
             row = conn.execute("SELECT * FROM media_assets WHERE id = ?", (asset_id,)).fetchone()
             return self._row_to_dict(row) if row else None
 
+    def set_vision_review(self, asset_id: str, review: dict[str, Any]) -> bool:
+        """Store a real vision review inside the asset analysis (never overwrites metrics)."""
+        with self.db.session() as conn:
+            row = conn.execute(
+                "SELECT analysis_json FROM media_assets WHERE id = ?", (asset_id,)
+            ).fetchone()
+            if not row:
+                return False
+            analysis = json.loads(row["analysis_json"] or "{}")
+            multimodal = dict(analysis.get("multimodal") or {})
+            multimodal["vision_review"] = review
+            analysis["multimodal"] = multimodal
+            conn.execute(
+                "UPDATE media_assets SET analysis_json = ? WHERE id = ?",
+                (json.dumps(analysis, ensure_ascii=False), asset_id),
+            )
+        return True
+
     def get_logo_asset(self) -> Optional[dict[str, Any]]:
         with self.db.session() as conn:
             row = conn.execute(

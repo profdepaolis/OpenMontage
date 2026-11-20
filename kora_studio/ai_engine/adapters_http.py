@@ -1,30 +1,42 @@
 """HTTP adapters: Ollama (optional), OpenAI-compatible (OpenAI, OpenRouter,
-DeepSeek, custom endpoint), Google Gemini, Anthropic."""
+DeepSeek, custom endpoint), Google Gemini, Anthropic.
+
+Every model is described with the metadata KORA can actually prove: a price is
+reported only when the vendor publishes it (otherwise ``None`` = unknown), a
+vision capability only when the curated registry knows the model (otherwise
+``None`` = unverified), and the execution location is explicit.
+"""
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from pathlib import Path
+from typing import Any, Callable, Optional
 
 from kora_studio.ai_engine.base import (
     AIProviderAdapter,
+    EngineAuthError,
     EngineError,
+    EngineModelUnavailable,
+    EngineQuotaExhausted,
     EngineResult,
     ModelInfo,
+    classify_error,
     now_ms,
 )
-
-# Indicative prices in EUR per 1k input tokens (0 = included in a plan/local).
-PRICES_PER_1K = {
-    "gpt-4o-mini": 0.00014,
-    "gpt-4o": 0.0023,
-    "gpt-4.1-mini": 0.00036,
-    "claude-3-5-sonnet-latest": 0.0027,
-    "claude-3-5-haiku-latest": 0.0007,
-    "gemini-2.5-flash": 0.00027,
-    "gemini-2.0-flash": 0.00009,
-    "gemini-2.5-pro": 0.0011,
-    "deepseek-chat": 0.00025,
-}
+from kora_studio.ai_engine.models import (
+    AUTH_API_KEY,
+    AUTH_LOCAL_NO_AUTH,
+    BILLING_FREE_QUOTA,
+    BILLING_LOCAL,
+    BILLING_PAID_API,
+    BILLING_UNKNOWN,
+    EXEC_LOCAL,
+    EXEC_REMOTE,
+    QUOTA_NOT_VERIFIABLE,
+    canonical_model_id,
+    known_price,
+    known_vision,
+)
 
 
 def _image_part(message: dict[str, Any]) -> Optional[str]:
@@ -52,6 +64,45 @@ def _text_of(message: dict[str, Any]) -> str:
     return ""
 
 
+def _api_model(
+    model_id: str,
+    *,
+    provider_id: str,
+    source: str,
+    billing: str,
+    execution: str = EXEC_REMOTE,
+    auth_type: str = AUTH_API_KEY,
+    vision: Optional[bool] = "__registry__",  # type: ignore[assignment]
+    price: Optional[float] = "__registry__",  # type: ignore[assignment]
+    notes: str = "",
+    label: str = "",
+) -> ModelInfo:
+    canonical = canonical_model_id(model_id)
+    resolved_vision = known_vision(canonical) if vision == "__registry__" else vision
+    if billing == BILLING_PAID_API:
+        resolved_cost: Optional[float] = known_price(canonical) if price == "__registry__" else price
+    elif billing in (BILLING_FREE_QUOTA, BILLING_LOCAL):
+        resolved_cost = 0.0
+    else:
+        resolved_cost = None
+    return ModelInfo(
+        id=model_id,
+        label=label or canonical,
+        provider=provider_id,
+        auth_type=auth_type,
+        billing=billing,
+        subscription_name=None,
+        text=True,
+        vision=resolved_vision,
+        vision_verified=False,
+        execution=execution,
+        cost_per_1k_eur=resolved_cost,
+        quota_status=QUOTA_NOT_VERIFIABLE,
+        source=source,
+        notes=notes,
+    )
+
+
 class OllamaAdapter(AIProviderAdapter):
     kind = "ollama_local"
     label = "Ollama (locale, opzionale)"
@@ -59,7 +110,9 @@ class OllamaAdapter(AIProviderAdapter):
     is_cli = False
     requires_key = False
     requires_paid_authorization = False
-    subscription_quota = True
+    subscription_quota = False
+    supports_attachments = True
+    attachment_mode = "inline_base64"
     endpoint = "http://127.0.0.1:11434"
 
     def detect(self) -> dict[str, Any]:
@@ -101,19 +154,20 @@ class OllamaAdapter(AIProviderAdapter):
             name = str(item.get("name") or item.get("model") or "").strip()
             if not name:
                 continue
-            out.append(
-                ModelInfo(
-                    id=name,
-                    label=name,
-                    text=True,
-                    vision=bool(
-                        any(tag in name.lower() for tag in ("llava", "vision", "qwen2.5-vl", "gemma3"))
-                    ),
-                    free=True,
-                    latency_ms=None,
-                    source="ollama",
-                )
+            info = _api_model(
+                name,
+                provider_id="ollama",
+                source="ollama",
+                billing=BILLING_LOCAL,
+                execution=EXEC_LOCAL,
+                auth_type=AUTH_LOCAL_NO_AUTH,
+                notes="inferenza sul computer locale",
             )
+            details = item.get("details") or {}
+            info.context_tokens = None
+            if details.get("parameter_size"):
+                info.notes = f"{info.notes} · {details.get('parameter_size')}"
+            out.append(info)
         return out
 
     def generate(
@@ -122,23 +176,36 @@ class OllamaAdapter(AIProviderAdapter):
         model: Optional[str] = None,
         timeout: float = 120.0,
         json_mode: bool = False,
+        attachments: Optional[list[Path]] = None,
+        cancel: Optional[Callable[[], bool]] = None,
     ) -> EngineResult:
         models = self.list_models()
         if not models:
             raise EngineError("Ollama: nessun modello installato")
         chosen = model or next((m.id for m in models if m.text), models[0].id)
-        payload: dict[str, Any] = {
-            "model": chosen,
-            "stream": False,
-            "messages": [
-                {"role": m.get("role", "user"), "content": _text_of(m)} for m in messages
-            ],
-        }
+        payload_messages: list[dict[str, Any]] = []
+        for message in messages:
+            entry: dict[str, Any] = {"role": message.get("role", "user"), "content": _text_of(message)}
+            images: list[str] = []
+            content = message.get("content")
+            if isinstance(content, list):
+                for part in content:
+                    if isinstance(part, dict) and part.get("type") in ("image_url", "image"):
+                        value = part.get("image_url") or part.get("image") or {}
+                        url = value.get("url") if isinstance(value, dict) else value
+                        if isinstance(url, str) and url.startswith("data:"):
+                            images.append(url.split(",", 1)[-1])
+                    elif isinstance(part, dict) and isinstance(part.get("data"), str):
+                        images.append(part["data"])
+            if images:
+                entry["images"] = images
+            payload_messages.append(entry)
+        payload: dict[str, Any] = {"model": chosen, "stream": False, "messages": payload_messages}
         if json_mode:
             payload["format"] = "json"
         started = now_ms()
         data = self._http_json(
-            "POST", f"{self.endpoint}/api/chat", payload=payload, timeout=timeout
+            "POST", f"{self.endpoint}/api/chat", payload=payload, timeout=timeout, cancel=cancel
         )
         text = str(((data.get("message") or {}).get("content")) or "").strip()
         if not text:
@@ -150,7 +217,9 @@ class OllamaAdapter(AIProviderAdapter):
             latency_ms=now_ms() - started,
             cost_eur=0.0,
             local=True,
-            subscription=True,
+            subscription=False,
+            billing=BILLING_LOCAL,
+            execution=EXEC_LOCAL,
         )
 
 
@@ -163,6 +232,9 @@ class OpenAICompatibleAdapter(AIProviderAdapter):
     base_url = "https://api.openai.com/v1"
     default_models = ("gpt-4o-mini", "gpt-4o")
     extra_headers: dict[str, str] = {}
+    supports_attachments = True
+    attachment_mode = "inline_base64"
+    billing = BILLING_PAID_API
 
     def __init__(self, providers: Any = None, base_url: Optional[str] = None) -> None:
         super().__init__(providers)
@@ -193,12 +265,7 @@ class OpenAICompatibleAdapter(AIProviderAdapter):
         if not self.api_key():
             return {"authenticated": False, "detail": "API key non configurata", "account": None}
         try:
-            self._http_json(
-                "GET",
-                f"{self.base_url}/models",
-                headers=self._headers(),
-                timeout=10,
-            )
+            self._http_json("GET", f"{self.base_url}/models", headers=self._headers(), timeout=10)
         except EngineError as exc:
             return {"authenticated": False, "detail": str(exc), "account": None}
         return {"authenticated": True, "detail": "chiave valida", "account": self.kind}
@@ -211,36 +278,39 @@ class OpenAICompatibleAdapter(AIProviderAdapter):
         headers.update(self.extra_headers)
         return headers
 
+    def _model_from_api(self, item: dict[str, Any]) -> Optional[ModelInfo]:
+        model_id = str(item.get("id") or "").strip()
+        if not model_id:
+            return None
+        low = model_id.lower()
+        if any(tag in low for tag in ("embed", "whisper", "tts", "dall-e", "moderation", "audio", "image-")):
+            return None
+        return _api_model(
+            model_id,
+            provider_id=self.provider_id,
+            source=self.kind,
+            billing=self.billing,
+            notes="" if known_price(model_id) is not None else "prezzo non pubblicato per questo modello",
+        )
+
     def list_models(self) -> list[ModelInfo]:
         if not self.api_key():
             return []
         try:
-            data = self._http_json(
-                "GET", f"{self.base_url}/models", headers=self._headers(), timeout=12
-            )
+            data = self._http_json("GET", f"{self.base_url}/models", headers=self._headers(), timeout=12)
         except EngineError:
-            return [ModelInfo(id=m, label=m, text=True) for m in self.default_models]
+            return [
+                _api_model(m, provider_id=self.provider_id, source=self.kind, billing=self.billing)
+                for m in self.default_models
+            ]
         out: list[ModelInfo] = []
         for item in data.get("data") or []:
-            model_id = str(item.get("id") or "").strip()
-            if not model_id:
+            if not isinstance(item, dict):
                 continue
-            low = model_id.lower()
-            if any(tag in low for tag in ("embed", "whisper", "tts", "dall-e", "moderation", "audio")):
-                continue
-            out.append(
-                ModelInfo(
-                    id=model_id,
-                    label=model_id,
-                    text=True,
-                    vision=bool(
-                        any(tag in low for tag in ("gpt-4o", "gpt-4.1", "gpt-5", "vision", "claude", "gemini"))
-                    ),
-                    cost_per_1k_eur=PRICES_PER_1K.get(model_id, 0.002),
-                    source=self.kind,
-                )
-            )
-        out.sort(key=lambda m: m.cost_per_1k_eur)
+            info = self._model_from_api(item)
+            if info:
+                out.append(info)
+        out.sort(key=lambda m: (m.cost_per_1k_eur is None, m.cost_per_1k_eur or 0.0))
         return out
 
     def generate(
@@ -249,9 +319,11 @@ class OpenAICompatibleAdapter(AIProviderAdapter):
         model: Optional[str] = None,
         timeout: float = 90.0,
         json_mode: bool = False,
+        attachments: Optional[list[Path]] = None,
+        cancel: Optional[Callable[[], bool]] = None,
     ) -> EngineResult:
         if not self.api_key():
-            raise EngineError(f"{self.label}: API key non configurata")
+            raise EngineAuthError(f"{self.label}: API key non configurata")
         chosen = model or (self.default_models[0] if self.default_models else "")
         payload: dict[str, Any] = {
             "model": chosen,
@@ -269,6 +341,7 @@ class OpenAICompatibleAdapter(AIProviderAdapter):
             headers=self._headers(),
             payload=payload,
             timeout=timeout,
+            cancel=cancel,
         )
         try:
             text = str(data["choices"][0]["message"]["content"] or "").strip()
@@ -277,14 +350,20 @@ class OpenAICompatibleAdapter(AIProviderAdapter):
         if not text:
             raise EngineError(f"{self.label}: risposta vuota")
         prompt_chars = sum(len(_text_of(m)) for m in messages)
+        price = known_price(chosen)
+        cost: Optional[float] = (
+            round((prompt_chars / 1000.0) * price, 5) if price is not None else None
+        )
         return EngineResult(
             text=text,
             provider=self.kind,
             model=chosen,
             latency_ms=now_ms() - started,
-            cost_eur=round((prompt_chars / 1000.0) * PRICES_PER_1K.get(chosen, 0.002), 5),
+            cost_eur=cost,
             local=False,
             subscription=False,
+            billing=self.billing,
+            execution=EXEC_REMOTE,
         )
 
 
@@ -295,6 +374,17 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
     base_url = "https://openrouter.ai/api/v1"
     default_models = ("openai/gpt-4o-mini",)
     extra_headers = {"HTTP-Referer": "http://127.0.0.1:8000", "X-Title": "KORA STUDIO"}
+
+    def _model_from_api(self, item: dict[str, Any]) -> Optional[ModelInfo]:
+        info = super()._model_from_api(item)
+        if info is None:
+            return None
+        model_id = str(item.get("id") or "")
+        if model_id.endswith(":free"):
+            info.billing = BILLING_FREE_QUOTA
+            info.cost_per_1k_eur = 0.0
+            info.notes = "modello gratuito dichiarato da OpenRouter"
+        return info
 
 
 class DeepSeekAdapter(OpenAICompatibleAdapter):
@@ -314,7 +404,9 @@ class CustomEndpointAdapter(OpenAICompatibleAdapter):
     base_url = "http://127.0.0.1:1234/v1"
     default_models = ()
     requires_key = False
+    requires_paid_authorization = False
     is_local = True
+    billing = BILLING_LOCAL
 
     def detect(self) -> dict[str, Any]:
         """Un endpoint locale esiste solo se risponde davvero."""
@@ -344,19 +436,33 @@ class CustomEndpointAdapter(OpenAICompatibleAdapter):
             "account": None,
         }
 
+    def _model_from_api(self, item: dict[str, Any]) -> Optional[ModelInfo]:
+        info = super()._model_from_api(item)
+        if info is not None:
+            info.billing = BILLING_LOCAL
+            info.execution = EXEC_LOCAL
+            info.auth_type = AUTH_LOCAL_NO_AUTH
+            info.cost_per_1k_eur = 0.0
+            info.notes = "inferenza sul computer locale"
+        return info
+
+    def generate(self, *args: Any, **kwargs: Any) -> EngineResult:
+        result = super().generate(*args, **kwargs)
+        result.local = True
+        result.billing = BILLING_LOCAL
+        result.execution = EXEC_LOCAL
+        result.cost_eur = 0.0
+        return result
+
 
 class GeminiAdapter(AIProviderAdapter):
     kind = "gemini_api"
     label = "Google Gemini"
     provider_id = "gemini_api"
     endpoint = "https://generativelanguage.googleapis.com"
-    TEXT_FALLBACKS = (
-        "gemini-2.5-flash",
-        "gemini-2.0-flash",
-        "gemini-flash-latest",
-        "gemini-1.5-flash",
-    )
     NON_TEXT = ("image", "embedding", "embed", "tts", "audio", "live", "veo", "aqa")
+    supports_attachments = True
+    attachment_mode = "inline_base64"
 
     def api_key(self) -> Optional[str]:
         if self.providers is None:
@@ -398,7 +504,8 @@ class GeminiAdapter(AIProviderAdapter):
                 timeout=12,
             )
         except EngineError:
-            return [ModelInfo(id=m, label=m, text=True) for m in self.TEXT_FALLBACKS]
+            # nessun elenco inventato: senza API raggiungibile non conosciamo i modelli
+            return []
         flash: list[ModelInfo] = []
         pro: list[ModelInfo] = []
         for item in data.get("models") or []:
@@ -408,13 +515,12 @@ class GeminiAdapter(AIProviderAdapter):
             low = name.lower()
             if any(tag in low for tag in self.NON_TEXT):
                 continue
-            info = ModelInfo(
-                id=name,
-                label=name,
-                text=True,
-                vision=True,
-                cost_per_1k_eur=PRICES_PER_1K.get(name, 0.0003),
+            info = _api_model(
+                name,
+                provider_id=self.provider_id,
                 source="gemini",
+                billing=BILLING_UNKNOWN,
+                notes="piano gratuito/a consumo non verificabile dall'API",
             )
             (pro if "pro" in low else flash).append(info)
         return flash + pro
@@ -425,12 +531,14 @@ class GeminiAdapter(AIProviderAdapter):
         model: Optional[str] = None,
         timeout: float = 90.0,
         json_mode: bool = False,
+        attachments: Optional[list[Path]] = None,
+        cancel: Optional[Callable[[], bool]] = None,
     ) -> EngineResult:
         key = self.api_key()
         if not key:
-            raise EngineError("Gemini: API key non configurata")
+            raise EngineAuthError("Gemini: API key non configurata")
         candidates: list[str] = []
-        for name in [model] + [m.id for m in self.list_models()] + list(self.TEXT_FALLBACKS):
+        for name in [model] + [m.id for m in self.list_models()]:
             if name and name not in candidates:
                 candidates.append(name)
 
@@ -463,7 +571,14 @@ class GeminiAdapter(AIProviderAdapter):
                         headers={"x-goog-api-key": key, "Content-Type": "application/json"},
                         payload=body,
                         timeout=timeout,
+                        cancel=cancel,
                     )
+                except (EngineAuthError, EngineQuotaExhausted) as exc:
+                    # errore dell'account, non del singolo modello: nessun altro candidato può funzionare
+                    raise
+                except EngineModelUnavailable as exc:
+                    last_error = str(exc)
+                    continue
                 except EngineError as exc:
                     last_error = str(exc)
                     continue
@@ -473,20 +588,24 @@ class GeminiAdapter(AIProviderAdapter):
                 except (KeyError, IndexError, TypeError):
                     continue
                 if text:
+                    price = known_price(name)
+                    cost = (
+                        round((sum(len(_text_of(m)) for m in messages) / 1000.0) * price, 5)
+                        if price is not None
+                        else None
+                    )
                     return EngineResult(
                         text=text,
                         provider=self.kind,
                         model=name,
                         latency_ms=now_ms() - started,
-                        cost_eur=round(
-                            (sum(len(_text_of(m)) for m in messages) / 1000.0)
-                            * PRICES_PER_1K.get(name, 0.0003),
-                            5,
-                        ),
+                        cost_eur=cost,
                         local=False,
+                        billing=BILLING_UNKNOWN,
+                        execution=EXEC_REMOTE,
                     )
                 last_error = "risposta vuota"
-        raise EngineError(f"Gemini: {last_error}")
+        raise classify_error(last_error)(f"Gemini: {last_error}")
 
 
 class AnthropicAdapter(AIProviderAdapter):
@@ -494,7 +613,9 @@ class AnthropicAdapter(AIProviderAdapter):
     label = "Anthropic Claude"
     provider_id = "claude_api"
     endpoint = "https://api.anthropic.com/v1"
-    default_models = ("claude-3-5-sonnet-latest", "claude-3-5-haiku-latest")
+    default_models = ("claude-sonnet-4-5", "claude-haiku-4-5")
+    supports_attachments = True
+    attachment_mode = "inline_base64"
 
     def api_key(self) -> Optional[str]:
         if self.providers is None:
@@ -523,7 +644,6 @@ class AnthropicAdapter(AIProviderAdapter):
         try:
             self._http_json("GET", f"{self.endpoint}/models", headers=self._headers(), timeout=10)
         except EngineError as exc:
-            # /models may not exist on older keys: a 404 still proves the key is accepted upstream
             if "HTTP 404" in str(exc):
                 return {"authenticated": True, "detail": "chiave accettata (elenco modelli non esposto)", "account": "anthropic"}
             return {"authenticated": False, "detail": str(exc), "account": None}
@@ -536,7 +656,7 @@ class AnthropicAdapter(AIProviderAdapter):
             data = self._http_json("GET", f"{self.endpoint}/models", headers=self._headers(), timeout=12)
         except EngineError:
             return [
-                ModelInfo(id=m, label=m, text=True, vision=True, cost_per_1k_eur=PRICES_PER_1K.get(m, 0.003))
+                _api_model(m, provider_id=self.provider_id, source="anthropic", billing=BILLING_PAID_API)
                 for m in self.default_models
             ]
         out: list[ModelInfo] = []
@@ -545,13 +665,12 @@ class AnthropicAdapter(AIProviderAdapter):
             if not model_id:
                 continue
             out.append(
-                ModelInfo(
-                    id=model_id,
-                    label=str(item.get("display_name") or model_id),
-                    text=True,
-                    vision=True,
-                    cost_per_1k_eur=PRICES_PER_1K.get(model_id, 0.003),
+                _api_model(
+                    model_id,
+                    provider_id=self.provider_id,
                     source="anthropic",
+                    billing=BILLING_PAID_API,
+                    label=str(item.get("display_name") or model_id),
                 )
             )
         return out
@@ -562,14 +681,16 @@ class AnthropicAdapter(AIProviderAdapter):
         model: Optional[str] = None,
         timeout: float = 90.0,
         json_mode: bool = False,
+        attachments: Optional[list[Path]] = None,
+        cancel: Optional[Callable[[], bool]] = None,
     ) -> EngineResult:
         if not self.api_key():
-            raise EngineError("Anthropic: API key non configurata")
+            raise EngineAuthError("Anthropic: API key non configurata")
         chosen = model or self.default_models[0]
         system = "\n".join(_text_of(m) for m in messages if m.get("role") == "system")
         payload: dict[str, Any] = {
             "model": chosen,
-            "max_tokens": 2000,
+            "max_tokens": 4000,
             "messages": [
                 {"role": m.get("role", "user"), "content": _text_of(m)}
                 for m in messages
@@ -580,7 +701,12 @@ class AnthropicAdapter(AIProviderAdapter):
             payload["system"] = system
         started = now_ms()
         data = self._http_json(
-            "POST", f"{self.endpoint}/messages", headers=self._headers(), payload=payload, timeout=timeout
+            "POST",
+            f"{self.endpoint}/messages",
+            headers=self._headers(),
+            payload=payload,
+            timeout=timeout,
+            cancel=cancel,
         )
         try:
             text = "".join(
@@ -590,14 +716,18 @@ class AnthropicAdapter(AIProviderAdapter):
             raise EngineError("Anthropic: risposta inattesa") from exc
         if not text:
             raise EngineError("Anthropic: risposta vuota")
+        price = known_price(chosen)
+        cost = (
+            round((sum(len(_text_of(m)) for m in messages) / 1000.0) * price, 5)
+            if price is not None
+            else None
+        )
         return EngineResult(
             text=text,
             provider=self.kind,
             model=chosen,
             latency_ms=now_ms() - started,
-            cost_eur=round(
-                (sum(len(_text_of(m)) for m in messages) / 1000.0)
-                * PRICES_PER_1K.get(chosen, 0.003),
-                5,
-            ),
+            cost_eur=cost,
+            billing=BILLING_PAID_API,
+            execution=EXEC_REMOTE,
         )

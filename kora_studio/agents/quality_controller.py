@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from PIL import Image
 
@@ -24,9 +24,88 @@ from kora_studio.vault.media_vault import MediaVault
 class QualityController:
     """Performs automated technical, visual, and narrative checks on rendered Reels."""
 
-    def __init__(self, vault: MediaVault, guardian: BrandGuardian) -> None:
+    def __init__(self, vault: MediaVault, guardian: BrandGuardian, engine: Any = None) -> None:
         self.vault = vault
         self.guardian = guardian
+        self.engine = engine
+
+    def attach_engine_manager(self, engine: Any) -> None:
+        self.engine = engine
+
+    def diagnose(self, report: Any) -> dict[str, Any]:
+        """Spiega i controlli falliti con il motore configurato (diagnosi, mai un falso OK)."""
+        failures = [c for c in getattr(report, "checks", []) or [] if not c.passed]
+        summary = "; ".join(f"{c.name}: {c.detail}" for c in failures)[:1500]
+        fallback = {
+            "used": False,
+            "suggestion": "Correggere i controlli falliti e rieseguire il montaggio: " + (summary or "nessun dettaglio"),
+        }
+        if self.engine is None or not failures:
+            return fallback
+        from kora_studio.ai_engine.base import EngineError
+
+        prompt = (
+            "Sei il Quality Guardian di KORA. Questi controlli automatici sono falliti durante il "
+            "montaggio del Reel. Indica in 3 righe la causa tecnica più probabile e la correzione "
+            "concreta, senza inventare dati. Rispondi solo con il testo."
+        )
+        try:
+            result = self.engine.call(
+                "quality_guardian",
+                [{"role": "system", "content": prompt}, {"role": "user", "content": summary}],
+                json_mode=False,
+                timeout=45,
+            )
+        except EngineError as exc:
+            return {**fallback, "error": str(exc)}
+        return {
+            "used": True,
+            "suggestion": (result.text or "").strip()[:800],
+            "engine": f"{result.provider}/{result.model}",
+        }
+
+    @staticmethod
+    def count_frames(mp4_path: Path) -> tuple[Optional[int], str]:
+        """Conteggio esatto dei fotogrammi decodificati (mai stimato dalla durata).
+
+        Ritorna ``(None, motivo)`` quando il conteggio non è eseguibile: il QC
+        fallisce invece di approssimare.
+        """
+        import subprocess as _sp
+
+        ffprobe_bin = find_ffprobe()
+        if not ffprobe_bin:
+            return None, "ffprobe non disponibile"
+        try:
+            cp = _sp.run(
+                [
+                    ffprobe_bin,
+                    "-v",
+                    "error",
+                    "-count_frames",
+                    "-select_streams",
+                    "v:0",
+                    "-show_entries",
+                    "stream=nb_read_frames",
+                    "-of",
+                    "csv=p=0",
+                    str(mp4_path),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+        except _sp.TimeoutExpired:
+            return None, "ffprobe: timeout"
+        except Exception as exc:  # pragma: no cover - defensive
+            return None, f"ffprobe: {exc.__class__.__name__}"
+        raw = (cp.stdout or "").strip()
+        if not raw:
+            return None, (cp.stderr or "ffprobe non ha restituito frame").strip()[:160]
+        first = raw.splitlines()[0].strip()
+        if not first.isdigit():
+            return None, f"valore inatteso: {first[:40]}"
+        return int(first), "nb_read_frames"
 
     def inspect_reel(
         self,
@@ -210,53 +289,24 @@ class QualityController:
             )
 
         expected_frames = sum(s.duration_frames for s in scenes) or int(round(expected_duration_sec * DEFAULT_FPS))
-        actual_frames = 0
-        try:
-            import subprocess as _sp
-            ffprobe_bin = find_ffprobe()
-            if ffprobe_bin:
-                cp = _sp.run(
-                    [
-                        ffprobe_bin,
-                        "-v",
-                        "error",
-                        "-count_frames",
-                        "-select_streams",
-                        "v:0",
-                        "-show_entries",
-                        "stream=nb_read_frames",
-                        "-of",
-                        "csv=p=0",
-                        str(mp4_path),
-                    ],
-                    capture_output=True,
-                    text=True,
-                    timeout=45,
-                )
-                val = (cp.stdout or "").strip().splitlines()[0] if (cp.stdout or "").strip() else "0"
-                actual_frames = int(val) if val.isdigit() else 0
-            if actual_frames == 0:
-                actual_frames = int(round(metrics.get("actual_duration_sec", expected_duration_sec) * DEFAULT_FPS))
-            metrics["expected_frames"] = expected_frames
-            metrics["actual_frames"] = actual_frames
-            checks.append(
-                QualityCheckItem(
-                    category="technical",
-                    name="Verifica effettiva dei fotogrammi",
-                    passed=abs(actual_frames - expected_frames) <= 3,
-                    detail=f"Attesi {expected_frames} frame, verificati {actual_frames} frame",
-                )
+        actual_frames, frame_detail = self.count_frames(mp4_path)
+        metrics["expected_frames"] = expected_frames
+        metrics["actual_frames"] = actual_frames
+        checks.append(
+            QualityCheckItem(
+                category="technical",
+                name="Verifica esatta dei fotogrammi",
+                passed=actual_frames is not None and actual_frames == expected_frames,
+                detail=(
+                    f"Attesi {expected_frames} frame ({expected_frames / DEFAULT_FPS:.1f} s @ {DEFAULT_FPS} fps), "
+                    + (
+                        f"contati {actual_frames} frame ({frame_detail})"
+                        if actual_frames is not None
+                        else f"conteggio non eseguibile ({frame_detail}): una stima non è un conteggio"
+                    )
+                ),
             )
-        except Exception as exc:
-            checks.append(
-                QualityCheckItem(
-                    category="technical",
-                    name="Verifica effettiva dei fotogrammi",
-                    passed=True,
-                    severity="warning",
-                    detail=f"Conteggio frame non disponibile: {exc}",
-                )
-            )
+        )
 
         # 4b. Black-frame check on non-outro content scenes
         content_end = max(

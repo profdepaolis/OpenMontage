@@ -318,7 +318,7 @@ def test_scenario_10_export_and_real_video_verification(isolated_env):
     assert qc["passed"] is True, qc
     by_name = {c["name"]: c["passed"] for c in qc["checks"]}
     assert by_name["Decodifica completa del video (zero pacchetti corrotti)"] is True
-    assert by_name["Verifica effettiva dei fotogrammi"] is True
+    assert by_name["Verifica esatta dei fotogrammi"] is True
     assert by_name["Nessun clipping audio"] is True
     assert by_name["Integrità asset e logo originale"] is True
     assert by_name["Logo originale e payoff esatto 'The Art of Being'"] is True

@@ -9,8 +9,6 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-import requests
-
 from kora_studio.agents.brand_guardian import BrandGuardian
 from kora_studio.brand.brand_brain import BrandBrain
 from kora_studio.config import DEFAULT_FPS
@@ -29,38 +27,6 @@ from kora_studio.ai_engine.context import BrandContextBuilder
 from kora_studio.providers.registry import ProviderManager
 from kora_studio.vault.media_vault import MediaVault
 
-GEMINI_API_ROOT = "https://generativelanguage.googleapis.com"
-# Ordine di preferenza: modelli veloci/economici prima, "pro" solo come ultima risorsa.
-GEMINI_TEXT_FALLBACK_MODELS = (
-    "gemini-2.5-flash",
-    "gemini-2.0-flash",
-    "gemini-flash-latest",
-    "gemini-2.0-flash-lite",
-    "gemini-1.5-flash",
-    "gemini-1.5-flash-8b",
-    "gemini-2.5-pro",
-    "gemini-1.5-pro",
-)
-# Modelli non testuali che non devono essere usati per l'ideazione copy.
-GEMINI_NON_TEXT_TOKENS = (
-    "image",
-    "embedding",
-    "embed",
-    "tts",
-    "audio",
-    "live",
-    "veo",
-    "aqa",
-    "learnlm",
-    "vision",
-)
-LLM_PROVIDER_LABELS = {
-    "gemini_api": "Google Gemini",
-    "openai_api": "OpenAI",
-    "claude_api": "Anthropic Claude",
-    "deepseek_api": "DeepSeek",
-    "ollama_local": "Ollama locale",
-}
 
 # Curated diverse Mediterranean storytelling angles so concepts never repeat mechanically
 STORY_ANGLES = [
@@ -233,15 +199,24 @@ class CreativeDirector:
         self.anti_rep = AntiRepetitionEngine(db)
         self.ai_engine: Any = None
         self.brand_context: Any = None
+        self.story_director: Any = None
+        self.visual_intelligence: Any = None
+        self.last_storyboard_plan: list[dict[str, Any]] = []
 
     def attach_engine_manager(self, engine_manager: Any) -> None:
         """Collega l'AI Engine Manager (provider/agenti configurabili senza riavvio)."""
+        from kora_studio.agents.story_director import CinematicStoryDirector
+        from kora_studio.agents.visual_intelligence import VisualIntelligence
+
         self.ai_engine = engine_manager
         self.brand_context = BrandContextBuilder(
             self.brand_brain,
             history_provider=lambda limit=8: self.anti_rep.get_history(limit),
             season_provider=self._season_context,
         )
+        self.story_director = CinematicStoryDirector(self.vault, engine_manager)
+        self.visual_intelligence = VisualIntelligence(self.vault, engine_manager, db=self.db)
+        self.guardian.attach_engine_manager(engine_manager)
 
     def _call_engine_manager(
         self, req: CreativeRequestPayload, count: int, valid_asset_ids: set[str]
@@ -388,230 +363,18 @@ class CreativeDirector:
         if engine_error:
             errors.append(engine_error)
 
-        # 1. Free Local Ollama (0 EUR)
-        ollama = self.providers.get_provider("ollama_local")
-        if ollama and ollama.get("operational_status") == "operativo" and ollama.get("enabled"):
-            try:
-                model = (ollama.get("models") or ["llama3.1"])[0]
-                r = requests.post(
-                    f"{ollama['endpoint'].rstrip('/')}/api/chat",
-                    json={
-                        "model": model,
-                        "stream": False,
-                        "format": "json",
-                        "messages": [
-                            {"role": "system", "content": system_prompt},
-                            {"role": "user", "content": user_prompt},
-                        ],
-                    },
-                    timeout=20,
-                )
-                if r.status_code == 200:
-                    txt = r.json().get("message", {}).get("content", "")
-                    parsed = self._parse_and_validate_llm_concepts(
-                        txt, req, valid_ids, "ollama_local"
-                    )
-                    if parsed:
-                        return parsed, "ollama_local", None
-            except Exception as exc:
-                errors.append(f"{LLM_PROVIDER_LABELS['ollama_local']}: {exc}")
-
-        # 2. Official Cloud LLMs (budget-gated via CostGuard)
-        allow_paid = req.budget_eur > 0
-        auth = self.providers.cost_guard.check_authorization(
-            0.005, explicit_user_authorization=allow_paid
-        )
-        if auth["authorized"]:
-            for pid in ("gemini_api", "openai_api", "claude_api", "deepseek_api"):
-                key = self.providers.get_decrypted_key(pid)
-                prov = self.providers.get_provider(pid)
-                if not key or not prov or not prov.get("enabled"):
-                    continue
-                try:
-                    raw_txt = self._invoke_cloud_llm(pid, key, prov, system_prompt, user_prompt)
-                    parsed = self._parse_and_validate_llm_concepts(raw_txt, req, valid_ids, pid)
-                    if parsed:
-                        self.providers.cost_guard.record_usage(
-                            pid, "creative_ideation", 0.005, 0.005, True, "completed"
-                        )
-                        return parsed, pid, None
-                except Exception as exc:
-                    errors.append(f"{LLM_PROVIDER_LABELS.get(pid, pid)}: {exc}")
-        else:
-            errors.append(f"LLM cloud non autorizzati ({auth['reason']})")
-
         reason = (
             self._fallback_reason(errors)
             if errors
-            else "Nessun LLM locale (Ollama) o cloud configurato: utilizzato il motore deterministico offline KORA (0 €)."
+            else "Nessun motore AI configurato o autorizzato: utilizzato il motore deterministico offline KORA (0 €)."
         )
         return None, "deterministic_offline_fallback", reason
 
     @staticmethod
     def _fallback_reason(errors: list[str]) -> str:
-        """Messaggio leggibile: motore locale attivo + dettaglio tecnico compatto per provider."""
-        head = "Motore deterministico locale KORA attivo (0 €): nessun LLM esterno ha risposto."
+        """Messaggio leggibile: motore locale attivo + dettaglio compatto per provider."""
+        head = "Motore deterministico locale KORA attivo (0 €): nessun motore AI ha risposto."
         return f"{head} Dettagli → " + " | ".join(errors)
-
-    def _gemini_available_models(self, key: str) -> list[str]:
-        """Chiede a Gemini quali modelli testuali sono realmente abilitati per questa chiave (0 €)."""
-        try:
-            r = requests.get(
-                f"{GEMINI_API_ROOT}/v1beta/models",
-                params={"pageSize": 200},
-                headers={"x-goog-api-key": key},
-                timeout=10,
-            )
-            if r.status_code != 200:
-                return []
-            flash, other, pro = [], [], []
-            for item in r.json().get("models") or []:
-                name = str(item.get("name", "")).split("/")[-1]
-                methods = item.get("supportedGenerationMethods") or []
-                if "generateContent" not in methods:
-                    continue
-                low = name.lower()
-                if any(tok in low for tok in GEMINI_NON_TEXT_TOKENS):
-                    continue
-                if "pro" in low:
-                    pro.append(name)
-                elif "flash" in low or "lite" in low:
-                    flash.append(name)
-                else:
-                    other.append(name)
-            return flash + other + pro
-        except requests.RequestException:
-            return []
-
-    @staticmethod
-    def _gemini_error_text(resp: Any) -> str:
-        try:
-            message = ((resp.json() or {}).get("error") or {}).get("message")
-            if message:
-                return str(message).strip()
-        except Exception:
-            pass
-        return f"HTTP {resp.status_code}"
-
-    def _invoke_gemini(
-        self, key: str, prov: dict[str, Any], system_prompt: str, user_prompt: str
-    ) -> str:
-        """Prova i modelli configurati, poi quelli realmente disponibili, poi i default noti."""
-        configured = [str(m).strip() for m in (prov.get("models") or []) if str(m).strip()]
-        candidates: list[str] = []
-        for candidate in (
-            configured + self._gemini_available_models(key) + list(GEMINI_TEXT_FALLBACK_MODELS)
-        ):
-            name = str(candidate).strip()
-            if name and name not in candidates:
-                candidates.append(name)
-        if not candidates:
-            raise RuntimeError("nessun modello Gemini candidato")
-
-        body = {
-            "contents": [{"parts": [{"text": f"{system_prompt}\n\nCONTESTO:\n{user_prompt}"}]}],
-            "generationConfig": {"responseMimeType": "application/json"},
-        }
-        attempted: list[str] = []
-        auth_error: Optional[str] = None
-        quota_error = False
-
-        # 1) v1beta su tutti i candidati; 2) v1 sui primi tre (alcune chiavi espongono i GA solo su v1).
-        for api_version, models_to_try in (("v1beta", candidates), ("v1", candidates[:3])):
-            for model_name in models_to_try:
-                try:
-                    resp = requests.post(
-                        f"{GEMINI_API_ROOT}/{api_version}/models/{model_name}:generateContent",
-                        headers={"x-goog-api-key": key, "Content-Type": "application/json"},
-                        json=body,
-                        timeout=25,
-                    )
-                except requests.RequestException as exc:
-                    raise RuntimeError(
-                        f"Gemini non raggiungibile dalla rete locale ({exc.__class__.__name__})"
-                    ) from exc
-                if resp.status_code == 200:
-                    try:
-                        parts = resp.json()["candidates"][0]["content"]["parts"]
-                        text = "".join(str(p.get("text", "")) for p in parts).strip()
-                    except (KeyError, IndexError, TypeError):
-                        attempted.append(f"{model_name}: risposta senza contenuto")
-                        continue
-                    if not text:
-                        attempted.append(f"{model_name}: risposta vuota (possibile filtro di sicurezza)")
-                        continue
-                    if model_name != (configured[0] if configured else ""):
-                        self.providers.update_provider_models(
-                            "gemini_api", [model_name] + [m for m in configured if m != model_name]
-                        )
-                    return text
-                if resp.status_code in (401, 403):
-                    auth_error = self._gemini_error_text(resp)
-                    break
-                if resp.status_code == 429:
-                    quota_error = True
-                    attempted.append(f"{model_name}: quota esaurita (429)")
-                    break
-                attempted.append(f"{model_name}: {self._gemini_error_text(resp)}")
-            if auth_error or quota_error:
-                break
-            if not attempted:
-                break
-
-        if auth_error:
-            raise RuntimeError(
-                "chiave Google non autorizzata o API 'Generative Language' non abilitata sul progetto "
-                f"Google Cloud/AI Studio ({auth_error})"
-            )
-        if quota_error:
-            raise RuntimeError("quota o rate limit Gemini raggiunto (HTTP 429): riprova più tardi")
-        detail = "; ".join(attempted[:4]) or "nessun modello testuale elencato per questa chiave"
-        raise RuntimeError(f"nessun modello di testo utilizzabile ({detail})")
-
-    def _invoke_cloud_llm(
-        self, pid: str, key: str, prov: dict[str, Any], system_prompt: str, user_prompt: str
-    ) -> str:
-        model = (prov.get("models") or [""])[0]
-        if pid == "gemini_api":
-            return self._invoke_gemini(key, prov, system_prompt, user_prompt)
-        if pid == "claude_api":
-            r = requests.post(
-                "https://api.anthropic.com/v1/messages",
-                headers={
-                    "x-api-key": key,
-                    "anthropic-version": "2023-06-01",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": model or "claude-3-5-sonnet-latest",
-                    "max_tokens": 2000,
-                    "system": system_prompt,
-                    "messages": [{"role": "user", "content": user_prompt}],
-                },
-                timeout=25,
-            )
-            r.raise_for_status()
-            return r.json()["content"][0]["text"]
-        endpoint = (
-            "https://api.deepseek.com/v1/chat/completions"
-            if pid == "deepseek_api"
-            else "https://api.openai.com/v1/chat/completions"
-        )
-        r = requests.post(
-            endpoint,
-            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-            json={
-                "model": model or ("deepseek-chat" if pid == "deepseek_api" else "gpt-4o-mini"),
-                "response_format": {"type": "json_object"},
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-            },
-            timeout=25,
-        )
-        r.raise_for_status()
-        return r.json()["choices"][0]["message"]["content"]
 
     def _parse_and_validate_llm_concepts(
         self,
@@ -1119,6 +882,21 @@ class CreativeDirector:
             concept.preset, motions_by_preset[EditingPreset.CINEMATIC_IDENTITY.value]
         )
 
+        # Visual Intelligence reale: rivede il materiale e arricchisce l'analisi
+        # (solo con un modello visivo VERIFICATO; altrimenti analisi deterministica dichiarata).
+        visual = getattr(self, "visual_intelligence", None)
+        if visual is not None and getattr(self, "ai_engine", None) is not None:
+            try:
+                updated = visual.annotate_vault(production_id=getattr(concept, "id", None), limit=6)
+                if updated:
+                    all_visuals = [
+                        a
+                        for a in self.vault.list_assets()
+                        if a["category"] != "Logo" and a["media_type"] in ("image", "video")
+                    ]
+            except Exception:
+                pass
+
         logo = self.vault.get_logo_asset()
         scenes: list[StoryboardScene] = []
         cursor = 0
@@ -1254,4 +1032,25 @@ class CreativeDirector:
                 is_outro=True,
             )
         )
+        # Cinematic Story Director: piano delle inquadrature (motore configurabile,
+        # fallback deterministico proporzionale — mai sequenze cicliche).
+        story_director = getattr(self, "story_director", None)
+        if story_director is not None:
+            assets_now = self.vault.list_assets()
+            by_id = {a["id"]: a for a in assets_now}
+            plan = story_director.plan(
+                scenes, assets_now, preset=concept.preset, production_id=getattr(concept, "id", None)
+            )
+            if plan:
+                story_director.apply_plan(scenes, plan, by_id)
+                by_number = {p["scene_number"]: p for p in plan}
+                for scene in scenes:
+                    shot = by_number.get(scene.scene_number)
+                    if not shot:
+                        continue
+                    if shot.get("purpose") and not scene.is_outro:
+                        scene.narrative_goal = shot["purpose"]
+                    if shot.get("sfx"):
+                        scene.sfx_category = shot["sfx"]
+                self.last_storyboard_plan = plan
         return scenes

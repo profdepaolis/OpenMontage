@@ -23,8 +23,61 @@ UNVERIFIED_STRUCTURES = [
 class BrandGuardian:
     """Consults Brand Brain to validate copy, prompts, and visual transformations."""
 
-    def __init__(self, brand_brain: BrandBrain) -> None:
+    def __init__(self, brand_brain: BrandBrain, engine: Any = None) -> None:
         self.brand_brain = brand_brain
+        self.engine = engine
+
+    def attach_engine_manager(self, engine: Any) -> None:
+        self.engine = engine
+
+    def review_with_engine(self, text: str, production_id: Any = None) -> dict[str, Any]:
+        """Second opinion from the configured model; the deterministic rules always apply."""
+        if self.engine is None or not (text or "").strip():
+            return {"used": False}
+        import json
+
+        from kora_studio.ai_engine.base import EngineError
+
+        prompt = (
+            "Valuta questo testo per KORA Beach Club (Policoro). Cerca: claim commerciali, prezzi, "
+            "servizi non documentati (piscina, spa, rooftop...), tono aggressivo, promesse non vere. "
+            'Rispondi SOLO con JSON: {"approved": bool, "violations": [str], "severity": "ok|warning|block"}'
+        )
+        try:
+            result = self.engine.call(
+                "brand_guardian",
+                [{"role": "system", "content": prompt}, {"role": "user", "content": text[:4000]}],
+                json_mode=True,
+                timeout=45,
+                production_id=production_id,
+            )
+        except EngineError as exc:
+            return {"used": False, "error": str(exc)}
+        try:
+            start = result.text.find("{")
+            end = result.text.rfind("}")
+            data = json.loads(result.text[start : end + 1]) if start >= 0 and end > start else {}
+        except ValueError:
+            return {"used": False, "error": "risposta non interpretabile"}
+        if not isinstance(data, dict):
+            return {"used": False}
+        return {
+            "used": True,
+            "approved": bool(data.get("approved", True)),
+            "violations": [str(v)[:160] for v in (data.get("violations") or [])][:6],
+            "severity": str(data.get("severity") or "ok"),
+            "engine": f"{result.provider}/{result.model}",
+        }
+
+    def validate_copy_with_engine(self, text: str, production_id: Any = None) -> dict[str, Any]:
+        """Deterministic validation + optional model review; blocking is conservative."""
+        base = self.validate_copy(text)
+        review = self.review_with_engine(text, production_id=production_id)
+        if review.get("used") and review.get("severity") == "block":
+            base["approved"] = False
+            base["violations"] = list(base.get("violations") or []) + list(review.get("violations") or [])
+        base["engine_review"] = review
+        return base
 
     def validate_copy(self, text: str) -> dict[str, Any]:
         profile = self.brand_brain.get_current()

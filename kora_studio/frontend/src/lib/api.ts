@@ -1,4 +1,6 @@
 import type {
+  AIActivityCall,
+  AIActivitySummary,
   AIEngineModel,
   AIEngineSettings,
   AIEngineStatus,
@@ -367,11 +369,32 @@ export const koraApi = {
       method: "PUT",
       body: JSON.stringify(patch),
     }),
-  engineVerify: (providerId: string) =>
-    apiFetch<AIEngineStatus["providers"][number]>(`/api/ai-engine/verify/${providerId}`, {
+  engineVerify: (providerId: string, live = false) =>
+    apiFetch<AIEngineStatus["providers"][number] & { live_test?: AIEngineTestResult }>(
+      `/api/ai-engine/verify/${providerId}${live ? "?live=true" : ""}`,
+      { method: "POST" }
+    ),
+  engineVisionTest: (providerId: string, model?: string) =>
+    apiFetch<AIEngineTestResult>("/api/ai-engine/vision-test", {
       method: "POST",
+      body: JSON.stringify({ provider: providerId, model }),
     }),
-  engineTest: (payload: { provider: string; multimodal?: boolean; model?: string; prompt?: string }) =>
+  engineActivity: (limit = 100) =>
+    apiFetch<{ calls: AIActivityCall[]; summary: AIActivitySummary }>(
+      `/api/ai-engine/activity?limit=${limit}`
+    ),
+  engineSetPrimary: (providerId: string) =>
+    apiFetch<AIEngineStatus & AIEngineSettings & { status: AIEngineStatus }>("/api/ai-engine/settings", {
+      method: "PUT",
+      body: JSON.stringify({ primary_provider: providerId }),
+    }),
+  engineTest: (payload: {
+    provider: string;
+    multimodal?: boolean;
+    model?: string;
+    prompt?: string;
+    asset_id?: string;
+  }) =>
     apiFetch<AIEngineTestResult>("/api/ai-engine/test", {
       method: "POST",
       body: JSON.stringify(payload),
