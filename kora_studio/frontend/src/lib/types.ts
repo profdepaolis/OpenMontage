@@ -97,6 +97,7 @@ export interface ProjectRecord {
   storyboard: StoryboardScene[];
   edit_plan: Record<string, unknown>;
   audio_plan: Record<string, unknown>;
+  preferences?: Record<string, unknown>;
   qc_report: {
     passed?: boolean;
     needs_human_review?: boolean;
@@ -185,4 +186,19 @@ export interface VoiceOption {
   elevenlabs_configured: boolean;
   openai_tts_configured?: boolean;
   piper_local_available: boolean;
+}
+
+export interface CaptionStyleMeta {
+  id: string;
+  label: string;
+  engine: string;
+  description: string;
+}
+
+export interface SoundAsset {
+  id: string;
+  name: string;
+  category: string;
+  duration_sec: number;
+  license: string;
 }

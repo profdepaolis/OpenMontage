@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 
 from kora_studio.agents.cinematic_editor import PRESET_DEFINITIONS
 from kora_studio.agents.director import KoraDirector
+from kora_studio.agents.hyperframes_captions import CAPTION_STYLES
 from kora_studio.backup.backup_manager import BackupManager
 from kora_studio.config import BACKUPS_DIR, REPO_ROOT
 from kora_studio.db.database import Database, utcnow_iso
@@ -44,7 +45,18 @@ class CreateProjectRequest(BaseModel):
     voice_id: str = "brando"
     target_duration_sec: float = Field(default=20.0, ge=8.0, le=90.0)
     concept: Optional[dict[str, Any]] = None
+    caption_style: Optional[str] = None
     auto_start: bool = True
+
+
+class ProjectSyncRequest(BaseModel):
+    caption_style: Optional[str] = None
+    music_id: Optional[str] = None
+    include_music: Optional[bool] = None
+    music_start_sec: Optional[float] = None
+    music_volume: Optional[float] = None
+    voice_volume: Optional[float] = None
+    auto_sync_scenes_to_voice: bool = False
 
 
 class ProduceRequest(BaseModel):
@@ -144,6 +156,7 @@ def create_app(db_path: Optional[Path] = None, auto_seed: bool = True) -> FastAP
             "remotion": check_remotion_runtime(),
             "db_schema_version": db.get_schema_version(),
             "presets": list(PRESET_DEFINITIONS.values()),
+            "caption_styles": list(CAPTION_STYLES.values()),
             "preferences": db.get_all_preferences(),
         }
 
@@ -294,6 +307,10 @@ def create_app(db_path: Optional[Path] = None, auto_seed: bool = True) -> FastAP
             target_duration_sec=req.target_duration_sec,
             concept=concept,
         )
+        if req.caption_style:
+            proj = director.sync_project_audio_and_caption(
+                proj["id"], caption_style=req.caption_style
+            )
         job = None
         if req.auto_start and req.production_mode == "AUTO":
             job = director.create_job(proj["id"], "full_production")
@@ -318,13 +335,33 @@ def create_app(db_path: Optional[Path] = None, auto_seed: bool = True) -> FastAP
         if not proj:
             raise HTTPException(status_code=404, detail="Progetto non trovato")
         validated = [StoryboardScene(**s).model_dump() for s in req.scenes]
+        total_frames = sum(int(s.get("duration_frames") or 25) for s in validated)
+        target_dur = round(total_frames / max(1, int(proj.get("fps") or 25)), 2)
         with db.session() as conn:
             conn.execute(
-                "UPDATE projects SET storyboard_json = ?, updated_at = ? WHERE id = ?",
-                (json.dumps(validated, ensure_ascii=False), utcnow_iso(), project_id),
+                "UPDATE projects SET storyboard_json = ?, total_frames = ?, target_duration_sec = ?, updated_at = ? WHERE id = ?",
+                (json.dumps(validated, ensure_ascii=False), total_frames, target_dur, utcnow_iso(), project_id),
             )
         director.save_project_snapshot(project_id, "Modifica manuale storyboard", "RegiaUtente")
         return director.get_project(project_id)  # type: ignore
+
+    @app.post("/api/projects/{project_id}/sync-audio")
+    def sync_project_audio(project_id: str, req: ProjectSyncRequest) -> dict[str, Any]:
+        try:
+            return director.sync_project_audio_and_caption(
+                project_id=project_id,
+                caption_style=req.caption_style,
+                music_id=req.music_id,
+                include_music=req.include_music,
+                music_start_sec=req.music_start_sec,
+                music_volume=req.music_volume,
+                voice_volume=req.voice_volume,
+                auto_sync_scenes_to_voice=req.auto_sync_scenes_to_voice,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
 
     @app.post("/api/projects/{project_id}/produce")
     def produce_project(project_id: str, req: ProduceRequest) -> dict[str, Any]:

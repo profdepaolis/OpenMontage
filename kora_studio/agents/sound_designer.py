@@ -40,6 +40,9 @@ class SoundDesigner:
         preset: str,
         preferred_music_id: Optional[str] = None,
         include_music: bool = True,
+        music_start_sec: float = 0.0,
+        music_volume: Optional[float] = None,
+        voice_volume: float = 1.05,
     ) -> dict[str, Any]:
         all_sounds = self.sound_library.list_sounds()
         by_cat: dict[str, list[dict[str, Any]]] = {}
@@ -50,7 +53,7 @@ class SoundDesigner:
         sfx_cues: list[dict[str, Any]] = []
         for scene in scenes:
             cat = scene.sfx_category
-            if not cat or cat not in by_cat:
+            if not cat or cat in ("nessuno", "none") or cat not in by_cat:
                 continue
             sfx = by_cat[cat][0]
             # Keep SFX subtle and physically justified by scene content
@@ -74,6 +77,9 @@ class SoundDesigner:
         return {
             "music": music,
             "include_music": include_music,
+            "music_start_sec": max(0.0, float(music_start_sec)),
+            "music_volume": music_volume,
+            "voice_volume": float(voice_volume),
             "sfx_cues": sfx_cues,
         }
 
@@ -84,12 +90,12 @@ class SoundDesigner:
         voice_audio_path: Optional[Path],
         output_wav: Path,
     ) -> Path:
-        """Mix voiceover + music (ducked) + scene SFX with fade-in/out and anti-clipping limiter."""
+        """Mix voiceover + music (ducked, with custom offset) + scene SFX with fade-in/out and anti-clipping limiter."""
         output_wav.parent.mkdir(parents=True, exist_ok=True)
         has_voice = bool(voice_audio_path and voice_audio_path.is_file())
         music = audio_plan.get("music") if audio_plan.get("include_music", True) else None
         has_music = bool(music and Path(music["file_path"]).is_file())
-        sfx_cues = [c for c in audio_plan.get("sfx_cues", []) if Path(c["file_path"]).is_file()][:6]
+        sfx_cues = [c for c in audio_plan.get("sfx_cues", []) if Path(c["file_path"]).is_file()][:16]
 
         # Build deterministic FFmpeg filter_complex starting from silent stereo bed
         inputs: list[str] = [
@@ -106,16 +112,27 @@ class SoundDesigner:
 
         if has_voice and voice_audio_path:
             inputs.extend(["-i", str(voice_audio_path)])
-            # Place voice cleanly at t=0.25s so opening visual breathes
-            filter_parts.append(
-                f"[{idx}:a]aresample=48000,aformat=channel_layouts=stereo,adelay=250|250,volume=1.05[vo]"
+            vo_vol = float(audio_plan.get("voice_volume") or 1.05)
+            # Notice: per-scene aligned voiceover already includes scene offsets; unaligned starts at 0.25s
+            is_aligned = "aligned" in voice_audio_path.name
+            vo_filter = (
+                f"[{idx}:a]aresample=48000,aformat=channel_layouts=stereo,volume={vo_vol:.3f}[vo]"
+                if is_aligned
+                else f"[{idx}:a]aresample=48000,aformat=channel_layouts=stereo,adelay=250|250,volume={vo_vol:.3f}[vo]"
             )
+            filter_parts.append(vo_filter)
             mix_labels.append("[vo]")
             idx += 1
 
         if has_music and music:
-            inputs.extend(["-stream_loop", "-1", "-i", str(music["file_path"])])
-            music_vol = 0.17 if has_voice else 0.42
+            music_start = max(0.0, float(audio_plan.get("music_start_sec") or 0.0))
+            if music_start > 0.0:
+                inputs.extend(["-stream_loop", "-1", "-ss", f"{music_start:.3f}", "-i", str(music["file_path"])])
+            else:
+                inputs.extend(["-stream_loop", "-1", "-i", str(music["file_path"])])
+            default_mvol = 0.17 if has_voice else 0.42
+            raw_mvol = audio_plan.get("music_volume")
+            music_vol = float(raw_mvol) if raw_mvol is not None else default_mvol
             fade_out_start = max(0.5, total_duration_sec - 1.8)
             filter_parts.append(
                 f"[{idx}:a]aresample=48000,aformat=channel_layouts=stereo,"

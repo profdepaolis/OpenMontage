@@ -24,7 +24,8 @@ interface HomeHubProps {
     theme: string,
     mode: string,
     voiceId: string,
-    prodMode: ProductionMode
+    prodMode: ProductionMode,
+    captionStyle?: string
   ) => Promise<void>;
   onOpenProject: (projectId: string) => void;
   onVaultUpdated: () => void;
@@ -42,6 +43,7 @@ export function HomeHub({
   const [themeText, setThemeText] = useState("");
   const [durationSec, setDurationSec] = useState(20);
   const [presetOverride, setPresetOverride] = useState("AUTO_CONCEPT");
+  const [captionStyle, setCaptionStyle] = useState("serif_ivory");
   const [dragActive, setDragActive] = useState(false);
   const [voiceId, setVoiceId] = useState("brando");
   const [prodMode, setProdMode] = useState<ProductionMode>("AUTO");
@@ -227,10 +229,12 @@ export function HomeHub({
                 onChange={(e) => setDurationSec(Number(e.target.value))}
                 className="rounded-lg border border-[#DDD4C4] bg-white px-2.5 py-1.5 text-xs text-[#1D1B18]"
               >
-                <option value={15}>15 s (375 frame)</option>
-                <option value={20}>20 s (500 frame)</option>
-                <option value={25}>25 s (625 frame)</option>
-                <option value={30}>30 s (750 frame)</option>
+                <option value={12}>12 s (4–5 scene auto)</option>
+                <option value={15}>15 s (5–6 scene auto)</option>
+                <option value={20}>20 s (6–7 scene auto)</option>
+                <option value={30}>30 s (9–10 scene auto)</option>
+                <option value={45}>45 s (12–13 scene auto)</option>
+                <option value={60}>60 s (14–15 scene auto)</option>
               </select>
             </label>
             <label className="flex items-center gap-2">
@@ -245,6 +249,21 @@ export function HomeHub({
                 <option value="KORA Experience">KORA Experience</option>
                 <option value="KORA Seasonal">KORA Seasonal</option>
                 <option value="KORA Editorial">KORA Editorial</option>
+              </select>
+            </label>
+            <label className="flex items-center gap-2">
+              <span className="font-medium text-[#1D1B18]">Caption:</span>
+              <select
+                value={captionStyle}
+                onChange={(e) => setCaptionStyle(e.target.value)}
+                className="rounded-lg border border-[#DDD4C4] bg-white px-2.5 py-1.5 text-xs text-[#1D1B18]"
+              >
+                <option value="serif_ivory">KORA Classic Serif</option>
+                <option value="serif_minimal">Editorial Minimal</option>
+                <option value="clean_sans">Space Grotesk Clean</option>
+                <option value="hyperframes_kinetic">Hyperframes · Kinetic Gold</option>
+                <option value="hyperframes_glass">Hyperframes · Mediterranean Glass</option>
+                <option value="hyperframes_word_highlight">Hyperframes · Word Highlight</option>
               </select>
             </label>
           </div>
@@ -431,7 +450,8 @@ export function HomeHub({
                         themeText.trim() || c.central_idea,
                         activeAction || "theme",
                         voiceId,
-                        prodMode
+                        prodMode,
+                        captionStyle
                       );
                     } finally {
                       setLoading(false);

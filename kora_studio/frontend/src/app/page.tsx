@@ -102,7 +102,8 @@ export default function KoraStudioPage() {
     theme: string,
     mode: string,
     voiceId: string,
-    prodMode: ProductionMode
+    prodMode: ProductionMode,
+    captionStyle?: string
   ) => {
     const res = await koraApi.createProject({
       title: concept.title,
@@ -113,6 +114,7 @@ export default function KoraStudioPage() {
       voice_id: voiceId,
       target_duration_sec: concept.duration_sec,
       concept,
+      caption_style: captionStyle,
       auto_start: prodMode === "AUTO",
     });
     setActiveProjectId(res.project.id);

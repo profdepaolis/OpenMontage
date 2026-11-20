@@ -454,13 +454,17 @@ class KoraDirector:
 
             # 5. Sound Design & Mix
             self._update_job(job_id, JobState.SOUND_DESIGN, "Sound design e mix audio", completed)
-            audio_plan = proj.get("audio_plan") or {}
-            if not audio_plan or not audio_plan.get("music"):
-                audio_plan = self.sound_designer.plan_audio(
-                    scenes=scenes,
-                    preset=proj["preset"],
-                    include_music=True,
-                )
+            existing_ap = proj.get("audio_plan") or {}
+            pref_music_id = (existing_ap.get("music") or {}).get("id")
+            audio_plan = self.sound_designer.plan_audio(
+                scenes=scenes,
+                preset=proj["preset"],
+                preferred_music_id=pref_music_id,
+                include_music=existing_ap.get("include_music", True),
+                music_start_sec=float(existing_ap.get("music_start_sec") or 0.0),
+                music_volume=existing_ap.get("music_volume"),
+                voice_volume=float(existing_ap.get("voice_volume") or 1.05),
+            )
             total_sec = sum(s.duration_frames for s in scenes) / proj["fps"]
             mix_wav = project_dir / "audio_mix.wav"
             voice_path = Path(voice_res["audio_path"]) if voice_res.get("audio_path") else None
@@ -479,6 +483,7 @@ class KoraDirector:
             completed.append("Montaggio")
             self._update_job(job_id, JobState.RENDERING, "Rendering MP4 1080x1920 25fps", completed)
             rendered_mp4 = project_dir / f"{project_id}_preview.mp4"
+            caption_style = (proj.get("preferences") or {}).get("caption_style")
             edit_res = self.editor.render_reel(
                 project_id=project_id,
                 title=proj["title"],
@@ -489,6 +494,7 @@ class KoraDirector:
                 output_mp4=rendered_mp4,
                 include_subtitles=include_subtitles,
                 fps=proj["fps"],
+                caption_style=caption_style,
             )
             completed.append("Rendering")
             self.log_job(job_id, "INFO", "CinematicEditor", f"Render completato: {rendered_mp4.name}")
@@ -631,3 +637,66 @@ class KoraDirector:
         )
         result["revision_proposal"] = proposal.model_dump()
         return result
+
+    def sync_project_audio_and_caption(
+        self,
+        project_id: str,
+        caption_style: Optional[str] = None,
+        music_id: Optional[str] = None,
+        include_music: Optional[bool] = None,
+        music_start_sec: Optional[float] = None,
+        music_volume: Optional[float] = None,
+        voice_volume: Optional[float] = None,
+        auto_sync_scenes_to_voice: bool = False,
+    ) -> dict[str, Any]:
+        """Update caption style (KORA / Hyperframes), music sync parameters, and optionally align scene durations to speech."""
+        proj = self.get_project(project_id)
+        if not proj:
+            raise KeyError(f"Progetto {project_id} non trovato")
+
+        prefs = dict(proj.get("preferences") or {})
+        if caption_style is not None:
+            prefs["caption_style"] = caption_style
+
+        scenes = [StoryboardScene(**s) for s in (proj.get("storyboard") or [])]
+        if auto_sync_scenes_to_voice and scenes:
+            scenes = self.voice_director.sync_scenes_to_speech_pacing(scenes, fps=proj["fps"])
+
+        existing_ap = proj.get("audio_plan") or {}
+        resolved_music_id = music_id if music_id is not None else (existing_ap.get("music") or {}).get("id")
+        new_ap = self.sound_designer.plan_audio(
+            scenes=scenes,
+            preset=proj["preset"],
+            preferred_music_id=resolved_music_id,
+            include_music=include_music if include_music is not None else existing_ap.get("include_music", True),
+            music_start_sec=music_start_sec if music_start_sec is not None else float(existing_ap.get("music_start_sec") or 0.0),
+            music_volume=music_volume if music_volume is not None else existing_ap.get("music_volume"),
+            voice_volume=voice_volume if voice_volume is not None else float(existing_ap.get("voice_volume") or 1.05),
+        )
+        total_frames = sum(s.duration_frames for s in scenes)
+        target_dur = round(total_frames / max(1, proj["fps"]), 2)
+
+        with self.db.session() as conn:
+            conn.execute(
+                """
+                UPDATE projects
+                SET storyboard_json = ?, audio_plan_json = ?, preferences_json = ?,
+                    total_frames = ?, target_duration_sec = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    json.dumps([s.model_dump() for s in scenes], ensure_ascii=False),
+                    json.dumps(new_ap, ensure_ascii=False),
+                    json.dumps(prefs, ensure_ascii=False),
+                    total_frames,
+                    target_dur,
+                    utcnow_iso(),
+                    project_id,
+                ),
+            )
+        self.save_project_snapshot(
+            project_id,
+            "Aggiornamento sincronizzazione audio/musica/caption",
+            "KoraDirector",
+        )
+        return self.get_project(project_id)  # type: ignore

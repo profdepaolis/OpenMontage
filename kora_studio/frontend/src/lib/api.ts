@@ -106,6 +106,7 @@ export const koraApi = {
     voice_id: string;
     target_duration_sec: number;
     concept?: CreativeConcept;
+    caption_style?: string;
     auto_start?: boolean;
   }) =>
     apiFetch<{ project: ProjectRecord; job: JobRecord | null }>("/api/projects", {
@@ -116,6 +117,22 @@ export const koraApi = {
     apiFetch<ProjectRecord>(`/api/projects/${id}/storyboard`, {
       method: "PUT",
       body: JSON.stringify({ scenes }),
+    }),
+  syncProjectAudio: (
+    id: string,
+    payload: {
+      caption_style?: string;
+      music_id?: string;
+      include_music?: boolean;
+      music_start_sec?: number;
+      music_volume?: number;
+      voice_volume?: number;
+      auto_sync_scenes_to_voice?: boolean;
+    }
+  ) =>
+    apiFetch<ProjectRecord>(`/api/projects/${id}/sync-audio`, {
+      method: "POST",
+      body: JSON.stringify(payload),
     }),
   produceProject: (
     id: string,

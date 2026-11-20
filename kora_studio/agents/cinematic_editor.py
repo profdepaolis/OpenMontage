@@ -12,6 +12,11 @@ from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 from kora_studio.agents.ai_media_lab import AIMediaLab
 from kora_studio.agents.colorist import Colorist
+from kora_studio.agents.hyperframes_captions import (
+    CAPTION_STYLES,
+    build_caption_segments_for_scene,
+    export_hyperframes_workspace,
+)
 from kora_studio.config import ASSETS_KORA_DIR, DEFAULT_FPS, DEFAULT_HEIGHT, DEFAULT_WIDTH
 from kora_studio.db.models import EditingPreset, StoryboardScene
 from kora_studio.media_tools import check_remotion_runtime, run_ffmpeg
@@ -389,14 +394,20 @@ class CinematicEditor:
         output_mp4: Path,
         include_subtitles: bool = True,
         fps: int = DEFAULT_FPS,
+        caption_style: Optional[str] = None,
     ) -> dict[str, Any]:
-        """Assemble full 1080x1920 25fps H.264/AAC Rec.709 MP4 with transitions & subtitles."""
+        """Assemble full 1080x1920 25fps H.264/AAC Rec.709 MP4 with transitions & captions (KORA / Hyperframes)."""
         if not scenes:
             raise ValueError("Impossibile renderizzare: storyboard vuoto.")
         total_frames = sum(s.duration_frames for s in scenes)
         expected_duration = total_frames / fps
 
         preset_cfg = PRESET_DEFINITIONS.get(preset, PRESET_DEFINITIONS[EditingPreset.CINEMATIC_IDENTITY.value])
+        active_caption_style = (
+            caption_style
+            if caption_style and caption_style in CAPTION_STYLES
+            else preset_cfg.get("subtitle_style", "serif_ivory")
+        )
         scenes_dir = project_dir / "scene_cache"
         sub_dir = project_dir / "subtitles"
         scenes_dir.mkdir(parents=True, exist_ok=True)
@@ -439,25 +450,34 @@ class CinematicEditor:
             next_idx += 1
 
         cur_v = "[vcat]"
+        hyperframes_ws: Optional[dict[str, str]] = None
         if include_subtitles:
+            if active_caption_style.startswith("hyperframes"):
+                hyperframes_ws = export_hyperframes_workspace(
+                    scenes=scenes,
+                    caption_style=active_caption_style,
+                    title=title,
+                    out_dir=project_dir / "hyperframes_captions",
+                    fps=fps,
+                )
+            seg_counter = 0
             for sc in scenes:
-                if sc.is_outro or not (sc.subtitle_text or "").strip():
-                    continue
-                sub_png = sub_dir / f"sub_{sc.scene_number:02d}.png"
-                self._render_subtitle_overlay_png(
-                    sc.subtitle_text,
-                    sub_png,
-                    style=preset_cfg.get("subtitle_style", "serif_ivory"),
+                segs = build_caption_segments_for_scene(
+                    scene=sc,
+                    caption_style=active_caption_style,
+                    sub_dir=sub_dir,
                 )
-                inputs.extend(["-loop", "1", "-t", f"{expected_duration:.4f}", "-i", str(sub_png)])
-                out_lbl = f"[vsub{sc.scene_number}]"
-                st = max(0.0, sc.start_sec + 0.12)
-                en = max(st + 0.2, sc.end_sec - 0.12)
-                filter_parts.append(
-                    f"{cur_v}[{next_idx}:v]overlay=0:0:enable='between(t,{st:.3f},{en:.3f})'{out_lbl}"
-                )
-                cur_v = out_lbl
-                next_idx += 1
+                for seg in segs:
+                    inputs.extend(["-loop", "1", "-t", f"{expected_duration:.4f}", "-i", str(seg["png"])])
+                    out_lbl = f"[vsub_{seg_counter}]"
+                    st = float(seg["start_sec"])
+                    en = float(seg["end_sec"])
+                    filter_parts.append(
+                        f"{cur_v}[{next_idx}:v]overlay=0:0:enable='between(t,{st:.3f},{en:.3f})'{out_lbl}"
+                    )
+                    cur_v = out_lbl
+                    next_idx += 1
+                    seg_counter += 1
 
         filter_parts.append(f"{cur_v}format=yuv420p[vfinal]")
         output_mp4.parent.mkdir(parents=True, exist_ok=True)
@@ -531,5 +551,8 @@ class CinematicEditor:
             "expected_duration_sec": round(expected_duration, 3),
             "scene_render_stats": render_stats,
             "remotion_spec_path": str(remotion_spec_path),
+            "caption_style": active_caption_style,
+            "caption_engine": CAPTION_STYLES.get(active_caption_style, {}).get("engine", "kora_native"),
+            "hyperframes_workspace": hyperframes_ws,
             "render_engine": "ffmpeg_deterministic_25fps",
         }

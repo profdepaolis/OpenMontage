@@ -250,8 +250,12 @@ class CreativeDirector:
                     candidate_assets.append(a)
                     seen_ids.add(a["id"])
 
-        # Fallback: include any authentic images/videos in vault so we use all real assets available
-        if len(candidate_assets) < 4:
+        target_slots = max(
+            len(preferred_asset_ids or []),
+            min(14, max(5, int(round(duration_sec / 2.8)))),
+        )
+        # Fallback: include any authentic images/videos in vault so we fill target_slots
+        if len(candidate_assets) < target_slots:
             for a in self.vault.list_assets():
                 if (
                     a["id"] not in seen_ids
@@ -261,7 +265,7 @@ class CreativeDirector:
                     candidate_assets.append(a)
                     seen_ids.add(a["id"])
 
-        available_ids = [a["id"] for a in candidate_assets[:6]]
+        available_ids = [a["id"] for a in candidate_assets[:target_slots]]
         missing: list[str] = []
         if len(available_ids) == 0:
             missing.append("Almeno una fotografia o clip autentica del KORA")
@@ -476,12 +480,30 @@ class CreativeDirector:
                 if a["category"] != "Logo" and a["media_type"] in ("image", "video")
             ]
 
-        num_visual_scenes = max(3, min(5, max(len(raw_phrases), len(assets), 4)))
+        # Auto-scale scene count by duration (~3.2s per visual scene) and provided media assets
+        content_sec = max(4.0, content_frames / fps)
+        max_feasible_by_time = max(3, int(content_sec // 1.8))
+        desired_by_duration = max(3, min(14, int(round(content_sec / 3.2))))
+        desired_by_assets = min(14, len(assets)) if len(assets) > 0 else 4
+        num_visual_scenes = max(
+            3,
+            min(max_feasible_by_time, max(desired_by_duration, desired_by_assets, len(raw_phrases))),
+        )
         if len(raw_phrases) == 0:
             raw_phrases = [""] * num_visual_scenes
-        while len(raw_phrases) < num_visual_scenes:
-            raw_phrases.append("")
-        if len(raw_phrases) > num_visual_scenes:
+        elif len(raw_phrases) < num_visual_scenes:
+            # Spread phrases across scenes so breathing shots sit naturally between spoken lines
+            spread = [""] * num_visual_scenes
+            for p_idx, phrase in enumerate(raw_phrases):
+                slot = min(
+                    num_visual_scenes - 1,
+                    int(round(p_idx * (num_visual_scenes - 1) / max(1, len(raw_phrases) - 1)))
+                    if len(raw_phrases) > 1
+                    else 0,
+                )
+                spread[slot] = phrase
+            raw_phrases = spread
+        elif len(raw_phrases) > num_visual_scenes:
             # Merge trailing phrases cleanly
             merged = raw_phrases[: num_visual_scenes - 1]
             merged.append(" ".join(raw_phrases[num_visual_scenes - 1 :]))

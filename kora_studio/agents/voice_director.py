@@ -493,7 +493,97 @@ class VoiceDirector:
         total_scene_dur = round(sum(s.duration_sec for s in scenes if not s.is_outro), 3)
 
         timing_adjustments: list[str] = []
-        if actual_dur > total_scene_dur:
+        # If multiple spoken scenes and a dynamic TTS engine was used, align each phrase to its scene start_sec
+        aligned_cues: list[dict[str, Any]] = []
+        if (
+            len(spoken_scenes) > 1
+            and source_used in ("elevenlabs_api", "openai_tts", "piper_tts_local", "edge_tts_fallback")
+        ):
+            seg_files: list[tuple[StoryboardScene, Path, float]] = []
+            for sc in spoken_scenes:
+                seg_raw = work_dir / f"vo_sc_{sc.scene_number:02d}.wav"
+                seg_mp3 = work_dir / f"vo_sc_{sc.scene_number:02d}.mp3"
+                ok_seg: Optional[Path] = None
+                try:
+                    if source_used == "elevenlabs_api":
+                        ok_seg = self._synthesize_elevenlabs(voice_id, sc.spoken_text.strip(), seg_mp3)
+                    elif source_used == "openai_tts":
+                        ok_seg = self._synthesize_openai_tts(voice_id, sc.spoken_text.strip(), seg_mp3)
+                    elif source_used == "piper_tts_local":
+                        ok_seg = self._synthesize_piper(sc.spoken_text.strip(), seg_raw)
+                    elif source_used == "edge_tts_fallback":
+                        ok_seg = self._synthesize_edge_tts(voice_id, sc.spoken_text.strip(), seg_mp3)
+                except Exception:
+                    ok_seg = None
+                if ok_seg and ok_seg.is_file():
+                    s_probe = probe_media(ok_seg)
+                    s_dur = float(s_probe["format"].get("duration", 0.0) or 0.0)
+                    seg_files.append((sc, ok_seg, s_dur))
+            if len(seg_files) == len(spoken_scenes):
+                total_reel_sec = max(1.0, sum(s.duration_frames for s in scenes) / 25.0)
+                inputs_cmd: list[str] = [
+                    "-f",
+                    "lavfi",
+                    "-t",
+                    f"{total_reel_sec:.3f}",
+                    "-i",
+                    "anullsrc=channel_layout=stereo:sample_rate=48000",
+                ]
+                fparts: list[str] = ["[0:a]volume=1.0[vbed]"]
+                mix_lbls = ["[vbed]"]
+                for k, (sc, seg_p, s_dur) in enumerate(seg_files, start=1):
+                    delay_ms = max(0, int(round((sc.start_sec + 0.18) * 1000)))
+                    max_win = max(0.8, sc.duration_sec - 0.15)
+                    if s_dur > max_win:
+                        timing_adjustments.append(
+                            f"Scena {sc.scene_number}: parlato ({s_dur:.2f}s) leggermente più lungo della finestra ({max_win:.2f}s); usa 'Sincronizza scene alla voce' per adattare."
+                        )
+                    inputs_cmd.extend(["-i", str(seg_p)])
+                    fparts.append(
+                        f"[{k}:a]aresample=48000,aformat=channel_layouts=stereo,adelay={delay_ms}|{delay_ms}[vs{k}]"
+                    )
+                    mix_lbls.append(f"[vs{k}]")
+                    aligned_cues.append(
+                        {
+                            "scene_number": sc.scene_number,
+                            "start_sec": round(sc.start_sec + 0.18, 2),
+                            "speech_duration_sec": round(s_dur, 2),
+                            "scene_duration_sec": sc.duration_sec,
+                        }
+                    )
+                fparts.append(
+                    f"{''.join(mix_lbls)}amix=inputs={len(mix_lbls)}:duration=first:normalize=0,"
+                    f"loudnorm=I=-16:TP=-1.5:LRA=9[vout]"
+                )
+                aligned_out = work_dir / f"voice_{voice_id}_aligned.wav"
+                run_ffmpeg(
+                    [
+                        "-y",
+                        "-loglevel",
+                        "error",
+                        *inputs_cmd,
+                        "-filter_complex",
+                        ";".join(fparts),
+                        "-map",
+                        "[vout]",
+                        "-t",
+                        f"{total_reel_sec:.3f}",
+                        "-ar",
+                        "48000",
+                        "-ac",
+                        "2",
+                        str(aligned_out),
+                    ],
+                    timeout=120,
+                )
+                if aligned_out.is_file():
+                    norm_out = aligned_out
+                    actual_dur = round(
+                        float(probe_media(norm_out)["format"].get("duration", actual_dur) or actual_dur),
+                        3,
+                    )
+
+        if actual_dur > total_scene_dur and not aligned_cues:
             timing_adjustments.append(
                 f"Durata audio ({actual_dur:.2f}s) superiore alle scene visive ({total_scene_dur:.2f}s): "
                 "consentito raccordo naturale verso il finale senza accelerare la voce."
@@ -506,6 +596,8 @@ class VoiceDirector:
             "status": "pronta",
             "audio_path": str(norm_out),
             "duration_sec": actual_dur,
+            "scene_aligned": bool(aligned_cues),
+            "aligned_cues": aligned_cues,
             "substituted": substituted,
             "substitution_notice": substitution_notice,
             "word_check": {
@@ -515,3 +607,36 @@ class VoiceDirector:
             },
             "timing_adjustments": timing_adjustments,
         }
+
+    def sync_scenes_to_speech_pacing(
+        self,
+        scenes: list[StoryboardScene],
+        fps: int = 25,
+    ) -> list[StoryboardScene]:
+        """Adjust each scene's duration cleanly to match spoken word rate (~2.3 words/sec + 0.7s breath)
+        while preserving outro timing and exact frame continuity.
+        """
+        cursor = 0
+        synced: list[StoryboardScene] = []
+        for sc in scenes:
+            words = len(re.findall(r"\w+", sc.spoken_text or ""))
+            if sc.is_outro:
+                target_sec = max(2.2, min(4.0, sc.duration_sec or 3.0))
+            elif words > 0:
+                target_sec = max(2.2, min(9.5, round((words / 2.25) + 0.75, 2)))
+            else:
+                target_sec = max(2.0, sc.duration_sec or 2.8)
+            df = max(fps, int(round(target_sec * fps)))
+            updated = sc.model_copy(
+                update={
+                    "start_frame": cursor,
+                    "end_frame": cursor + df,
+                    "duration_frames": df,
+                    "start_sec": round(cursor / fps, 3),
+                    "end_sec": round((cursor + df) / fps, 3),
+                    "duration_sec": round(df / fps, 3),
+                }
+            )
+            synced.append(updated)
+            cursor += df
+        return synced

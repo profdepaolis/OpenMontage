@@ -183,3 +183,64 @@ def test_gemini_key_shared_with_veo_and_health_route(isolated_env):
         explicit_authorization=False,
     )
     assert fal_res["status"] == "requires_authorization"
+
+
+def test_dynamic_scene_count_sync_and_hyperframes_captions(isolated_env):
+    from kora_studio.agents.director import KoraDirector
+    from kora_studio.agents.hyperframes_captions import (
+        build_caption_segments_for_scene,
+        export_hyperframes_workspace,
+    )
+
+    db = Database(isolated_env["db_path"])
+    director = KoraDirector(db=db)
+    director.vault.seed_kora_authentic_assets()
+
+    # 1. Dynamic scene count for 30s Reel (> 6 scenes!)
+    concepts = director.creative.ideate_from_theme(
+        "Tramonto sul mare di Policoro", duration_sec=30.0
+    )
+    scenes_30 = director.creative.build_storyboard(concepts[0], voice_id="brando", fps=25)
+    assert len(scenes_30) >= 8
+    assert sum(s.duration_frames for s in scenes_30) == 750
+
+    # 2. Hyperframes caption segments + workspace export
+    sub_dir = isolated_env["tmp_path"] / "hf_subs"
+    segs = build_caption_segments_for_scene(
+        scenes_30[0], "hyperframes_word_highlight", sub_dir
+    )
+    assert len(segs) >= 1
+    assert all(p["png"].is_file() for p in segs)
+
+    ws = export_hyperframes_workspace(
+        scenes_30,
+        "hyperframes_kinetic",
+        "KORA Test",
+        isolated_env["tmp_path"] / "hf_ws",
+    )
+    assert (isolated_env["tmp_path"] / "hf_ws" / "index.html").is_file()
+    assert (isolated_env["tmp_path"] / "hf_ws" / "DESIGN.md").is_file()
+    assert ws["index_html"].endswith("index.html")
+
+    # 3. Project audio & caption sync
+    proj = director.create_project(
+        title="Sync Test",
+        theme="Mare",
+        mode="theme",
+        preset="KORA Cinematic Identity",
+        production_mode="GUIDATA",
+        voice_id="brando",
+        target_duration_sec=30.0,
+        concept=concepts[0],
+    )
+    synced = director.sync_project_audio_and_caption(
+        proj["id"],
+        caption_style="hyperframes_kinetic",
+        music_start_sec=4.5,
+        music_volume=0.22,
+        voice_volume=1.1,
+        auto_sync_scenes_to_voice=True,
+    )
+    assert synced["preferences"]["caption_style"] == "hyperframes_kinetic"
+    assert synced["audio_plan"]["music_start_sec"] == 4.5
+    assert synced["audio_plan"]["music_volume"] == 0.22
