@@ -108,7 +108,7 @@ Le proposte creative continuano a usare le **miniature reali del Vault**; i para
 
 - Nuovo file: `tests/kora_studio/test_v28_cinematic_intelligence.py` (15 test: 14 passati, 1 saltato).
 - **Comando unico e riproducibile:** `./run_kora_tests.sh` (equivalente a `python -m pytest tests/kora_studio -q`).
-- Esito completo dell'ultima esecuzione: **78 passed, 3 skipped** (vedi sezione «Esito test» qui sotto, aggiornata con il comando eseguito in questa sessione).
+- Esito completo dell'ultima esecuzione su questa 2.8 (`./run_kora_tests.sh`): **78 passed, 3 skipped in 490,55 s** — 3 skip dichiarati (2 real-provider 2.7 già presenti + 1 nuovo real-provider 2.8).
 - **Il pacchetto ZIP 2.8 include integralmente `tests/`** (nella 2.7 l'archivio conteneva solo `kora_studio/`): l'archivio viene creato con pathspec espliciti `kora_studio tests docs run_kora_tests.sh`.
 
 ## 9. Produzione demo obbligatoria (30 s)
