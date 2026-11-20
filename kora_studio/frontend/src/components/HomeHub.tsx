@@ -64,7 +64,9 @@ interface HomeHubProps {
     prodMode: ProductionMode,
     captionStyle?: string,
     hyperframes?: Partial<HyperframesConfig>,
-    customizeFirst?: boolean
+    customizeFirst?: boolean,
+    assetIds?: string[],
+    destinationDir?: string | null
   ) => Promise<void>;
   onOpenProject: (projectId: string) => void;
   onVaultUpdated: () => void;
@@ -89,6 +91,10 @@ export function HomeHub({
 
   // Advanced / Technical controls (collapsed by default per Section 8 UX)
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [assets, setAssets] = useState<MediaAsset[]>([]);
+  const [selectedAssetIds, setSelectedAssetIds] = useState<string[]>([]);
+  const [destinationDir, setDestinationDir] = useState<string>("");
+  const [assetFilter, setAssetFilter] = useState<"photo" | "video" | "all">("all");
   const [prodMode, setProdMode] = useState<ProductionMode>("AUTO");
   const [presetOverride, setPresetOverride] = useState("AUTO_CONCEPT");
   const [mediaSelection, setMediaSelection] = useState("vault_auto");
@@ -115,6 +121,14 @@ export function HomeHub({
   const [proposals, setProposals] = useState<CreativeConcept[]>([]);
   const [uploadedInfo, setUploadedInfo] = useState<MediaAsset[]>([]);
 
+  React.useEffect(() => {
+    if (!showAdvanced || assets.length > 0) return;
+    koraApi
+      .listVault()
+      .then((list) => setAssets(list))
+      .catch(() => setAssets([]));
+  }, [showAdvanced, assets.length]);
+
   const buildRequestPayload = (overrideTheme?: string): Partial<CreativeRequestPayload> => ({
     theme: (overrideTheme ?? themeText).trim(),
     objective: objective.trim(),
@@ -124,6 +138,7 @@ export function HomeHub({
     generation_policy: generationPolicy,
     budget_eur: budgetEur,
     custom_instructions: customInstructions.trim(),
+    asset_ids: selectedAssetIds,
   });
 
   const handleSuggestThemes = async () => {
@@ -438,6 +453,94 @@ export function HomeHub({
                   />
                 </label>
               </div>
+
+              <div className="rounded-xl border border-[#EDE6D9] bg-white p-3 space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="font-medium text-[#1D1B18]">Materiali del Reel</span>
+                  <div className="flex items-center gap-1.5 text-[10px]">
+                    <select
+                      value={assetFilter}
+                      onChange={(e) => setAssetFilter(e.target.value as "photo" | "video" | "all")}
+                      className="rounded border border-[#DDD4C4] bg-white px-1.5 py-0.5"
+                    >
+                      <option value="all">Tutti</option>
+                      <option value="photo">Solo foto</option>
+                      <option value="video">Solo video</option>
+                    </select>
+                    <span className="text-[#6C6459]">
+                      {selectedAssetIds.length > 0
+                        ? `${selectedAssetIds.length} selezionati`
+                        : "automatici dal Vault"}
+                    </span>
+                    {selectedAssetIds.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => setSelectedAssetIds([])}
+                        className="underline decoration-dotted text-[#6C6459]"
+                      >
+                        azzera
+                      </button>
+                    )}
+                  </div>
+                </div>
+                <p className="text-[10px] text-[#6C6459]">
+                  Se non selezioni nulla, il MediaCurator sceglie automaticamente i materiali autentici più adatti
+                  al concept. Selezionando, il Reel userà <em>solo</em> quelli.
+                </p>
+                <div className="grid max-h-44 grid-cols-3 gap-2 overflow-y-auto sm:grid-cols-5">
+                  {assets
+                    .filter((a) => (assetFilter === "all" ? true : a.media_type === assetFilter))
+                    .map((a) => {
+                      const selected = selectedAssetIds.includes(a.id);
+                      return (
+                        <button
+                          key={a.id}
+                          type="button"
+                          onClick={() =>
+                            setSelectedAssetIds((prev) =>
+                              prev.includes(a.id) ? prev.filter((x) => x !== a.id) : [...prev, a.id]
+                            )
+                          }
+                          className={`relative overflow-hidden rounded-lg border-2 transition ${
+                            selected ? "border-[#224C66] ring-2 ring-[#224C66]/25" : "border-transparent"
+                          }`}
+                          title={`${a.filename} · ${a.media_type}`}
+                        >
+                          <img
+                            src={`/api/vault/${a.id}/thumb`}
+                            alt={a.filename}
+                            className="h-16 w-full object-cover"
+                          />
+                          <span className="absolute bottom-0 left-0 right-0 bg-black/55 px-1 py-0.5 text-[8px] text-white">
+                            {a.media_type === "video" ? "video" : "foto"}
+                          </span>
+                          {selected && (
+                            <span className="absolute right-0.5 top-0.5 rounded-full bg-[#224C66] px-1 text-[8px] text-white">
+                              ✓
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
+                </div>
+              </div>
+
+              <label className="block space-y-1">
+                <span className="text-[11px] text-[#6C6459]">
+                  Cartella di destinazione del Reel (opzionale)
+                </span>
+                <input
+                  type="text"
+                  value={destinationDir}
+                  onChange={(e) => setDestinationDir(e.target.value)}
+                  placeholder="~/Desktop/KORA-REELS"
+                  className="w-full rounded-lg border border-[#DDD4C4] bg-white px-3 py-1.5 text-xs"
+                />
+                <span className="block text-[10px] text-[#6C6459]">
+                  Percorso assoluto o con ~. A render finito il pacchetto (MP4, copertina, caption, report,
+                  progetto) viene copiato lì automaticamente.
+                </span>
+              </label>
 
               <label className="block space-y-1">
                 <span className="text-[11px] text-[#6C6459]">Istruzioni creative personalizzate</span>
@@ -780,7 +883,9 @@ export function HomeHub({
                             prodMode,
                             hyperframes.caption_style,
                             hyperframes,
-                            true
+                            true,
+                            selectedAssetIds,
+                            destinationDir.trim() || null
                           );
                         } finally {
                           setLoading(false);
@@ -807,7 +912,9 @@ export function HomeHub({
                             prodMode,
                             hyperframes.caption_style,
                             hyperframes,
-                            false
+                            false,
+                            selectedAssetIds,
+                            destinationDir.trim() || null
                           );
                         } finally {
                           setLoading(false);

@@ -435,3 +435,82 @@ def test_scenario_12_manual_elevenlabs_voiceover_roundtrip(isolated_env):
     r_del = client.delete(f"/api/projects/{pid}/voiceover")
     assert r_del.status_code == 200
     assert director.voice_director._project_voiceover_override(pid) is None
+
+
+def test_scenario_13_project_lifecycle_assets_destination_and_voice_filters(isolated_env):
+    """Scenario 13: materiali scelti + cartella destinazione alla creazione, poi archivio, ripristino ed eliminazione."""
+    from fastapi.testclient import TestClient
+
+    from kora_studio.api.app import create_app
+
+    director = _build_director(isolated_env)
+    client = TestClient(create_app(db_path=isolated_env["db_path"], auto_seed=False))
+
+    vault_assets = director.vault.list_assets()
+    assert len(vault_assets) >= 2
+    chosen = [vault_assets[0]["id"], vault_assets[1]["id"]]
+
+    # 1) Creazione con materiali espliciti + cartella di destinazione
+    concept = director.creative.surprise_me(duration_sec=20)[0]
+    dest_dir = isolated_env["tmp_path"] / "reels_utente"
+    r_new = client.post(
+        "/api/projects",
+        json={
+            "title": "Reel materiali scelti",
+            "theme": "Mattino KORA",
+            "mode": "theme",
+            "preset": concept.preset,
+            "production_mode": "GUIDATA",
+            "voice_id": "brando",
+            "target_duration_sec": 20,
+            "concept": concept.model_dump(),
+            "asset_ids": chosen,
+            "destination_dir": str(dest_dir),
+            "auto_start": False,
+        },
+    )
+    assert r_new.status_code == 200, r_new.text
+    proj = r_new.json()["project"]
+    pid = proj["id"]
+    assert proj["preferences"]["selected_asset_ids"] == chosen
+    scene_ids = {s["selected_asset_id"] for s in proj["storyboard"] if s.get("selected_asset_id")}
+    assert scene_ids.issubset(set(chosen))
+
+    # 2) Percorso relativo rifiutato
+    r_bad = client.post(
+        "/api/projects",
+        json={
+            "title": "Reel percorso relativo",
+            "theme": "x",
+            "concept": concept.model_dump(),
+            "destination_dir": "cartella/relativa",
+            "auto_start": False,
+        },
+    )
+    assert r_bad.status_code == 400
+
+    # 3) Archivio in una cartella scelta: file copiati + stato Archiviato
+    r_arch = client.post(f"/api/projects/{pid}/archive", json={"destination": str(dest_dir)})
+    assert r_arch.status_code == 200, r_arch.text
+    archived = r_arch.json()
+    assert archived["archived"] is True
+    assert Path(archived["destination"]).is_dir()
+    assert any(name.endswith("_progetto_completo.json") for name in archived["files"])
+    assert archived["project"]["status"] == "Archiviato"
+
+    # 4) Ripristino
+    r_un = client.post(f"/api/projects/{pid}/unarchive")
+    assert r_un.status_code == 200
+    assert r_un.json()["status"] != "Archiviato"
+
+    # 5) Esportazione forzata in un'altra cartella
+    other_dir = isolated_env["tmp_path"] / "altra_cartella"
+    r_exp = client.post(f"/api/projects/{pid}/export-to", json={"destination": str(other_dir)})
+    assert r_exp.status_code == 200
+    assert Path(r_exp.json()["destination"]).is_dir()
+
+    # 6) Eliminazione definitiva
+    r_del = client.delete(f"/api/projects/{pid}")
+    assert r_del.status_code == 200, r_del.text
+    assert director.get_project(pid) is None
+    assert client.get(f"/api/projects/{pid}").status_code == 404

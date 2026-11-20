@@ -88,6 +88,13 @@ class KoraDirector:
         prefs_payload = dict(preferences or {})
         if concept is not None and concept.creative_request:
             prefs_payload.setdefault("creative_request", concept.creative_request)
+        # Materiali scelti esplicitamente dall'utente: vincolano lo storyboard a quei soli asset
+        selected_assets = [
+            str(a) for a in (prefs_payload.get("selected_asset_ids") or []) if str(a).strip()
+        ]
+        if selected_assets and storyboard:
+            for idx, scene_dict in enumerate(storyboard):
+                scene_dict["selected_asset_id"] = selected_assets[idx % len(selected_assets)]
 
         with self.db.session() as conn:
             conn.execute(
@@ -194,6 +201,142 @@ class KoraDirector:
                 (next_ver, utcnow_iso(), project_id),
             )
             return next_ver
+
+    def export_project_bundle(
+        self,
+        project_id: str,
+        destination: str,
+        archive: bool = False,
+        folder_name: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Copia il pacchetto completo del Reel in una cartella scelta dall'utente (ed eventualmente archivia il progetto)."""
+        import re
+        import shutil
+
+        from kora_studio.config import EXPORTS_DIR
+
+        proj = self.get_project(project_id)
+        if not proj:
+            raise KeyError(f"Progetto {project_id} non trovato.")
+        raw_dest = (destination or "").strip()
+        if not raw_dest:
+            raise ValueError("Indica una cartella di destinazione (percorso assoluto o ~/...).")
+        dest_root = Path(raw_dest).expanduser()
+        if not dest_root.is_absolute():
+            raise ValueError("La cartella di destinazione deve essere un percorso assoluto (es. ~/Desktop/KORA-REELS).")
+
+        slug = re.sub(r"[^a-zA-Z0-9]+", "-", folder_name or proj["title"]).strip("-").lower()[:48]
+        target = dest_root / f"{slug or 'reel'}_{project_id[-6:]}"
+        target.mkdir(parents=True, exist_ok=True)
+
+        copied: list[str] = []
+        src_dir = EXPORTS_DIR / project_id
+        if src_dir.is_dir():
+            for item in sorted(src_dir.iterdir()):
+                if item.is_file():
+                    shutil.copy2(item, target / item.name)
+                    copied.append(str(target / item.name))
+
+        meta_path = target / f"{project_id}_progetto_completo.json"
+        meta_path.write_text(json.dumps(proj, ensure_ascii=False, indent=2), encoding="utf-8")
+        copied.append(str(meta_path))
+
+        imported = self.voice_director._project_voiceover_override(project_id)
+        if imported:
+            src_audio = Path(str(imported["path"]))
+            if src_audio.is_file():
+                audio_dest = target / f"voce_importata{src_audio.suffix or '.mp3'}"
+                shutil.copy2(src_audio, audio_dest)
+                copied.append(str(audio_dest))
+
+        readme = target / "LEGGIMI.txt"
+        readme.write_text(
+            "KORA STUDIO — pacchetto Reel\n"
+            f"Progetto: {proj['title']} ({project_id})\n"
+            f"Preset: {proj['preset']} · Voce: {proj['voice_id']} · {proj['target_duration_sec']}s · {proj['fps']} fps\n"
+            f"Stato: {proj['status']} · Versione: v{proj['current_version']}\n"
+            f"Esportato il: {utcnow_iso()}\n",
+            encoding="utf-8",
+        )
+        copied.append(str(readme))
+
+        prefs = dict(proj.get("preferences") or {})
+        prefs["last_export_dir"] = str(target)
+        prefs["last_export_at"] = utcnow_iso()
+        if archive:
+            prefs["status_before_archive"] = proj["status"]
+        with self.db.session() as conn:
+            if archive:
+                conn.execute(
+                    "UPDATE projects SET status = ?, preferences_json = ?, updated_at = ? WHERE id = ?",
+                    ("Archiviato", json.dumps(prefs, ensure_ascii=False), utcnow_iso(), project_id),
+                )
+            else:
+                conn.execute(
+                    "UPDATE projects SET preferences_json = ?, updated_at = ? WHERE id = ?",
+                    (json.dumps(prefs, ensure_ascii=False), utcnow_iso(), project_id),
+                )
+        self.save_project_snapshot(
+            project_id,
+            f"{'Archiviazione' if archive else 'Esportazione'} in {target}",
+            "ExportManager",
+        )
+        return {
+            "project_id": project_id,
+            "destination": str(target),
+            "files": copied,
+            "archived": archive,
+            "project": self.get_project(project_id),
+        }
+
+    def unarchive_project(self, project_id: str) -> dict[str, Any]:
+        proj = self.get_project(project_id)
+        if not proj:
+            raise KeyError(f"Progetto {project_id} non trovato.")
+        prefs = dict(proj.get("preferences") or {})
+        restored = prefs.pop("status_before_archive", "Completato")
+        with self.db.session() as conn:
+            conn.execute(
+                "UPDATE projects SET status = ?, preferences_json = ?, updated_at = ? WHERE id = ?",
+                (restored, json.dumps(prefs, ensure_ascii=False), utcnow_iso(), project_id),
+            )
+        return self.get_project(project_id)  # type: ignore
+
+    def delete_project(self, project_id: str) -> dict[str, Any]:
+        """Elimina definitivamente progetto, versioni, job collegati e file generati."""
+        import shutil
+
+        from kora_studio.config import EXPORTS_DIR, PROJECTS_DIR
+
+        proj = self.get_project(project_id)
+        if not proj:
+            raise KeyError(f"Progetto {project_id} non trovato.")
+        removed_paths: list[str] = []
+        for folder in (EXPORTS_DIR / project_id, PROJECTS_DIR / project_id):
+            if folder.exists():
+                shutil.rmtree(folder, ignore_errors=True)
+                removed_paths.append(str(folder))
+        imported = self.voice_director._project_voiceover_override(project_id)
+        if imported:
+            try:
+                Path(str(imported["path"])).unlink(missing_ok=True)
+                removed_paths.append(str(imported["path"]))
+            except OSError:
+                pass
+        with self.db.session() as conn:
+            job_rows = conn.execute("SELECT id FROM jobs WHERE project_id = ?", (project_id,)).fetchall()
+            for row in job_rows:
+                conn.execute("DELETE FROM job_logs WHERE job_id = ?", (row["id"],))
+            conn.execute("DELETE FROM jobs WHERE project_id = ?", (project_id,))
+            conn.execute("DELETE FROM project_versions WHERE project_id = ?", (project_id,))
+            conn.execute("DELETE FROM reel_history WHERE project_id = ?", (project_id,))
+            conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
+        return {
+            "deleted": True,
+            "project_id": project_id,
+            "title": proj["title"],
+            "removed_paths": removed_paths,
+        }
 
     def _scale_storyboard_frames(
         self, scenes: list[StoryboardScene], total_frames: int, fps: int
@@ -519,6 +662,19 @@ class KoraDirector:
                 scenes = self.creative.build_storyboard(
                     concept, voice_id=proj["voice_id"], fps=proj["fps"]
                 )
+            # Vincolo materiali scelti dall'utente anche quando lo storyboard nasce qui
+            selected_pref = [
+                str(a) for a in ((proj.get("preferences") or {}).get("selected_asset_ids") or [])
+            ]
+            if selected_pref:
+                for idx, sc in enumerate(scenes):
+                    sc.selected_asset_id = selected_pref[idx % len(selected_pref)]
+                self.log_job(
+                    job_id,
+                    "INFO",
+                    "MediaCurator",
+                    f"Materiali vincolati alla selezione utente ({len(selected_pref)} asset).",
+                )
             completed.append("Storyboard")
             self.log_job(
                 job_id,
@@ -708,6 +864,25 @@ class KoraDirector:
                 checkpoint={"reel_mp4": bundle["reel_mp4"]},
             )
             self.log_job(job_id, "INFO", "ExportManager", f"Esportazione verificata pronta: {bundle['reel_mp4']}")
+
+            # Copia automatica nella cartella di destinazione scelta alla creazione del progetto
+            dest_pref = (self.get_project(project_id) or {}).get("preferences", {}).get("destination_dir")
+            if dest_pref:
+                try:
+                    exported = self.export_project_bundle(project_id, dest_pref, archive=False)
+                    self.log_job(
+                        job_id,
+                        "INFO",
+                        "ExportManager",
+                        f"Reel copiato nella cartella scelta: {exported['destination']}",
+                    )
+                except Exception as exc:
+                    self.log_job(
+                        job_id,
+                        "WARN",
+                        "ExportManager",
+                        f"Cartella di destinazione non raggiungibile ({exc}): il Reel resta in kora_data/exports.",
+                    )
             return {"project": self.get_project(project_id), "job": self.get_job(job_id)}
 
         except InterruptedError as exc:

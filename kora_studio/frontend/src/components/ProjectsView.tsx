@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
-import { Film, RotateCcw, ArrowRight } from "lucide-react";
+import { Film, RotateCcw, ArrowRight, Archive, Trash2, FolderInput, Undo2 } from "lucide-react";
 import type { ProjectRecord } from "@/lib/types";
 import { koraApi } from "@/lib/api";
 
@@ -21,6 +21,77 @@ export function ProjectsView({
   const [versions, setVersions] = useState<
     Array<{ id: number; version: number; summary: string; agent_name: string; created_at: string }>
   >([]);
+  const [showArchived, setShowArchived] = useState(false);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [feedback, setFeedback] = useState<string | null>(null);
+
+  const defaultArchiveDir = () => {
+    const saved = typeof window !== "undefined" ? window.localStorage.getItem("kora_archive_dir") : null;
+    return saved || "~/Desktop/KORA-ARCHIVIO";
+  };
+
+  const askDestination = (projectTitle: string) => {
+    const hint = defaultArchiveDir();
+    const value = window.prompt(
+      `Cartella in cui archiviare "${projectTitle}"\n(percorso assoluto oppure ~/...)`,
+      hint
+    );
+    if (!value) return null;
+    window.localStorage.setItem("kora_archive_dir", value.trim());
+    return value.trim();
+  };
+
+  const handleArchive = async (id: string, title: string) => {
+    const destination = askDestination(title);
+    if (!destination) return;
+    setBusyId(id);
+    setFeedback(null);
+    try {
+      const res = await koraApi.archiveProject(id, destination);
+      setFeedback(`Archiviato in: ${res.destination} (${res.files.length} file copiati)`);
+      onRefresh();
+    } catch (e) {
+      setFeedback((e as Error).message);
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const handleUnarchive = async (id: string) => {
+    setBusyId(id);
+    try {
+      await koraApi.unarchiveProject(id);
+      setFeedback("Progetto ripristinato tra i progetti attivi.");
+      onRefresh();
+    } catch (e) {
+      setFeedback((e as Error).message);
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const handleDelete = async (id: string, title: string) => {
+    const ok = window.confirm(
+      `Eliminare definitivamente "${title}"?\n\nVerranno rimossi video, copertina, report e versioni. L'operazione è irreversibile.`
+    );
+    if (!ok) return;
+    setBusyId(id);
+    setFeedback(null);
+    try {
+      await koraApi.deleteProject(id);
+      setFeedback(`Progetto "${title}" eliminato definitivamente.`);
+      onRefresh();
+    } catch (e) {
+      setFeedback((e as Error).message);
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const visibleProjects = projects.filter((p) =>
+    showArchived ? p.status === "Archiviato" : p.status !== "Archiviato"
+  );
+  const archivedCount = projects.filter((p) => p.status === "Archiviato").length;
 
   useEffect(() => {
     if (activeProjectId) {
@@ -43,22 +114,44 @@ export function ProjectsView({
             Storico completo dei Reel in corso, completati e versioni ripristinabili.
           </p>
         </div>
-        <button
-          type="button"
-          onClick={onRefresh}
-          className="rounded-xl border border-[#DDD4C4] bg-white px-4 py-2 text-xs font-medium text-[#1D1B18] hover:border-[#9A8052]"
-        >
-          Aggiorna
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setShowArchived((v) => !v)}
+            className={`flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-medium ${
+              showArchived
+                ? "border-[#9A8052] bg-[#FBF4E6] text-[#7A5C2E]"
+                : "border-[#DDD4C4] bg-white text-[#1D1B18] hover:border-[#9A8052]"
+            }`}
+          >
+            <Archive className="h-3.5 w-3.5" />
+            {showArchived ? "Vedi attivi" : `Archiviati (${archivedCount})`}
+          </button>
+          <button
+            type="button"
+            onClick={onRefresh}
+            className="rounded-xl border border-[#DDD4C4] bg-white px-4 py-2 text-xs font-medium text-[#1D1B18] hover:border-[#9A8052]"
+          >
+            Aggiorna
+          </button>
+        </div>
       </div>
 
-      {projects.length === 0 ? (
+      {feedback && (
+        <div className="rounded-xl border border-[#E4D3B4] bg-[#FBF4E6] px-4 py-2.5 text-[11px] text-[#7A5C2E]">
+          {feedback}
+        </div>
+      )}
+
+      {visibleProjects.length === 0 ? (
         <div className="rounded-2xl border border-[#DDD4C4] bg-white p-10 text-center text-sm text-[#6C6459]">
-          Nessun progetto ancora creato. Parti dalla Home per produrre il primo Reel KORA.
+          {showArchived
+            ? "Nessun progetto archiviato."
+            : "Nessun progetto ancora creato. Parti dalla Home per produrre il primo Reel KORA."}
         </div>
       ) : (
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-          {projects.map((p) => (
+          {visibleProjects.map((p) => (
             <div
               key={p.id}
               className={`rounded-2xl border bg-white p-5 shadow-sm transition ${
@@ -79,7 +172,9 @@ export function ProjectsView({
                       ? "bg-emerald-50 text-emerald-800"
                       : p.status === "Errore"
                         ? "bg-red-50 text-red-700"
-                        : "bg-[#EFE8DB] text-[#1D1B18]"
+                        : p.status === "Archiviato"
+                          ? "bg-amber-50 text-amber-800"
+                          : "bg-[#EFE8DB] text-[#1D1B18]"
                   }`}
                 >
                   {p.status}
@@ -127,6 +222,32 @@ export function ProjectsView({
                     </button>
                   </>
                 )}
+                <button
+                  type="button"
+                  disabled={busyId === p.id}
+                  onClick={() =>
+                    showArchived ? void handleUnarchive(p.id) : void handleArchive(p.id, p.title)
+                  }
+                  className="flex items-center gap-1 rounded-lg border border-[#DDD4C4] px-3 py-1.5 text-xs hover:border-[#9A8052] disabled:opacity-50"
+                >
+                  {showArchived ? (
+                    <>
+                      <Undo2 className="h-3 w-3" /> Ripristina
+                    </>
+                  ) : (
+                    <>
+                      <FolderInput className="h-3 w-3" /> Archivia…
+                    </>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  disabled={busyId === p.id}
+                  onClick={() => void handleDelete(p.id, p.title)}
+                  className="flex items-center gap-1 rounded-lg border border-red-200 px-3 py-1.5 text-xs text-red-700 hover:bg-red-50 disabled:opacity-50"
+                >
+                  <Trash2 className="h-3 w-3" /> Elimina
+                </button>
               </div>
             </div>
           ))}

@@ -147,3 +147,23 @@ VibeVoice (Microsoft Research) è MIT ma **solo ricerca**, addestrato su **ingle
 (circa 7-8 GB VRAM per il modello 1.5B, 17-24 GB per il 7B). Su un MacBook Pro Intel (solo CPU) l'inferenza sarebbe
 di minuti per secondo di audio, senza supporto italiano. Alternative già integrate: **Piper TTS italiano** (offline,
 0 €, CPU) e appunto l'import manuale da ElevenLabs.
+
+---
+
+## 7. Organizzazione dei progetti e materiali
+
+- **Nuovo Reel con materiali scelti**: *Home → Parametri avanzati* → sezione **Materiali del Reel**: selezioni foto/video
+  dal Vault (se non selezioni nulla, decide il MediaCurator). La selezione **vincola** lo storyboard a quei soli asset.
+- **Cartella di destinazione**: nello stesso pannello puoi indicare un percorso assoluto (es. `~/Desktop/KORA-REELS`):
+  a render completato KORA copia automaticamente MP4, copertina, caption, report e progetto JSON in
+  `<cartella>/<titolo>_<idprogetto>/`.
+- **Archiviare** (*Progetti → Archivia…*): esporta il pacchetto nella cartella scelta e marca il progetto come
+  `Archiviato` — sparisce dall'elenco attivo ma resta ripristinabile con *Ripristina*.
+- **Eliminare** (*Progetti → Elimina*): rimuove definitivamente progetto, versioni, job collegati e file generati.
+  Bloccato se c'è un job in corso su quel progetto.
+- **Filtro voci ElevenLabs** (*AI Providers → Mappatura Voci*): selettori **Solo italiane / Tutte le lingue** e
+  **Solo premade / Premade + clonate / Tutte**. Le voci premade sono etichettate in inglese ma, con
+  `eleven_multilingual_v2`, parlano italiano.
+
+Endpoint: `POST /api/projects/{id}/export-to` · `POST /api/projects/{id}/archive` · `POST /api/projects/{id}/unarchive` ·
+`DELETE /api/projects/{id}` (**solo da host locale**).

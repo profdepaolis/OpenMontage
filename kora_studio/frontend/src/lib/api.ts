@@ -149,6 +149,8 @@ export const koraApi = {
     caption_style?: string;
     hyperframes?: Partial<HyperframesConfig>;
     creative_request?: Partial<CreativeRequestPayload>;
+    asset_ids?: string[];
+    destination_dir?: string | null;
     auto_start?: boolean;
   }) =>
     apiFetch<{ project: ProjectRecord; job: JobRecord | null }>("/api/projects", {
@@ -243,6 +245,29 @@ export const koraApi = {
       };
     }>(`/api/projects/${id}/voiceover/upload`, { method: "POST", body: form });
   },
+  archiveProject: (id: string, destination: string, folderName?: string) =>
+    apiFetch<{
+      project_id: string;
+      destination: string;
+      files: string[];
+      archived: boolean;
+      project: ProjectRecord;
+    }>(`/api/projects/${id}/archive`, {
+      method: "POST",
+      body: JSON.stringify({ destination, folder_name: folderName || null }),
+    }),
+  exportProject: (id: string, destination: string, folderName?: string) =>
+    apiFetch<{ project_id: string; destination: string; files: string[] }>(
+      `/api/projects/${id}/export-to`,
+      { method: "POST", body: JSON.stringify({ destination, folder_name: folderName || null }) }
+    ),
+  unarchiveProject: (id: string) =>
+    apiFetch<ProjectRecord>(`/api/projects/${id}/unarchive`, { method: "POST" }),
+  deleteProject: (id: string) =>
+    apiFetch<{ deleted: boolean; project_id: string; title: string; removed_paths: string[] }>(
+      `/api/projects/${id}`,
+      { method: "DELETE" }
+    ),
   clearVoiceover: (id: string) =>
     apiFetch<{ project_id: string; cleared: boolean }>(`/api/projects/${id}/voiceover`, {
       method: "DELETE",

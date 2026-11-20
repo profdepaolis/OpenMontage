@@ -137,7 +137,14 @@ class CreateProjectRequest(BaseModel):
     caption_style: Optional[str] = None
     hyperframes: Optional[dict[str, Any]] = None
     creative_request: Optional[dict[str, Any]] = None
+    asset_ids: Optional[list[str]] = None
+    destination_dir: Optional[str] = None
     auto_start: bool = True
+
+
+class ProjectExportRequest(BaseModel):
+    destination: str = Field(..., min_length=1)
+    folder_name: Optional[str] = None
 
 
 class ProjectSyncRequest(BaseModel):
@@ -440,6 +447,23 @@ def create_app(db_path: Optional[Path] = None, auto_seed: bool = True) -> FastAP
         prefs = {}
         if req.creative_request:
             prefs["creative_request"] = req.creative_request
+        if req.destination_dir:
+            raw_dest = req.destination_dir.strip()
+            if raw_dest and not Path(raw_dest).expanduser().is_absolute():
+                raise HTTPException(
+                    status_code=400,
+                    detail="La cartella di destinazione deve essere un percorso assoluto (es. ~/Desktop/KORA-REELS).",
+                )
+            prefs["destination_dir"] = raw_dest
+        if req.asset_ids and concept is not None:
+            valid_ids = {a["id"] for a in director.vault.list_assets()}
+            selected = [aid for aid in req.asset_ids if aid in valid_ids]
+            if not selected:
+                raise HTTPException(
+                    status_code=400, detail="Nessuno dei materiali selezionati esiste nel Media Vault."
+                )
+            concept.available_asset_ids = selected
+            prefs["selected_asset_ids"] = selected
         proj = director.create_project(
             title=req.title,
             theme=req.theme,
@@ -734,6 +758,53 @@ def create_app(db_path: Optional[Path] = None, auto_seed: bool = True) -> FastAP
     @app.post("/api/projects/{project_id}/versions/{version}/restore")
     def restore_version(project_id: str, version: int) -> dict[str, Any]:
         return director.restore_project_version(project_id, version)
+
+    @app.post("/api/projects/{project_id}/export-to", dependencies=[Depends(_require_local_trust)])
+    def export_project_to_folder(project_id: str, req: ProjectExportRequest) -> dict[str, Any]:
+        """Copia il pacchetto completo del Reel (MP4, cover, caption, report, progetto) in una cartella scelta."""
+        try:
+            return director.export_project_bundle(
+                project_id, req.destination, archive=False, folder_name=req.folder_name
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        except OSError as exc:
+            raise HTTPException(status_code=400, detail=f"Impossibile scrivere nella cartella indicata: {exc}")
+
+    @app.post("/api/projects/{project_id}/archive", dependencies=[Depends(_require_local_trust)])
+    def archive_project(project_id: str, req: ProjectExportRequest) -> dict[str, Any]:
+        """Esporta in locale e archivia il progetto (resta ripristinabile, sparisce dai progetti attivi)."""
+        try:
+            return director.export_project_bundle(
+                project_id, req.destination, archive=True, folder_name=req.folder_name
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        except OSError as exc:
+            raise HTTPException(status_code=400, detail=f"Impossibile scrivere nella cartella indicata: {exc}")
+
+    @app.post("/api/projects/{project_id}/unarchive", dependencies=[Depends(_require_local_trust)])
+    def unarchive_project(project_id: str) -> dict[str, Any]:
+        try:
+            return director.unarchive_project(project_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
+
+    @app.delete("/api/projects/{project_id}", dependencies=[Depends(_require_local_trust)])
+    def delete_project(project_id: str) -> dict[str, Any]:
+        """Elimina definitivamente il progetto e tutti i file generati (irreversibile)."""
+        if director.has_active_job(project_id):
+            raise HTTPException(
+                status_code=409, detail="Job in corso su questo progetto: attendi o annulla prima di eliminarlo."
+            )
+        try:
+            return director.delete_project(project_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
 
     @app.get("/api/projects/{project_id}/video")
     def stream_project_video(project_id: str) -> FileResponse:

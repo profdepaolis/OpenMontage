@@ -106,7 +106,9 @@ export default function KoraStudioPage() {
     prodMode: ProductionMode,
     captionStyle?: string,
     hyperframes?: Partial<HyperframesConfig>,
-    customizeFirst?: boolean
+    customizeFirst?: boolean,
+    assetIds?: string[],
+    destinationDir?: string | null
   ) => {
     const effectiveMode: ProductionMode = customizeFirst ? "GUIDATA" : prodMode;
     const res = await koraApi.createProject({
@@ -121,6 +123,8 @@ export default function KoraStudioPage() {
       caption_style: captionStyle || hyperframes?.caption_style,
       hyperframes,
       creative_request: concept.creative_request,
+      asset_ids: assetIds && assetIds.length > 0 ? assetIds : undefined,
+      destination_dir: destinationDir || undefined,
       auto_start: !customizeFirst && prodMode === "AUTO",
     });
     setActiveProjectId(res.project.id);

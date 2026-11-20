@@ -39,6 +39,13 @@ export function ProvidersView({ providers, budget, voices, onRefresh }: Provider
       library_voice?: boolean;
     }>
   >([]);
+  const isItalianVoice = (v: { labels?: Record<string, string> }) => {
+    const lang = String(v.labels?.language || v.labels?.accent || "").toLowerCase();
+    const name = String(v.labels?.language || "").toLowerCase();
+    return ["it", "italian", "italiano"].some((tag) => lang.startsWith(tag) || name === tag);
+  };
+  const [voiceFilterLang, setVoiceFilterLang] = useState<"it" | "all">("it");
+  const [voiceFilterCat, setVoiceFilterCat] = useState<"premade" | "usable" | "all">("premade");
   const [audioPreviewUrl, setAudioPreviewUrl] = useState<string | null>(null);
   const [audioPreviewLabel, setAudioPreviewLabel] = useState<string | null>(null);
   const [paidInput, setPaidInput] = useState<string>(
@@ -215,6 +222,14 @@ export function ProvidersView({ providers, budget, voices, onRefresh }: Provider
       setBusyId(null);
     }
   };
+
+  const filteredVoices = accountVoices.filter((av) => {
+    if (voiceFilterLang === "it" && !isItalianVoice(av)) return false;
+    const category = String(av.category || "").toLowerCase();
+    if (voiceFilterCat === "premade" && category !== "premade") return false;
+    if (voiceFilterCat === "usable" && av.usable_on_free_plan === false) return false;
+    return true;
+  });
 
   return (
     <div className="space-y-6">
@@ -466,7 +481,37 @@ export function ProvidersView({ providers, budget, voices, onRefresh }: Provider
                 KORA accetta solo voci «ok anche Free» (premade, clonate o professional) quando l&apos;account è
                 Free; le voci di libreria rispondono 402 e vengono sostituite automaticamente.
               </p>
-              {accountVoices.map((av) => (
+              <div className="flex flex-wrap items-center gap-1.5 text-[10px]">
+                <span className="text-[#6C6459]">Filtro:</span>
+                <select
+                  value={voiceFilterLang}
+                  onChange={(e) => setVoiceFilterLang(e.target.value as "it" | "all")}
+                  className="rounded border border-[#DDD4C4] bg-white px-1.5 py-0.5"
+                >
+                  <option value="it">Solo italiane</option>
+                  <option value="all">Tutte le lingue</option>
+                </select>
+                <select
+                  value={voiceFilterCat}
+                  onChange={(e) => setVoiceFilterCat(e.target.value as "premade" | "usable" | "all")}
+                  className="rounded border border-[#DDD4C4] bg-white px-1.5 py-0.5"
+                >
+                  <option value="premade">Solo premade</option>
+                  <option value="usable">Premade + clonate (usabili)</option>
+                  <option value="all">Tutte le categorie</option>
+                </select>
+                <span className="text-[#6C6459]">
+                  {filteredVoices.length}/{accountVoices.length} voci
+                </span>
+              </div>
+              {filteredVoices.length === 0 && (
+                <p className="rounded-lg bg-white px-2.5 py-2 text-[10px] text-[#7A5C2E]">
+                  Nessuna voce corrisponde al filtro. Passa a «Tutte le lingue» o «Tutte le categorie»: le voci
+                  premade di ElevenLabs sono di norma etichettate in inglese, ma con
+                  <em> eleven_multilingual_v2</em> parlano italiano.
+                </p>
+              )}
+              {filteredVoices.map((av) => (
                 <div
                   key={av.voice_id}
                   className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-white px-2.5 py-1.5 text-[11px]"
