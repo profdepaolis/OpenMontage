@@ -17,6 +17,8 @@ import type {
   ProviderRecord,
   StoryboardScene,
   ThemeSuggestionResponse,
+  IdeationRun,
+  ThemeProposalLite,
   VoiceOption,
 } from "./types";
 
@@ -112,6 +114,50 @@ export const koraApi = {
       body: JSON.stringify(body),
     });
   },
+  // 2.8.1 — Fast Creative Mode (4 proposte lite, budget 25 s, annullabile)
+  suggestThemesLite: (
+    payload: Partial<CreativeRequestPayload> = {},
+    options: { provider?: string; model?: string; avoidCache?: boolean } = {}
+  ) => {
+    const query = new URLSearchParams();
+    if (options.provider) query.set("provider", options.provider);
+    if (options.model) query.set("model", options.model);
+    if (options.avoidCache) query.set("avoid_cache", "true");
+    const suffix = query.toString() ? `?${query.toString()}` : "";
+    return apiFetch<{
+      run_id: string;
+      status: string;
+      budget_ms: number;
+      stages: { stage: string; label: string }[];
+      poll_url: string;
+    }>(`/api/creative/suggest-lite${suffix}`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+  getSuggestThemesLite: (runId: string) =>
+    apiFetch<IdeationRun>(`/api/creative/suggest-lite/${runId}`),
+  cancelSuggestThemesLite: (runId: string) =>
+    apiFetch<{ cancelled: boolean; detail: string }>(
+      `/api/creative/suggest-lite/${runId}/cancel`,
+      { method: "POST" }
+    ),
+  expandTheme: (
+    proposal: ThemeProposalLite,
+    durationSec?: number,
+    assetIds?: string[]
+  ) =>
+    apiFetch<{
+      concepts: CreativeConcept[];
+      generation_engine?: string;
+      fallback_reason?: string | null;
+      recommendation?: ThemeSuggestionResponse;
+    }>("/api/creative/expand-theme", {
+      method: "POST",
+      body: JSON.stringify({ proposal, duration_sec: durationSec, asset_ids: assetIds }),
+    }),
+  suggestLiteCacheStats: () =>
+    apiFetch<{ entries: number; hits: number }>("/api/creative/suggest-lite-cache/stats"),
   suggestThemes: (payload: Partial<CreativeRequestPayload> = {}) =>
     apiFetch<{
       concepts: CreativeConcept[];

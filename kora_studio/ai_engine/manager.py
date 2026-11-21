@@ -75,6 +75,24 @@ from kora_studio.ai_engine.models import (
 SETTINGS_KEY = "ai_engine_settings"
 PROBE_TTL_SEC = 90.0
 MODELS_TTL_SEC = 120.0
+#: how long the discovery snapshot (installed/auth/models/caps/billing) stays valid
+SNAPSHOT_TTL_SEC = 300.0
+
+#: 2.8.1 — Fast Creative Mode defaults (ideation only, never changes the user's model)
+DEFAULT_FAST_BUDGET = 25.0
+DEFAULT_FAST_FIRST = 15.0
+MAX_FAST_BUDGET = 60.0
+
+FAST_CREATIVE_DEFAULTS: dict[str, Any] = {
+    "enabled": True,
+    "global_budget_sec": 25.0,
+    "first_attempt_sec": 15.0,
+    "max_output_tokens": 700,
+    "prefer_model": "",
+    "cache_ttl_sec": 21600,
+    "background_warm": False,
+    "avoid_cache": False,
+}
 
 FALLBACK_OFF = "off"
 FALLBACK_FREE_ONLY = "free_only"
@@ -98,6 +116,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "vision_verified": {},
     "providers": {},
     "agents": {},
+    "fast_creative": dict(FAST_CREATIVE_DEFAULTS),
 }
 
 PROVIDER_ORDER = (
@@ -129,6 +148,12 @@ class AIEngineManager:
         self._adapters: dict[str, AIProviderAdapter] = {}
         self._cancellations: dict[str, threading.Event] = {}
         self.activity = AIActivityLog(self.db)
+        # 2.8.1 — discovery snapshot: avoid a full provider/model scan on every request
+        self._snapshot: dict[str, Any] = {}
+        self._snapshot_at: float = 0.0
+        self._snapshot_lock = threading.Lock()
+        self._snapshot_thread: Optional[threading.Thread] = None
+        self._snapshot_building = False
 
     # ------------------------------------------------------------------ settings
     def settings(self) -> dict[str, Any]:
@@ -139,7 +164,14 @@ class AIEngineManager:
             except Exception:
                 stored = {}
         merged = {**DEFAULT_SETTINGS, **stored}
-        for key in ("providers", "agents", "declared_subscriptions", "declared_free_quota", "vision_verified"):
+        for key in (
+            "providers",
+            "agents",
+            "declared_subscriptions",
+            "declared_free_quota",
+            "vision_verified",
+            "fast_creative",
+        ):
             base = DEFAULT_SETTINGS[key]
             merged[key] = {**base, **(stored.get(key) or {})}
         if merged.get("strategy") not in STRATEGIES:
@@ -200,6 +232,30 @@ class AIEngineManager:
                     **{k: v for k, v in (conf or {}).items() if k in ("enabled", "model", "base_url")},
                 }
                 self.invalidate(provider_id)
+        if isinstance(patch.get("fast_creative"), dict):
+            fast = {**FAST_CREATIVE_DEFAULTS, **(current.get("fast_creative") or {})}
+            incoming = patch["fast_creative"]
+            for key in ("enabled", "background_warm", "avoid_cache"):
+                if key in incoming:
+                    fast[key] = bool(incoming[key])
+            if "global_budget_sec" in incoming:
+                value = float(incoming["global_budget_sec"] or DEFAULT_FAST_BUDGET)
+                if value < 8 or value > MAX_FAST_BUDGET:
+                    raise ValueError("Budget Fast Creative fuori intervallo (8–60 s)")
+                fast["global_budget_sec"] = value
+            if "first_attempt_sec" in incoming:
+                value = float(incoming["first_attempt_sec"] or DEFAULT_FAST_FIRST)
+                if value < 3 or value > MAX_FAST_BUDGET:
+                    raise ValueError("Primo tentativo Fast Creative fuori intervallo (3–60 s)")
+                fast["first_attempt_sec"] = value
+            if "max_output_tokens" in incoming:
+                fast["max_output_tokens"] = max(128, min(4000, int(incoming["max_output_tokens"] or 700)))
+            if "cache_ttl_sec" in incoming:
+                fast["cache_ttl_sec"] = max(60.0, min(604800.0, float(incoming["cache_ttl_sec"] or 21600)))
+            if "prefer_model" in incoming:
+                # solo una preferenza: il modello configurato dal provider non viene mai riscritto
+                fast["prefer_model"] = str(incoming["prefer_model"] or "").strip()[:120]
+            current["fast_creative"] = fast
         if isinstance(patch.get("agents"), dict):
             for agent_id, conf in patch["agents"].items():
                 if agent_id not in AGENTS_BY_ID:
@@ -268,6 +324,143 @@ class AIEngineManager:
         self._adapters.pop(provider_id, None)
         self._probe_cache.pop(provider_id, None)
         self._models_cache.pop(provider_id, None)
+
+    # ------------------------------------------------------- discovery snapshot
+    def snapshot_age_sec(self) -> Optional[float]:
+        if not self._snapshot:
+            return None
+        return max(0.0, time.time() - self._snapshot_at)
+
+    def snapshot(self) -> dict[str, Any]:
+        """Last discovery snapshot: installed, authenticated, models, capabilities, billing."""
+        return self._snapshot
+
+    def _build_snapshot_entry(self, provider_id: str) -> dict[str, Any]:
+        started = time.perf_counter()
+        probe = self.probe(provider_id, refresh=True)
+        models: list[ModelInfo] = []
+        if probe.get("authenticated"):
+            adapter = self.adapter(provider_id)
+            if adapter is not None:
+                try:
+                    models = [self._enrich_model(m, provider_id) for m in adapter.list_models()]
+                except EngineError:
+                    models = []
+        # keep the model cache warm too: the fast path never rescans
+        if models:
+            self._models_cache[provider_id] = (time.time(), models)
+        return {
+            "provider": provider_id,
+            "state": probe.get("state"),
+            "installed": bool(probe.get("installed")),
+            "authenticated": bool(probe.get("authenticated")),
+            "detail": probe.get("detail") or "",
+            "auth_detail": probe.get("auth_detail") or "",
+            "billing_kinds": probe.get("billing_kinds") or [],
+            "last_health_ok": probe.get("last_test_ok"),
+            "last_latency_ms": probe.get("last_latency_ms"),
+            "models": models,
+            "captured_at": time.time(),
+            "probe_ms": round((time.perf_counter() - started) * 1000, 1),
+        }
+
+    def refresh_snapshot(self, budget_sec: float = 20.0) -> dict[str, Any]:
+        """Rebuild the discovery snapshot for every provider (parallel, bounded)."""
+        from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FutureTimeout
+
+        with self._snapshot_lock:
+            self._snapshot_building = True
+        started = time.perf_counter()
+        providers: dict[str, Any] = {}
+        try:
+            with ThreadPoolExecutor(max_workers=min(8, len(PROVIDER_ORDER))) as pool:
+                futures = {pool.submit(self._build_snapshot_entry, pid): pid for pid in PROVIDER_ORDER}
+                try:
+                    for future in as_completed(futures, timeout=max(0.5, budget_sec)):
+                        pid = futures[future]
+                        try:
+                            providers[pid] = future.result()
+                        except Exception as exc:  # defensive: never break the snapshot
+                            providers[pid] = {
+                                "provider": pid,
+                                "state": STATE_UNAVAILABLE,
+                                "installed": False,
+                                "authenticated": False,
+                                "models": [],
+                                "detail": f"discovery non riuscita ({exc.__class__.__name__})",
+                                "captured_at": time.time(),
+                            }
+                except FutureTimeout:
+                    for future, pid in futures.items():
+                        if pid in providers:
+                            continue
+                        future.cancel()
+                        providers[pid] = {
+                            "provider": pid,
+                            "state": STATE_UNAVAILABLE,
+                            "installed": False,
+                            "authenticated": False,
+                            "models": [],
+                            "detail": "discovery oltre il budget: provider non usato in questa richiesta",
+                            "captured_at": time.time(),
+                        }
+        finally:
+            self._snapshot_building = False
+            self._snapshot_at = time.time()
+            self._snapshot = {
+                "captured_at": self._snapshot_at,
+                "providers": providers,
+                "build_ms": round((time.perf_counter() - started) * 1000, 1),
+                "budget_sec": budget_sec,
+            }
+        return self._snapshot
+
+    def ensure_snapshot(self, budget_sec: float = 2.0) -> dict[str, Any]:
+        """Return a fresh snapshot; rebuild only if stale, never scanning per request."""
+        if self._snapshot and (time.time() - self._snapshot_at) < SNAPSHOT_TTL_SEC:
+            return self._snapshot
+        if self._snapshot and self._snapshot_building:
+            return self._snapshot
+        return self.refresh_snapshot(budget_sec=budget_sec)
+
+    def start_snapshot_refresher(self, interval_sec: float = 240.0) -> None:
+        """Background refresh at startup; the creative path never waits on a full scan."""
+        if self._snapshot_thread and self._snapshot_thread.is_alive():
+            return
+
+        def _loop() -> None:
+            self.refresh_snapshot(budget_sec=25.0)
+            while True:
+                time.sleep(max(30.0, interval_sec))
+                try:
+                    self.refresh_snapshot(budget_sec=25.0)
+                except Exception:
+                    continue
+
+        thread = threading.Thread(target=_loop, name="kora-engine-snapshot", daemon=True)
+        self._snapshot_thread = thread
+        thread.start()
+
+    def _provider_fast(self, provider_id: str) -> tuple[bool, list[ModelInfo], str]:
+        """Installed/authenticated/models from the snapshot, falling back to cached probes."""
+        snapshot = self._snapshot
+        if snapshot and (time.time() - self._snapshot_at) < SNAPSHOT_TTL_SEC:
+            providers = snapshot.get("providers") or {}
+            info = providers.get(provider_id)
+            if info is None:
+                # snapshot fresco: il provider mancante non è stato verificato → non usato
+                return False, [], STATE_UNAVAILABLE
+            return bool(info.get("authenticated")), list(info.get("models") or []), str(info.get("state"))
+        probe = self.probe(provider_id)
+        return bool(probe.get("authenticated")), self._models_cached(provider_id), str(probe.get("state"))
+
+    def fast_plan(self, agent_id: str, requires_vision: bool = False) -> list[dict[str, Any]]:
+        """Candidate plan built from the snapshot (no discovery, no model scan)."""
+        return self.candidate_plan(agent_id, requires_vision=requires_vision, from_snapshot=True)
+
+    def fast_entry(self, agent_id: str, requires_vision: bool = False) -> Optional[dict[str, Any]]:
+        plan = self.fast_plan(agent_id, requires_vision=requires_vision)
+        return plan[0] if plan else None
 
     # ----------------------------------------------------------------- metadata
     def _enrich_model(self, info: ModelInfo, provider_id: Optional[str] = None) -> ModelInfo:
@@ -588,6 +781,7 @@ class AIEngineManager:
         *,
         provider_override: Optional[str] = None,
         model_override: Optional[str] = None,
+        from_snapshot: bool = False,
     ) -> list[dict[str, Any]]:
         """Ordered candidates: explicit choice first, fallback only when authorised."""
         if agent_id not in AGENTS_BY_ID:
@@ -618,13 +812,18 @@ class AIEngineManager:
 
         plan: list[dict[str, Any]] = []
         for position, provider_id in enumerate(order):
-            probe = self.probe(provider_id)
-            if not probe.get("authenticated"):
-                continue
+            if from_snapshot:
+                authenticated, infos, _state = self._provider_fast(provider_id)
+                if not authenticated:
+                    continue
+            else:
+                probe = self.probe(provider_id)
+                if not probe.get("authenticated"):
+                    continue
+                infos = self._models_cached(provider_id)
             adapter = self.adapter(provider_id)
             if adapter is None:
                 continue
-            infos = self._models_cached(provider_id)
             if not infos:
                 continue
             conf_model = self._configured_model(provider_id)
@@ -641,6 +840,13 @@ class AIEngineManager:
                 if explicit_model and provider_id == explicit_provider:
                     model_pref = explicit_model
                 model_pref = model_pref or conf_model
+                if not model_pref and not explicit_provider:
+                    # Fast Creative Mode may prefer a fast model without changing the provider
+                    fast_pref = str((settings.get("fast_creative") or {}).get("prefer_model") or "").strip()
+                    if fast_pref:
+                        candidate = canonical_model_id(fast_pref)
+                        if any(canonical_model_id(m.id) == candidate for m in infos):
+                            model_pref = fast_pref
                 plan.append(
                     self._entry(
                         provider_id,
@@ -710,12 +916,14 @@ class AIEngineManager:
         *,
         provider_override: Optional[str] = None,
         model_override: Optional[str] = None,
+        from_snapshot: bool = False,
     ) -> Optional[dict[str, Any]]:
         plan = self.candidate_plan(
             agent_id,
             requires_vision=requires_vision,
             provider_override=provider_override,
             model_override=model_override,
+            from_snapshot=from_snapshot,
         )
         for entry in plan:
             estimated = self._estimate_cost(entry, 600)
@@ -800,6 +1008,12 @@ class AIEngineManager:
         model_override: Optional[str] = None,
         production_id: Optional[str] = None,
         max_attempts: int = 1,
+        # 2.8.1 — bounded fast path
+        deadline: Optional[float] = None,
+        attempt_timeout: Optional[float] = None,
+        max_candidates: Optional[int] = None,
+        brand_context: bool = True,
+        request_label: str = "",
     ) -> EngineResult:
         if agent_id not in AGENTS_BY_ID:
             raise EngineError(f"Agente sconosciuto: {agent_id}")
@@ -807,12 +1021,22 @@ class AIEngineManager:
         images = [p for p in images if p.is_file()]
         needs_vision = requires_vision or agent_id in VISION_AGENTS or bool(images)
 
+        wall_start = time.perf_counter()
+        timings: dict[str, Any] = {"discovery": 0.0, "connection": 0.0, "inference": 0.0}
+        discovery_started = time.perf_counter()
+        # usa lo snapshot solo se è fresco: altrimenti comportamento classico (probe+cache)
+        fresh_snapshot = bool(self._snapshot) and (time.time() - self._snapshot_at) < SNAPSHOT_TTL_SEC
         plan = self.candidate_plan(
             agent_id,
             requires_vision=needs_vision,
             provider_override=provider_override,
             model_override=model_override,
+            from_snapshot=fresh_snapshot,
         )
+        timings["discovery"] = round((time.perf_counter() - discovery_started) * 1000, 1)
+        if deadline is not None:
+            deadline = deadline - 0.35  # reserve time for parsing/validation
+        max_candidates = max_candidates if max_candidates and max_candidates > 0 else len(plan)
         if needs_vision and not plan:
             detail = (
                 f"{agent_id}: nessun modello con visione VERIFICATA disponibile "
@@ -852,9 +1076,17 @@ class AIEngineManager:
                 if not authorized:
                     errors.append(f"{entry['provider']}/{entry['model']}: {reason}")
                     continue
+                connect_started = time.perf_counter()
                 adapter = self.adapter(entry["provider"])
+                timings["connection"] = round(timings["connection"] + (time.perf_counter() - connect_started) * 1000, 1)
                 if adapter is None:
                     continue
+                if index >= max_candidates:
+                    errors.append("budget: numero massimo di motori tentati raggiunto")
+                    break
+                if deadline is not None and time.time() >= deadline:
+                    errors.append("budget: tempo globale esaurito prima di contattare il motore")
+                    break
                 if images and not adapter.supports_attachments:
                     errors.append(
                         f"{entry['provider']}: il motore non trasferisce allegati immagine "
@@ -863,7 +1095,7 @@ class AIEngineManager:
                     continue
                 if index > 0 and fallback_from is None:
                     fallback_from = plan[0]["provider"] if plan else None
-                payload = self._with_brand_context(agent_id, messages)
+                payload = self._with_brand_context(agent_id, messages) if brand_context else list(messages)
                 staged = stage_attachments(images, adapter.workspace() if adapter.is_cli else None) if images else []
                 attempt = 0
                 while attempt < max(1, max_attempts):
@@ -871,34 +1103,60 @@ class AIEngineManager:
                     attempts_total += 1
                     if is_cancelled():
                         raise EngineCancelled(f"{agent_id}: richiesta annullata dall'utente")
+                    call_timeout = timeout
+                    if attempt_timeout:
+                        call_timeout = min(call_timeout, attempt_timeout)
+                    if deadline is not None:
+                        remaining = deadline - time.time()
+                        if remaining <= 0.5:
+                            errors.append(
+                                f"{entry['provider']}/{entry['model']}: budget globale esaurito prima dell'inferenza"
+                            )
+                            break
+                        call_timeout = min(call_timeout, remaining)
+                    attempt_started = time.perf_counter()
                     try:
                         result = adapter.generate(
                             payload,
                             model=entry["model"],
-                            timeout=timeout,
+                            timeout=max(1.0, call_timeout),
                             json_mode=json_mode,
                             attachments=staged or None,
                             cancel=is_cancelled,
                         )
                     except EngineCancelled:
+                        timings["inference"] = round(
+                            timings["inference"] + (time.perf_counter() - attempt_started) * 1000, 1
+                        )
                         self._log(
                             production_id, agent_id, entry, started_wall, started,
                             outcome="cancelled", attempts=attempts_total,
                             fallback_used=fallback_from is not None, fallback_from=fallback_from,
                             cost=None, error_kind="annullata", error_message="annullata", cancelled=True,
+                            timings={**timings, "total": round((time.perf_counter() - wall_start) * 1000, 1)},
+                            request_label=request_label,
                         )
                         raise
                     except (EngineRateLimited, EngineTimeout) as exc:
+                        timings["inference"] = round(
+                            timings["inference"] + (time.perf_counter() - attempt_started) * 1000, 1
+                        )
                         errors.append(f"{entry['provider']}/{entry['model']}: {exc}")
                         if attempt < max_attempts:
                             time.sleep(min(2.0 * attempt, 4.0))
                             continue
                         break
                     except (EngineAuthError, EngineModelUnavailable, EngineQuotaExhausted) as exc:
+                        timings["inference"] = round(
+                            timings["inference"] + (time.perf_counter() - attempt_started) * 1000, 1
+                        )
                         errors.append(f"{entry['provider']}/{entry['model']}: {exc}")
                         self._mark_operational(entry["provider"], False)
                         break
                     except EngineError as exc:
+                        timings["inference"] = round(
+                            timings["inference"] + (time.perf_counter() - attempt_started) * 1000, 1
+                        )
                         errors.append(f"{entry['provider']}/{entry['model']}: {exc}")
                         break
 
@@ -954,7 +1212,14 @@ class AIEngineManager:
                         "actual_provider": entry.get("actual_provider"),
                     }
                     self._mark_operational(entry["provider"], True)
-                    self._log(
+                    timings["inference"] = round(
+                        timings["inference"] + (time.perf_counter() - attempt_started) * 1000, 1
+                    )
+                    timings["total"] = round((time.perf_counter() - wall_start) * 1000, 1)
+                    timings["cli_startup"] = (result.raw or {}).get("cli_startup_ms")
+                    timings["model_latency"] = result.latency_ms
+                    result.timings = {k: v for k, v in timings.items() if v is not None}
+                    call_id = self._log(
                         production_id, agent_id, entry, started_wall, started,
                         outcome="ok", attempts=attempts_total,
                         fallback_used=bool(result.fallback_used), fallback_from=fallback_from,
@@ -964,7 +1229,10 @@ class AIEngineManager:
                         cost_basis=result.cost_basis,
                         attachments=result.attachments_transmitted,
                         auth_type=result.auth_type,
+                        timings=result.timings,
+                        request_label=request_label,
                     )
+                    result.call_id = call_id
                     return result
 
             self._log(
@@ -973,6 +1241,8 @@ class AIEngineManager:
                 started_wall, started,
                 outcome="error", attempts=attempts_total, fallback_used=False, fallback_from=None,
                 cost=None, error_kind="nessun_motore", error_message="; ".join(errors)[:300],
+                timings={**timings, "fallback": 0.0, "total": round((time.perf_counter() - wall_start) * 1000, 1)},
+                request_label=request_label,
             )
             detail = "; ".join(errors) if errors else "Nessun motore AI disponibile con i criteri richiesti"
             if any("budget" in e or "pagamento" in e or "costo sconosciuto" in e for e in errors):
@@ -1002,8 +1272,10 @@ class AIEngineManager:
         cost_basis: str = "unknown",
         attachments: int = 0,
         auth_type: str = "",
-    ) -> None:
-        self.activity.record(
+        timings: Optional[dict[str, Any]] = None,
+        request_label: str = "",
+    ) -> str:
+        return self.activity.record(
             production_id=production_id,
             agent=agent_id,
             provider=entry.get("provider", ""),
@@ -1027,6 +1299,8 @@ class AIEngineManager:
             auth_type=auth_type or entry.get("auth_type") or "",
             request_status="cancelled" if cancelled else ("completed" if outcome == "ok" else "error"),
             vision_image=bool(attachments),
+            timings=timings,
+            request_label=request_label,
         )
 
     # -------------------------------------------------------------- diagnostics

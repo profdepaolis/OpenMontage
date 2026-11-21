@@ -7,12 +7,13 @@ import os
 import shutil
 import tempfile
 import threading
+import time
 from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -261,9 +262,14 @@ def create_app(db_path: Optional[Path] = None, auto_seed: bool = True) -> FastAP
         director.vault.seed_kora_authentic_assets()
         director.brand_brain.refresh_palette_from_vault()
 
-    app = FastAPI(title="KORA STUDIO", version="2.8.0")
+    app = FastAPI(title="KORA STUDIO", version="2.8.1")
     app.state.director = director
     app.state.backup_mgr = backup_mgr
+    # 2.8.1 — scoperta motori in background: nessuna scansione completa per richiesta
+    try:
+        director.ai_engine.start_snapshot_refresher()
+    except Exception:
+        pass
 
     app.add_middleware(
         CORSMiddleware,
@@ -420,6 +426,113 @@ def create_app(db_path: Optional[Path] = None, auto_seed: bool = True) -> FastAP
             "concepts": [c.model_dump() for c in env.concepts],
             "generation_engine": env.generation_engine,
             "fallback_reason": env.fallback_reason,
+            "recommendation": suggestion,
+        }
+
+    @app.post("/api/creative/suggest-lite")
+    def creative_suggest_lite(
+        req: ThemeRequest,
+        provider: Optional[str] = Query(None),
+        model: Optional[str] = Query(None),
+        avoid_cache: bool = Query(False),
+    ) -> dict[str, Any]:
+        """2.8.1 Fast Creative Mode: avvia subito, risponde con run_id (nessun blocco HTTP)."""
+        ideation = director.creative.ideation
+        run_id = ideation.start(req, provider=provider, model=model, avoid_cache=avoid_cache)
+        return {
+            "run_id": run_id,
+            "status": "running",
+            "budget_ms": round(ideation._budget_sec() * 1000, 1),
+            "stages": [
+                {"stage": "context", "label": "Preparazione contesto"},
+                {"stage": "connect", "label": "Connessione motore AI"},
+                {"stage": "generate", "label": "Generazione temi"},
+                {"stage": "validate", "label": "Validazione proposte"},
+                {"stage": "done", "label": "Completato"},
+            ],
+            "poll_url": f"/api/creative/suggest-lite/{run_id}",
+        }
+
+    @app.post("/api/creative/suggest-lite/prewarm")
+    def creative_suggest_lite_prewarm() -> dict[str, Any]:
+        """Pre-generazione facoltativa: parte solo se autorizzata e a costo zero."""
+        return director.creative.ideation.prewarm()
+
+    @app.get("/api/creative/suggest-lite/{run_id}")
+    def creative_suggest_lite_status(run_id: str) -> dict[str, Any]:
+        snapshot = director.creative.ideation.get(run_id)
+        if snapshot is None:
+            raise HTTPException(status_code=404, detail="Richiesta inesistente o scaduta")
+        return snapshot
+
+    @app.post("/api/creative/suggest-lite/{run_id}/cancel")
+    def creative_suggest_lite_cancel(run_id: str) -> dict[str, Any]:
+        return director.creative.ideation.cancel(run_id)
+
+    @app.get("/api/creative/suggest-lite/{run_id}/stream")
+    def creative_suggest_lite_stream(run_id: str) -> StreamingResponse:
+        """SSE con gli stage reali del backend (in alternativa al polling)."""
+        import json as _json
+
+        ideation = director.creative.ideation
+
+        def _events():
+            last = 0
+            while True:
+                snapshot = ideation.get(run_id)
+                if snapshot is None:
+                    yield "event: error\ndata: " + _json.dumps({"detail": "run inesistente"}) + "\n\n"
+                    return
+                events = snapshot["events"]
+                for event in events[last:]:
+                    yield f"event: stage\ndata: {_json.dumps(event, ensure_ascii=False)}\n\n"
+                last = len(events)
+                if snapshot["finished"]:
+                    yield f"event: result\ndata: {_json.dumps(snapshot, ensure_ascii=False)}\n\n"
+                    return
+                time.sleep(0.2)
+
+        return StreamingResponse(
+            _events(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    @app.get("/api/creative/suggest-lite-cache/stats")
+    def creative_suggest_lite_cache_stats() -> dict[str, Any]:
+        cache = director.creative.ideation.cache
+        try:
+            with db.session() as conn:
+                row = conn.execute(
+                    "SELECT COUNT(*) AS entries, COALESCE(SUM(hits), 0) AS hits FROM theme_proposal_cache"
+                ).fetchone()
+                return {"entries": int(row["entries"]), "hits": int(row["hits"])}
+        except Exception:
+            return {"entries": 0, "hits": 0}
+
+    @app.post("/api/creative/suggest-lite-cache/clear")
+    def creative_suggest_lite_cache_clear() -> dict[str, Any]:
+        return {"cleared": director.creative.ideation.cache.clear()}
+
+    @app.post("/api/creative/expand-theme")
+    def creative_expand_theme(payload: dict[str, Any]) -> dict[str, Any]:
+        """Espande la proposta lite scelta nei concept completi (solo dopo la selezione)."""
+        from kora_studio.db.models import ThemeProposalLite
+
+        try:
+            proposal = ThemeProposalLite(**payload["proposal"])
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Proposta non valida: {exc}")
+        concept = director.creative.expand_lite_proposal(
+            proposal,
+            duration_sec=payload.get("duration_sec"),
+            preferred_asset_ids=payload.get("asset_ids"),
+        )
+        suggestion = recommend_hyperframes_for_theme(concept.title)
+        return {
+            "concepts": [concept.model_dump()],
+            "generation_engine": concept.generation_engine,
+            "fallback_reason": None,
             "recommendation": suggestion,
         }
 

@@ -141,6 +141,34 @@ class CreativeConcept(BaseModel):
     creative_request: dict[str, Any] = Field(default_factory=dict)
 
 
+class ThemeProposalLite(BaseModel):
+    """2.8.1 — lightweight ideation payload (no voiceover, no storyboard, no prompts)."""
+
+    id: str
+    title: str
+    hook: str
+    central_message: str
+    narrative_direction: str
+    recommended_objective: str = ""
+    recommended_voice_id: str = "brando"
+    recommended_duration_sec: float = 20.0
+    asset_ids: list[str] = Field(default_factory=list, max_length=3)
+    #: engine:<provider>/<model> | deterministic | cache
+    source: str = "deterministic"
+    from_cache: bool = False
+    cache_age_sec: Optional[float] = None
+
+
+class ThemeProposalsLiteEnvelope(BaseModel):
+    proposals: list[ThemeProposalLite] = Field(min_length=1, max_length=6)
+    generation_engine: str = "deterministic_offline_fallback"
+    model: str = ""
+    from_cache: bool = False
+    cache_age_sec: Optional[float] = None
+    fallback_reason: Optional[str] = None
+    timings_ms: dict[str, Any] = Field(default_factory=dict)
+
+
 class CreativeProposalsEnvelope(BaseModel):
     concepts: list[CreativeConcept] = Field(min_length=1, max_length=6)
     generation_engine: str = "deterministic_offline_fallback"

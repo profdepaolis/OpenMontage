@@ -476,8 +476,11 @@ class _CliAdapter(AIProviderAdapter):
             args = args[:-1] + extra_args + [args[-1]] if args else extra_args
 
         started = now_ms()
+        cli_timings: dict[str, Any] = {}
         try:
-            code, out, err = run_cli(args, timeout=timeout, cwd=self.workspace(), cancel=cancel)
+            code, out, err = run_cli(
+                args, timeout=timeout, cwd=self.workspace(), cancel=cancel, timings=cli_timings
+            )
         except EngineTimeout as exc:
             raise EngineTimeout(f"{self.label}: {exc}") from exc
         except EngineCancelled:
@@ -516,6 +519,8 @@ class _CliAdapter(AIProviderAdapter):
                 "attachments": [p.name for p in files],
                 "engine": self.kind,
                 "actual_provider": provider or self.kind,
+                "cli_startup_ms": cli_timings.get("spawn_ms"),
+                "cli_total_ms": latency,
             },
         )
 

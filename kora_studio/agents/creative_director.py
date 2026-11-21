@@ -14,6 +14,8 @@ from kora_studio.brand.brand_brain import BrandBrain
 from kora_studio.config import DEFAULT_FPS
 from kora_studio.db.database import Database, utcnow_iso
 from kora_studio.db.models import (
+    ThemeProposalLite,
+    ThemeProposalsLiteEnvelope,
     AuthenticityStatus,
     CameraMotion,
     CreativeConcept,
@@ -202,6 +204,10 @@ class CreativeDirector:
         self.story_director: Any = None
         self.visual_intelligence: Any = None
         self.last_storyboard_plan: list[dict[str, Any]] = []
+        # 2.8.1 — Fast Creative Mode ("Suggerisci un tema")
+        from kora_studio.agents.theme_ideation import ThemeIdeationService
+
+        self.ideation = ThemeIdeationService(self)
 
     def attach_engine_manager(self, engine_manager: Any) -> None:
         """Collega l'AI Engine Manager (provider/agenti configurabili senza riavvio)."""
@@ -659,6 +665,38 @@ class CreativeDirector:
             anti_repetition_notes=anti_notes,
         )
 
+    def suggest_four_themes_lite(
+        self, req: Optional[CreativeRequestPayload] = None
+    ) -> "ThemeProposalsLiteEnvelope":
+        """2.8.1 — 4 proposte leggere entro il budget globale (25 s)."""
+        return self.ideation.suggest_blocking(req)
+
+    def expand_lite_proposal(
+        self,
+        proposal: ThemeProposalLite,
+        duration_sec: Optional[float] = None,
+        preferred_asset_ids: Optional[list[str]] = None,
+    ) -> CreativeConcept:
+        """2.8.1 — solo dopo la scelta del tema: espande la proposta lite nel concept completo."""
+        concept = self._build_concept_for_theme(
+            proposal.title,
+            angle_idx=0,
+            duration_sec=float(duration_sec or proposal.recommended_duration_sec or 20.0),
+            preferred_asset_ids=(preferred_asset_ids or proposal.asset_ids or None),
+        )
+        if proposal.hook:
+            concept.hook = proposal.hook
+        if proposal.central_message:
+            concept.message = proposal.central_message
+        if proposal.narrative_direction:
+            concept.narrative_arc = proposal.narrative_direction
+        if proposal.recommended_objective:
+            concept.objective = proposal.recommended_objective
+        if proposal.recommended_voice_id:
+            concept.recommended_voice_id = proposal.recommended_voice_id
+        concept.generation_engine = f"expanded_from_lite:{proposal.source}"
+        return concept
+
     def suggest_four_themes(
         self, req: Optional[CreativeRequestPayload] = None
     ) -> CreativeProposalsEnvelope:
@@ -672,6 +710,17 @@ class CreativeDirector:
                 fallback_reason=None,
             )
 
+        concepts = self._deterministic_concepts(req, fallback_reason)
+        return CreativeProposalsEnvelope(
+            concepts=concepts,
+            generation_engine="deterministic_offline_fallback",
+            fallback_reason=fallback_reason,
+        )
+
+    def _deterministic_concepts(
+        self, req: CreativeRequestPayload, fallback_reason: Optional[str] = None
+    ) -> list[CreativeConcept]:
+        """Declared offline engine: 4 distinct narratives from the live Vault + season + history."""
         # Declared deterministic offline fallback: dynamically synthesize 4 distinct narratives from live Vault + season + history
         history = self.anti_rep.get_history(limit=20)
         used_titles = {h["title"].strip().lower() for h in history}
@@ -716,11 +765,8 @@ class CreativeDirector:
             c.fallback_reason = fallback_reason
             c.creative_request = req.model_dump()
             concepts.append(c)
-        return CreativeProposalsEnvelope(
-            concepts=concepts,
-            generation_engine="deterministic_offline_fallback",
-            fallback_reason=fallback_reason,
-        )
+
+        return concepts
 
     def ideate_from_request(self, req: CreativeRequestPayload) -> CreativeProposalsEnvelope:
         """Ideate 3 concepts for a structured CreativeRequestPayload using LLM or declared fallback."""

@@ -7,6 +7,7 @@ import {
   CircleSlash,
   Cpu,
   Eye,
+  Gauge,
   KeyRound,
   ListChecks,
   Loader2,
@@ -65,6 +66,10 @@ export function AIEngineView() {
   const [activitySummary, setActivitySummary] = useState<AIActivitySummary | null>(null);
   const [lastTest, setLastTest] = useState<Record<string, AIEngineTestResult>>({});
   const [planInputs, setPlanInputs] = useState<Record<string, string>>({});
+  // 2.8.1 — Fast Creative Mode
+  const [fastBudget, setFastBudget] = useState("25");
+  const [fastFirst, setFastFirst] = useState("15");
+  const [fastModel, setFastModel] = useState("");
 
   const applyStatus = useCallback((next: AIEngineStatus) => {
     setStatus(next);
@@ -76,6 +81,9 @@ export function AIEngineView() {
     setFallback(next.settings.fallback || "free_only");
     setPlanInputs((prev) => ({ ...(next.settings.declared_subscriptions || {}), ...prev }));
     setBaseUrlInput(next.settings.providers?.custom_openai?.base_url || "");
+    setFastBudget(String(next.settings.fast_creative?.global_budget_sec ?? 25));
+    setFastFirst(String(next.settings.fast_creative?.first_attempt_sec ?? 15));
+    setFastModel(next.settings.fast_creative?.prefer_model || "");
   }, []);
 
   const loadActivity = useCallback(async (limit = 60) => {
@@ -448,6 +456,85 @@ export function AIEngineView() {
           </button>
           <span className="text-[11px] text-[#9A8052]">
             Le modifiche valgono subito, anche a metà lavorazione.
+          </span>
+        </div>
+      </section>
+
+
+      {/* 2.8.1 — Fast Creative Mode */}
+      <section className="rounded-2xl border border-[#EDE6D9] bg-white p-4">
+        <h3 className="flex items-center gap-2 text-sm font-semibold text-[#1D1B18]">
+          <Gauge className="h-4 w-4 text-[#9A8052]" /> Fast Creative Mode — «Suggerisci un tema»
+        </h3>
+        <p className="mt-1 text-[11px] text-[#6C6459]">
+          Budget globale, primo tentativo e modello veloce. Il modello del provider non viene mai
+          cambiato senza la tua indicazione: il campo «modello veloce» è solo una preferenza, applicata
+          se quel modello è disponibile sul provider autorizzato.
+        </p>
+        <div className="mt-3 grid gap-3 sm:grid-cols-3">
+          <label className="text-[11px] text-[#4A443C]">
+            Budget globale (s)
+            <input
+              type="number"
+              min={8}
+              max={60}
+              value={fastBudget}
+              onChange={(event) => setFastBudget(event.target.value)}
+              className="mt-1 w-full rounded-xl border border-[#DDD4C4] bg-[#FAF7F2] px-3 py-2 text-xs"
+            />
+          </label>
+          <label className="text-[11px] text-[#4A443C]">
+            Primo tentativo max (s)
+            <input
+              type="number"
+              min={3}
+              max={60}
+              value={fastFirst}
+              onChange={(event) => setFastFirst(event.target.value)}
+              className="mt-1 w-full rounded-xl border border-[#DDD4C4] bg-[#FAF7F2] px-3 py-2 text-xs"
+            />
+          </label>
+          <label className="text-[11px] text-[#4A443C]">
+            Modello veloce preferito (opzionale)
+            <input
+              type="text"
+              placeholder="es. gpt-5-mini"
+              value={fastModel}
+              onChange={(event) => setFastModel(event.target.value)}
+              className="mt-1 w-full rounded-xl border border-[#DDD4C4] bg-[#FAF7F2] px-3 py-2 text-xs"
+            />
+          </label>
+        </div>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            disabled={busy === "settings"}
+            onClick={() =>
+              saveSettings(
+                {
+                  primary_provider: primaryProvider,
+                  strategy,
+                  fallback,
+                  max_budget_eur: Number(budget || 0),
+                  allow_paid_calls: allowPaid,
+                  allow_unknown_costs: allowUnknown,
+                  fast_creative: {
+                    ...(status?.settings.fast_creative || {}),
+                    global_budget_sec: Math.max(8, Math.min(60, Number(fastBudget || 25))),
+                    first_attempt_sec: Math.max(3, Math.min(60, Number(fastFirst || 15))),
+                    prefer_model: fastModel.trim(),
+                  },
+                },
+                "Fast Creative Mode aggiornato. Nessun riavvio necessario."
+              )
+            }
+            className="inline-flex items-center gap-2 rounded-xl bg-[#224C66] px-3.5 py-2 text-xs font-medium text-white disabled:opacity-50"
+          >
+            {busy === "settings" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+            Salva Fast Creative Mode
+          </button>
+          <span className="text-[11px] text-[#9A8052]">
+            Timeout reale: il processo CLI viene terminato alla scadenza.
           </span>
         </div>
       </section>
@@ -831,6 +918,7 @@ export function AIEngineView() {
                   <th className="pb-1 pr-2">Auth</th>
                   <th className="pb-1 pr-2">Allegati</th>
                   <th className="pb-1 pr-2">Durata</th>
+                  <th className="pb-1 pr-2">Tempi misurati</th>
                   <th className="pb-1 pr-2">Stato</th>
                   <th className="pb-1 pr-2">Fallback</th>
                   <th className="pb-1 pr-2">Tariffa /1k</th>
@@ -854,6 +942,39 @@ export function AIEngineView() {
                       {row.attachments ? ` (${row.attachments})` : row.vision_image ? "" : "—"}
                     </td>
                     <td className="py-1 pr-2">{row.duration_ms} ms</td>
+                    <td className="py-1 pr-2">
+                      {row.timings_ms && Object.keys(row.timings_ms).length > 0 ? (
+                        <details>
+                          <summary className="cursor-pointer text-[#224C66] underline decoration-dotted underline-offset-2">
+                            {row.timings_ms.total ? `${row.timings_ms.total} ms tot` : "dettaglio"}
+                          </summary>
+                          <div className="mt-1 whitespace-nowrap text-[10px] text-[#6C6459]">
+                            {(
+                              [
+                                ["contesto", "context_building"],
+                                ["discovery", "provider_discovery"],
+                                ["connessione", "provider_connection"],
+                                ["avvio CLI", "cli_startup"],
+                                ["inferenza", "inference"],
+                                ["parsing JSON", "json_parsing"],
+                                ["fallback", "fallback"],
+                              ] as [string, string][]
+                            )
+                              .filter(([, key]) => row.timings_ms?.[key] !== undefined)
+                              .map(([label, key]) => (
+                                <div key={key}>
+                                  {label}: {String(row.timings_ms?.[key])} ms
+                                </div>
+                              ))}
+                            {row.timings_ms.model_latency ? (
+                              <div>latenza modello: {String(row.timings_ms.model_latency)} ms</div>
+                            ) : null}
+                          </div>
+                        </details>
+                      ) : (
+                        "—"
+                      )}
+                    </td>
                     <td className="py-1 pr-2">
                       {row.request_status === "completed" || row.outcome === "ok"
                         ? "✅ riuscita"

@@ -53,6 +53,8 @@ class AIActivityLog:
         auth_type: str = "",
         request_status: str = "completed",
         vision_image: bool = False,
+        timings: Optional[dict[str, Any]] = None,
+        request_label: str = "",
     ) -> str:
         call_id = f"ai_{uuid.uuid4().hex[:12]}"
         if self.db is None:
@@ -84,6 +86,8 @@ class AIActivityLog:
             "auth_type": auth_type or "",
             "request_status": request_status or "completed",
             "vision_image": 1 if vision_image else 0,
+            "timings_json": json.dumps(timings or {}, ensure_ascii=False),
+            "request_label": request_label or "",
         }
         try:
             with self.db.session() as conn:
@@ -94,13 +98,13 @@ class AIActivityLog:
                         outcome, attempts, fallback_used, fallback_from, cost_eur, cost_known,
                         billing, execution, error_kind, error_message, cancelled, created_at,
                         estimated_cost_eur, unit_price_per_1k_eur, cost_basis, attachments,
-                        auth_type, request_status, vision_image
+                        auth_type, request_status, vision_image, timings_json
                     ) VALUES (
                         :id, :production_id, :agent, :provider, :model, :started_at, :duration_ms,
                         :outcome, :attempts, :fallback_used, :fallback_from, :cost_eur, :cost_known,
                         :billing, :execution, :error_kind, :error_message, :cancelled, :created_at,
                         :estimated_cost_eur, :unit_price_per_1k_eur, :cost_basis, :attachments,
-                        :auth_type, :request_status, :vision_image
+                        :auth_type, :request_status, :vision_image, :timings_json
                     )
                     """,
                     payload,
@@ -109,6 +113,30 @@ class AIActivityLog:
             # the monitor must never break a production
             return call_id
         return call_id
+
+    def annotate_timings(self, call_id: str, extra: dict[str, Any]) -> bool:
+        """Merge late measured phases (JSON parsing, validation) into the call row."""
+        if self.db is None or not call_id:
+            return False
+        try:
+            with self.db.session() as conn:
+                row = conn.execute(
+                    "SELECT timings_json FROM ai_activity WHERE id = ?", (call_id,)
+                ).fetchone()
+                if row is None:
+                    return False
+                try:
+                    current = json.loads(row["timings_json"] or "{}")
+                except (TypeError, ValueError):
+                    current = {}
+                current.update({k: v for k, v in (extra or {}).items() if v is not None})
+                conn.execute(
+                    "UPDATE ai_activity SET timings_json = ? WHERE id = ?",
+                    (json.dumps(current, ensure_ascii=False), call_id),
+                )
+                return True
+        except Exception:
+            return False
 
     # ------------------------------------------------------------------- read
     def list(
@@ -144,6 +172,11 @@ class AIActivityLog:
             item["cost_known"] = bool(item.get("cost_known"))
             item["cancelled"] = bool(item.get("cancelled"))
             item["vision_image"] = bool(item.get("vision_image"))
+            try:
+                item["timings_ms"] = json.loads(item.get("timings_json") or "{}")
+            except (TypeError, ValueError):
+                item["timings_ms"] = {}
+            item.pop("timings_json", None)
             # explicit three-level cost semantics for the monitor
             item["unit_price_per_1k_eur"] = item.get("unit_price_per_1k_eur")
             item["estimated_cost_eur"] = item.get("estimated_cost_eur")

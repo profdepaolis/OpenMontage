@@ -77,6 +77,55 @@ export interface CreativeConcept {
   creative_request?: Partial<CreativeRequestPayload>;
 }
 
+// 2.8.1 — Fast Creative Mode ("Suggerisci un tema")
+export interface ThemeProposalLite {
+  id: string;
+  title: string;
+  hook: string;
+  central_message: string;
+  narrative_direction: string;
+  recommended_objective: string;
+  recommended_voice_id: string;
+  recommended_duration_sec: number;
+  asset_ids: string[];
+  source: string;
+  from_cache: boolean;
+  cache_age_sec?: number | null;
+}
+
+export interface ThemeProposalsLiteEnvelope {
+  proposals: ThemeProposalLite[];
+  generation_engine: string;
+  model: string;
+  from_cache: boolean;
+  cache_age_sec?: number | null;
+  fallback_reason?: string | null;
+  timings_ms: Record<string, number | string | null | undefined>;
+}
+
+export interface IdeationStageEvent {
+  stage: "context" | "connect" | "generate" | "validate" | "fallback" | "done" | "cancelled";
+  label: string;
+  status: string;
+  at_ms: number;
+  detail: string;
+  engine?: string;
+  cache?: boolean;
+}
+
+export interface IdeationRun {
+  run_id: string;
+  status: "running" | "done" | "cancelled" | "error";
+  events: IdeationStageEvent[];
+  elapsed_ms: number;
+  budget_ms: number;
+  envelope: ThemeProposalsLiteEnvelope | null;
+  error: string | null;
+  error_kind: string;
+  cancelled: boolean;
+  finished: boolean;
+}
+
 export interface StoryboardScene {
   scene_number: number;
   start_frame: number;
@@ -306,6 +355,16 @@ export interface AIEngineSettings {
   declared_free_quota: Record<string, boolean>;
   providers: Record<string, { enabled?: boolean; model?: string; base_url?: string }>;
   agents: Record<string, { mode: "inherit" | "provider"; provider?: string; model?: string }>;
+  fast_creative?: {
+    enabled?: boolean;
+    global_budget_sec?: number;
+    first_attempt_sec?: number;
+    max_output_tokens?: number;
+    prefer_model?: string;
+    cache_ttl_sec?: number;
+    background_warm?: boolean;
+    avoid_cache?: boolean;
+  };
 }
 
 export interface AIEngineStatus {
@@ -360,6 +419,8 @@ export interface AIActivityCall {
   auth_type?: string;
   request_status?: string;
   vision_image?: boolean;
+  timings_ms?: Record<string, number | string | null | undefined>;
+  request_label?: string;
 }
 
 export interface PreviewSceneCard {

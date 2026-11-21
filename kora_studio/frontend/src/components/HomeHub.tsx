@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   Sparkles,
   PenLine,
@@ -13,6 +13,12 @@ import {
   Wand2,
   ChevronDown,
   ChevronUp,
+  CheckCircle2,
+  Loader2,
+  XCircle,
+  Clock,
+  Database,
+  Square,
 } from "lucide-react";
 import type {
   CreativeConcept,
@@ -22,6 +28,9 @@ import type {
   ProductionMode,
   ProjectRecord,
   ThemeSuggestionResponse,
+  IdeationStageEvent,
+  ThemeProposalLite,
+  ThemeProposalsLiteEnvelope,
   VoiceOption,
 } from "@/lib/types";
 import { koraApi } from "@/lib/api";
@@ -36,6 +45,44 @@ const IDEATION_ENGINE_LABELS: Record<string, string> = {
 };
 
 const CLOUD_IDEATION_ENGINES = ["gemini_api", "openai_api", "claude_api", "deepseek_api"];
+
+// 2.8.1 — messaggi espliciti: mai schermata vuota
+function friendlyLiteError(raw: string): string {
+  const message = (raw || "").toLowerCase();
+  if (message.includes("annullat")) return "Richiesta annullata. Nessuna proposta generata.";
+  if (message.includes("non autenticat") || message.includes("login") || message.includes("auth"))
+    return "Il motore AI selezionato non risulta autenticato (OpenCode/Codex): accedi al provider o scegli un altro motore in Impostazioni → Motori AI. Nel frattempo puoi usare il motore deterministico locale (0 €).";
+  if (message.includes("modello") && (message.includes("non disponibil") || message.includes("unavailable")))
+    return "Il modello scelto non è più disponibile sul provider: scegline un altro in Impostazioni → Motori AI.";
+  if (message.includes("quota") || message.includes("429") || message.includes("rate limit"))
+    return "Quota del provider esaurita o limite di frequenza raggiunto: attendi qualche minuto o cambia motore.";
+  if (message.includes("timeout") || message.includes("budget") || message.includes("tempo"))
+    return "Tempo massimo di 25 s raggiunto: sono state restituite le proposte deterministiche KORA (0 €).";
+  if (message.includes("json")) return "Il motore AI ha restituito un JSON non valido: è stato usato il fallback deterministico KORA (0 €).";
+  if (message.includes("oltre il budget")) return "Discovery dei motori oltre il budget: proposte deterministiche KORA (0 €). Usa «Riprova» per sfruttare la cache dei motori.";
+  if (message.includes("failed to fetch") || message.includes("network"))
+    return "Backend KORA non raggiungibile: verifica che il server locale sia attivo (./start.sh).";
+  return raw;
+}
+
+const LITE_STAGE_ORDER: { stage: IdeationStageEvent["stage"]; label: string }[] = [
+  { stage: "context", label: "Preparazione contesto" },
+  { stage: "connect", label: "Connessione motore AI" },
+  { stage: "generate", label: "Generazione temi" },
+  { stage: "validate", label: "Validazione proposte" },
+  { stage: "done", label: "Completato" },
+];
+
+function stageState(
+  events: IdeationStageEvent[],
+  stage: IdeationStageEvent["stage"]
+): "pending" | "running" | "done" | "error" {
+  const last = [...events].reverse().find((event) => event.stage === stage);
+  if (!last) return "pending";
+  if (last.status === "done") return "done";
+  if (last.status === "error" || last.status === "requested") return "error";
+  return "running";
+}
 
 function ideationEngineLabel(engine: string): string {
   if (engine.startsWith("kora_deterministic")) {
@@ -119,6 +166,17 @@ export function HomeHub({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [proposals, setProposals] = useState<CreativeConcept[]>([]);
+  // 2.8.1 — Fast Creative Mode
+  const [liteStages, setLiteStages] = useState<IdeationStageEvent[]>([]);
+  const [liteProposals, setLiteProposals] = useState<ThemeProposalLite[]>([]);
+  const [liteEnvelope, setLiteEnvelope] = useState<ThemeProposalsLiteEnvelope | null>(null);
+  const [liteElapsedMs, setLiteElapsedMs] = useState(0);
+  const [liteRunId, setLiteRunId] = useState<string | null>(null);
+  const [liteStatus, setLiteStatus] = useState<"idle" | "running" | "done" | "cancelled" | "error">(
+    "idle"
+  );
+  const [expandingId, setExpandingId] = useState<string | null>(null);
+  const liteRunRef = useRef<string | null>(null);
   const [uploadedInfo, setUploadedInfo] = useState<MediaAsset[]>([]);
 
   React.useEffect(() => {
@@ -142,23 +200,112 @@ export function HomeHub({
   });
 
   const handleSuggestThemes = async () => {
+    // nessuna richiesta duplicata: un solo run attivo alla volta
+    if (liteStatus === "running" || loading) return;
     setActiveAction("suggest");
     setLoading(true);
     setError(null);
+    setProposals([]);
+    setSelectedConceptId(null);
+    setLiteProposals([]);
+    setLiteEnvelope(null);
+    setLiteStages([]);
+    setLiteElapsedMs(0);
+    setLiteStatus("running");
+
     try {
-      const res = await koraApi.suggestThemes(buildRequestPayload(""));
-      setProposals(res.concepts);
-      setEngineInfo({ engine: res.generation_engine, fallback: res.fallback_reason });
-      if (res.concepts[0]) {
-        setSelectedConceptId(res.concepts[0].id);
-        if (res.concepts[0].objective) setObjective(res.concepts[0].objective);
-        if (res.concepts[0].recommended_voice_id) setVoiceId(res.concepts[0].recommended_voice_id);
+      const start = await koraApi.suggestThemesLite(buildRequestPayload(""));
+      liteRunRef.current = start.run_id;
+      setLiteRunId(start.run_id);
+      const budgetMs = start.budget_ms || 25000;
+      const localDeadline = Date.now() + budgetMs + 8000;
+      // polling degli eventi reali del backend (stage + esito)
+      for (;;) {
+        await new Promise((resolve) => setTimeout(resolve, 220));
+        if (liteRunRef.current !== start.run_id) return; // annullato dall'utente
+        if (Date.now() > localDeadline) {
+          setLiteStatus("error");
+          setError(
+            "Il backend non ha risposto entro il budget di 25 s (nessun processo lasciato attivo). Riprova: la cache dei motori è più calda."
+          );
+          return;
+        }
+        const snapshot = await koraApi.getSuggestThemesLite(start.run_id);
+        if (liteRunRef.current !== start.run_id) return;
+        setLiteStages(snapshot.events);
+        setLiteElapsedMs(snapshot.elapsed_ms);
+        if (snapshot.status === "cancelled") {
+          setLiteStatus("cancelled");
+          setError(friendlyLiteError("annullata"));
+          return;
+        }
+        if (snapshot.status === "error") {
+          setLiteStatus("error");
+          setError(friendlyLiteError(snapshot.error || "Errore ideazione"));
+          return;
+        }
+        if (snapshot.status === "done" && snapshot.envelope) {
+          setLiteEnvelope(snapshot.envelope);
+          setLiteProposals(snapshot.envelope.proposals || []);
+          setEngineInfo({
+            engine: snapshot.envelope.generation_engine,
+            fallback: snapshot.envelope.fallback_reason,
+          });
+          setLiteStatus("done");
+          if (snapshot.envelope.fallback_reason) {
+            setError(friendlyLiteError(snapshot.envelope.fallback_reason));
+          }
+          return;
+        }
       }
-      onConceptsReady(res.concepts, "Suggerisci un tema · Proposte KORA", "suggest");
     } catch (e) {
-      setError((e as Error).message);
+      setLiteStatus("error");
+      setError(friendlyLiteError((e as Error).message));
     } finally {
+      liteRunRef.current = null;
       setLoading(false);
+    }
+  };
+
+  const handleCancelSuggest = async () => {
+    const runId = liteRunRef.current || liteRunId;
+    liteRunRef.current = null;
+    if (runId) {
+      try {
+        await koraApi.cancelSuggestThemesLite(runId);
+      } catch {
+        // anche se il backend non risponde, il polling locale si ferma
+      }
+    }
+    setLiteStatus("cancelled");
+    setError(friendlyLiteError("annullata"));
+    setLiteRunId(null);
+    setLoading(false);
+  };
+
+  const handleSelectLite = async (proposal: ThemeProposalLite) => {
+    if (expandingId) return; // nessun doppio click
+    setExpandingId(proposal.id);
+    setError(null);
+    try {
+      // artefatti pesanti (voiceover, storyboard) solo DOPO la scelta del tema
+      const res = await koraApi.expandTheme(
+        proposal,
+        proposal.recommended_duration_sec,
+        proposal.asset_ids
+      );
+      setProposals(res.concepts);
+      setEngineInfo({ engine: res.generation_engine, fallback: null });
+      if (res.recommendation) setRecommendation(res.recommendation);
+      const concept = res.concepts[0];
+      if (concept) {
+        selectConceptAndPrefill(concept);
+        onConceptsReady(res.concepts, proposal.title, "suggest");
+      }
+    } catch (e) {
+      setError(friendlyLiteError((e as Error).message));
+    } finally {
+      setExpandingId(null);
     }
   };
 
@@ -769,6 +916,212 @@ export function HomeHub({
           </div>
         )}
       </section>
+
+      {/* 2.8.1 — Fast Creative Mode: stage reali, tempi, annullamento, proposte lite */}
+      {(liteStatus !== "idle" || liteProposals.length > 0) && (
+        <section className="space-y-4 rounded-3xl border border-[#DDD4C4] bg-white/90 p-6 shadow-sm">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h2 className="font-editorial text-2xl text-[#1D1B18]">
+                Suggerisci un tema
+                <span className="ml-2 align-middle text-[10px] font-medium uppercase tracking-[0.18em] text-[#9A8052]">
+                  Fast Creative Mode
+                </span>
+              </h2>
+              <p className="mt-1 text-xs text-[#6C6459]">
+                4 proposte leggere · nessuna analisi multimedia · budget massimo 25 s
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 text-[11px]">
+              <span className="inline-flex items-center gap-1 rounded-full border border-[#DDD4C4] bg-[#FAF7F2] px-2.5 py-1 text-[#4A443C]">
+                <Clock className="h-3 w-3" /> {(liteElapsedMs / 1000).toFixed(1)} s
+                <span className="text-[#9A8052]">/ 25 s</span>
+              </span>
+              {liteEnvelope?.generation_engine && (
+                <span
+                  className={`rounded-full border px-2.5 py-1 font-medium ${
+                    isLocalFallbackEngine(liteEnvelope.generation_engine)
+                      ? "border-[#E4D3B4] bg-[#FBF4E6] text-[#7A5C2E]"
+                      : "border-[#C5D9C4] bg-[#F1F7EF] text-[#2F5D3A]"
+                  }`}
+                >
+                  {ideationEngineLabel(liteEnvelope.generation_engine)}
+                  {liteEnvelope.model ? ` · ${liteEnvelope.model}` : ""}
+                </span>
+              )}
+              {liteEnvelope?.from_cache && (
+                <span className="inline-flex items-center gap-1 rounded-full border border-[#C9D7E3] bg-[#EFF5FA] px-2.5 py-1 font-medium text-[#224C66]">
+                  <Database className="h-3 w-3" /> dalla cache
+                  {typeof liteEnvelope.cache_age_sec === "number"
+                    ? ` · ${Math.round(liteEnvelope.cache_age_sec / 60)} min`
+                    : ""}
+                </span>
+              )}
+              {liteStatus === "running" && (
+                <button
+                  type="button"
+                  onClick={handleCancelSuggest}
+                  className="inline-flex items-center gap-1.5 rounded-full border border-red-300 bg-red-50 px-3 py-1 font-medium text-red-700 hover:bg-red-100"
+                >
+                  <Square className="h-3 w-3" /> Annulla
+                </button>
+              )}
+            </div>
+          </div>
+
+          <ol className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-5">
+            {LITE_STAGE_ORDER.map(({ stage, label }) => {
+              const state = stageState(liteStages, stage);
+              return (
+                <li
+                  key={stage}
+                  className={`flex items-center gap-2 rounded-xl border px-3 py-2 text-[11px] ${
+                    state === "done"
+                      ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                      : state === "running"
+                        ? "border-[#224C66]/30 bg-[#224C66]/5 text-[#224C66]"
+                        : state === "error"
+                          ? "border-amber-200 bg-amber-50 text-amber-900"
+                          : "border-[#E7DFD2] bg-[#FAF7F2] text-[#9A8052]"
+                  }`}
+                >
+                  {state === "done" ? (
+                    <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
+                  ) : state === "running" ? (
+                    <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
+                  ) : state === "error" ? (
+                    <XCircle className="h-3.5 w-3.5 shrink-0" />
+                  ) : (
+                    <span className="h-3.5 w-3.5 shrink-0 rounded-full border border-current opacity-40" />
+                  )}
+                  <span className="truncate">{label}</span>
+                  <span className="ml-auto tabular-nums opacity-70">
+                    {(() => {
+                      const last = [...liteStages].reverse().find((event) => event.stage === stage);
+                      return last ? `${(last.at_ms / 1000).toFixed(1)}s` : "";
+                    })()}
+                  </span>
+                </li>
+              );
+            })}
+          </ol>
+          {liteStages.some((event) => event.stage === "fallback") && (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-900">
+              {[...liteStages].reverse().find((event) => event.stage === "fallback")?.detail}
+            </div>
+          )}
+
+          {liteProposals.length > 0 && (
+            <>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h3 className="font-editorial text-lg text-[#1D1B18]">
+                  4 proposte · scegline una per progettare il Reel
+                </h3>
+                <button
+                  type="button"
+                  onClick={handleSuggestThemes}
+                  disabled={loading}
+                  className="rounded-xl border border-[#DDD4C4] bg-white px-3 py-1.5 text-[11px] font-medium text-[#1D1B18] hover:border-[#9A8052] disabled:opacity-50"
+                >
+                  Rigenera proposte
+                </button>
+              </div>
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
+                {liteProposals.map((proposal) => {
+                  const coverId = proposal.asset_ids[0];
+                  const isSelected =
+                    proposals[0]?.title?.startsWith(proposal.title) ?? false;
+                  const isExpanding = expandingId === proposal.id;
+                  return (
+                    <div
+                      key={proposal.id}
+                      className={`flex flex-col justify-between rounded-2xl border bg-white p-4 shadow-sm transition ${
+                        isSelected
+                          ? "border-[#224C66] ring-2 ring-[#224C66]/20"
+                          : "border-[#DDD4C4] hover:border-[#9A8052]"
+                      }`}
+                    >
+                      <div className="space-y-2.5">
+                        <div className="flex items-start justify-between gap-2">
+                          <h4 className="font-editorial text-base leading-snug text-[#1D1B18]">
+                            {proposal.title}
+                          </h4>
+                          {proposal.from_cache && (
+                            <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-[#EFF5FA] px-2 py-0.5 text-[9px] font-medium text-[#224C66]">
+                              <Database className="h-2.5 w-2.5" /> cache
+                            </span>
+                          )}
+                        </div>
+                        {coverId && (
+                          <div className="h-28 w-full overflow-hidden rounded-xl bg-[#EFE8DB]">
+                            <img
+                              src={`/api/vault/${coverId}/thumb`}
+                              alt={proposal.title}
+                              className="h-full w-full object-cover"
+                            />
+                          </div>
+                        )}
+                        <p className="text-[11px] italic leading-relaxed text-[#4A443C]">
+                          “{proposal.hook}”
+                        </p>
+                        <p
+                          className="text-[11px] leading-relaxed text-[#6C6459]"
+                          style={{
+                            display: "-webkit-box",
+                            WebkitLineClamp: 3,
+                            WebkitBoxOrient: "vertical",
+                            overflow: "hidden",
+                          }}
+                        >
+                          {proposal.central_message}
+                        </p>
+                        <p
+                          className="text-[10px] leading-relaxed text-[#9A8052]"
+                          style={{
+                            display: "-webkit-box",
+                            WebkitLineClamp: 2,
+                            WebkitBoxOrient: "vertical",
+                            overflow: "hidden",
+                          }}
+                        >
+                          {proposal.narrative_direction}
+                        </p>
+                        <div className="flex flex-wrap gap-1 text-[9px]">
+                          <span className="rounded-full bg-[#EFE8DB] px-2 py-0.5 text-[#1D1B18]">
+                            {proposal.recommended_duration_sec}s
+                          </span>
+                          <span className="rounded-full bg-[#224C66]/10 px-2 py-0.5 text-[#224C66]">
+                            Voce: {proposal.recommended_voice_id}
+                          </span>
+                          <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-emerald-800">
+                            {proposal.asset_ids.length} asset
+                          </span>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleSelectLite(proposal)}
+                        disabled={Boolean(expandingId)}
+                        className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-xl bg-[#224C66] px-3 py-2 text-[11px] font-medium text-white transition hover:bg-[#1D1B18] disabled:opacity-60"
+                      >
+                        {isExpanding ? (
+                          <>
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" /> Espansione tema…
+                          </>
+                        ) : (
+                          <>
+                            <Wand2 className="h-3.5 w-3.5" /> Scegli questo tema
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          )}
+        </section>
+      )}
 
       {/* Selectable Photographic Concept Cards (up to 4) + Custom Theme */}
       {proposals.length > 0 && (

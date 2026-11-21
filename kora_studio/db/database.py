@@ -286,6 +286,27 @@ MIGRATIONS: list[tuple[int, str, str]] = [
         CREATE INDEX IF NOT EXISTS idx_scene_previews_project ON scene_previews(project_id);
         """,
     ),
+    (
+        4,
+        "v281_creative_fast_mode",
+        """
+        ALTER TABLE ai_activity ADD COLUMN timings_json TEXT NOT NULL DEFAULT '{}';
+
+        CREATE TABLE IF NOT EXISTS theme_proposal_cache (
+            cache_key TEXT PRIMARY KEY,
+            payload_json TEXT NOT NULL,
+            brand_version INTEGER,
+            season TEXT NOT NULL DEFAULT '',
+            provider TEXT NOT NULL DEFAULT '',
+            model TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            hits INTEGER NOT NULL DEFAULT 0,
+            last_hit_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_theme_cache_expiry ON theme_proposal_cache(expires_at);
+        """,
+    ),
 ]
 
 

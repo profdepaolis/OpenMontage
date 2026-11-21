@@ -184,6 +184,10 @@ class EngineResult:
     auth_type: str = ""
     attachments_transmitted: int = 0
     request_status: str = "completed"
+    #: correlation id of the AI Activity row (for late timing annotations)
+    call_id: str = ""
+    #: measured phases in milliseconds: discovery, connection, inference, ...
+    timings: dict[str, Any] = field(default_factory=dict)
     local: bool = False
     subscription: bool = False
     billing: str = BILLING_UNKNOWN
@@ -206,6 +210,8 @@ class EngineResult:
             "auth_type": self.auth_type,
             "attachments_transmitted": self.attachments_transmitted,
             "request_status": self.request_status,
+            "call_id": self.call_id,
+            "timings_ms": self.timings,
             "local": self.local,
             "subscription": self.subscription,
             "billing": self.billing,
@@ -346,6 +352,7 @@ def run_cli(
     stdin_text: Optional[str] = None,
     env_allow: Optional[dict[str, str]] = None,
     cancel: Optional[Callable[[], bool]] = None,
+    timings: Optional[dict[str, Any]] = None,
 ) -> tuple[int, str, str]:
     """Run a CLI with an argument list (never a shell string), a hard timeout and cancellation.
 
@@ -366,6 +373,7 @@ def run_cli(
     if env_allow:
         env.update({k: v for k, v in env_allow.items() if v})
 
+    spawn_started = time.perf_counter()
     try:
         proc = subprocess.Popen(
             args,
@@ -380,6 +388,9 @@ def run_cli(
         raise EngineError("eseguibile non trovato") from exc
     except OSError as exc:
         raise EngineError(f"impossibile avviare il processo ({exc.__class__.__name__})") from exc
+    if timings is not None:
+        # avvio reale del processo CLI, misurato separatamente dall'inferenza
+        timings["spawn_ms"] = round((time.perf_counter() - spawn_started) * 1000, 1)
 
     if stdin_text is not None and proc.stdin is not None:
         try:
