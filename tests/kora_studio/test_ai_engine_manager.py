@@ -92,6 +92,9 @@ def engine_env(isolated_env: dict):
     db = Database(isolated_env["db_path"])
     providers = ProviderManager(db)
     providers.ensure_seeded()
+    # Questi test coprono il motore multi-provider storico (fallback, strategie):
+    # la modalità Essential (un solo motore) ha la sua suite dedicata.
+    AIEngineManager(providers, db).update_settings({"essential": {"enabled": False}})
     return {
         "db": db,
         "providers": providers,

@@ -379,6 +379,11 @@ def test_global_budget_and_single_authorised_fallback(env):
     fast = FakeCreativeAdapter(kind="custom_openai")
     manager._adapters[slow.kind] = slow
     manager._adapters[fast.kind] = fast
+    # Essential: il fallback è ammesso solo fra estensioni esplicitamente attive
+    manager.update_settings(
+        {"essential": {"enabled": True, "active_provider": "opencode", "enabled_providers": ["opencode", "custom_openai"]}}
+    )
+    fast_settings(manager, global_budget_sec=8.0, first_attempt_sec=3.0)
     manager._snapshot = {
         "captured_at": time.time(),
         "providers": {
@@ -389,7 +394,6 @@ def test_global_budget_and_single_authorised_fallback(env):
         "budget_sec": 0.0,
     }
     manager._snapshot_at = time.time()
-    fast_settings(manager, global_budget_sec=8.0, first_attempt_sec=3.0)
     started = time.perf_counter()
     snapshot = run_request(env["director"], timeout=20)
     elapsed = time.perf_counter() - started

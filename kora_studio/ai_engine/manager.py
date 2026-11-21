@@ -15,6 +15,7 @@ Design notes
 
 from __future__ import annotations
 
+import copy
 import threading
 import time
 from base64 import b64encode
@@ -117,6 +118,12 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "providers": {},
     "agents": {},
     "fast_creative": dict(FAST_CREATIVE_DEFAULTS),
+    #: KORA STUDIO Essential — un solo motore creativo attivo, gli altri sono estensioni
+    "essential": {
+        "enabled": True,
+        "active_provider": "opencode",
+        "enabled_providers": ["opencode"],
+    },
 }
 
 PROVIDER_ORDER = (
@@ -171,9 +178,12 @@ class AIEngineManager:
             "declared_free_quota",
             "vision_verified",
             "fast_creative",
+            "essential",
         ):
-            base = DEFAULT_SETTINGS[key]
-            merged[key] = {**base, **(stored.get(key) or {})}
+            # deepcopy: i default contengono liste/dict mutabili che non devono
+            # essere modificati in-place da update_settings (isolamento fra istanze)
+            base = copy.deepcopy(DEFAULT_SETTINGS[key])
+            merged[key] = {**base, **copy.deepcopy(stored.get(key) or {})}
         if merged.get("strategy") not in STRATEGIES:
             merged["strategy"] = STRATEGY_AUTO
         if merged.get("fallback") not in FALLBACK_MODES:
@@ -256,11 +266,57 @@ class AIEngineManager:
                 # solo una preferenza: il modello configurato dal provider non viene mai riscritto
                 fast["prefer_model"] = str(incoming["prefer_model"] or "").strip()[:120]
             current["fast_creative"] = fast
+        if isinstance(patch.get("essential"), dict):
+            incoming = patch["essential"]
+            current_essential = {**self.essential()}
+            if "enabled" in incoming:
+                current_essential["enabled"] = bool(incoming["enabled"])
+            if "active_provider" in incoming:
+                value = str(incoming["active_provider"] or "opencode")
+                if value not in PROVIDER_ORDER:
+                    raise ValueError(f"Provider non valido: {value}")
+                current_essential["active_provider"] = value
+            if isinstance(incoming.get("enabled_providers"), list):
+                ids = [str(p) for p in incoming["enabled_providers"] if str(p) in PROVIDER_ORDER]
+                if not ids:
+                    raise ValueError("Almeno un motore deve restare attivo")
+                current_essential["enabled_providers"] = ids
+            if current_essential["active_provider"] not in current_essential["enabled_providers"]:
+                current_essential["enabled_providers"].append(current_essential["active_provider"])
+            if (
+                current_essential["active_provider"] != self.essential()["active_provider"]
+                or set(current_essential["enabled_providers"]) != set(self.essential()["enabled_providers"])
+            ):
+                self._models_cache.clear()
+                self._probe_cache.clear()
+                self._snapshot = {}
+                self._snapshot_at = 0.0
+            current["essential"] = current_essential
+            # primary_provider resta coerente con il motore creativo attivo
+            current["primary_provider"] = current_essential["active_provider"]
         if isinstance(patch.get("agents"), dict):
             for agent_id, conf in patch["agents"].items():
                 if agent_id not in AGENTS_BY_ID:
                     raise ValueError(f"Agente non valido: {agent_id}")
                 current["agents"][agent_id] = self._validate_agent_conf(agent_id, conf or {})
+        # coerenza Essential: il provider principale È l'unico motore creativo attivo.
+        # Le altre estensioni restano spente finché non vengono attivate esplicitamente
+        # (in questa stessa patch o dalle Impostazioni): niente accumulo silenzioso.
+        if (current.get("essential") or {}).get("enabled") and "primary_provider" in patch:
+            primary = current.get("primary_provider") or "auto"
+            if primary != "auto":
+                essential_conf = current["essential"]
+                essential_conf["active_provider"] = primary
+                explicit = isinstance((patch.get("essential") or {}).get("enabled_providers"), list)
+                legacy_multi = any(k in patch for k in ("strategy", "fallback", "auto_fallback"))
+                if legacy_multi:
+                    # configurazione multi-provider esplicita (compatibilità 2.x): non si tocca
+                    if primary not in essential_conf["enabled_providers"]:
+                        essential_conf["enabled_providers"].append(primary)
+                elif not explicit:
+                    essential_conf["enabled_providers"] = [primary]
+                elif primary not in essential_conf["enabled_providers"]:
+                    essential_conf["enabled_providers"].append(primary)
         if declarations_changed:
             # le dichiarazioni cambiano il costo dei modelli: le cache vanno rigenerate
             self._models_cache.clear()
@@ -373,8 +429,9 @@ class AIEngineManager:
         started = time.perf_counter()
         providers: dict[str, Any] = {}
         try:
-            with ThreadPoolExecutor(max_workers=min(8, len(PROVIDER_ORDER))) as pool:
-                futures = {pool.submit(self._build_snapshot_entry, pid): pid for pid in PROVIDER_ORDER}
+            with ThreadPoolExecutor(max_workers=min(8, max(1, len(self.active_provider_ids())))) as pool:
+                active_ids = self.active_provider_ids()
+                futures = {pool.submit(self._build_snapshot_entry, pid): pid for pid in active_ids}
                 try:
                     for future in as_completed(futures, timeout=max(0.5, budget_sec)):
                         pid = futures[future]
@@ -423,21 +480,30 @@ class AIEngineManager:
             return self._snapshot
         return self.refresh_snapshot(budget_sec=budget_sec)
 
-    def start_snapshot_refresher(self, interval_sec: float = 240.0) -> None:
-        """Background refresh at startup; the creative path never waits on a full scan."""
+    def start_snapshot_refresher(self, interval_sec: float = 0.0) -> None:
+        """Essential: UNA verifica all'avvio dei soli motori attivi. Nessuna scansione periodica.
+
+        Con ``interval_sec > 0`` (solo diagnostica manuale) è possibile un refresh ripetuto,
+        ma il percorso ordinario non lo usa: i provider disattivati non vengono interrogati.
+        """
         if self._snapshot_thread and self._snapshot_thread.is_alive():
             return
 
-        def _loop() -> None:
-            self.refresh_snapshot(budget_sec=25.0)
+        def _once() -> None:
+            try:
+                self.refresh_snapshot(budget_sec=20.0)
+            except Exception:
+                pass
+            if interval_sec <= 0:
+                return
             while True:
-                time.sleep(max(30.0, interval_sec))
+                time.sleep(max(60.0, interval_sec))
                 try:
-                    self.refresh_snapshot(budget_sec=25.0)
+                    self.refresh_snapshot(budget_sec=20.0)
                 except Exception:
                     continue
 
-        thread = threading.Thread(target=_loop, name="kora-engine-snapshot", daemon=True)
+        thread = threading.Thread(target=_once, name="kora-engine-snapshot", daemon=True)
         self._snapshot_thread = thread
         thread.start()
 
@@ -545,7 +611,75 @@ class AIEngineManager:
         self._probe_cache.pop(provider_id, None)
 
     # -------------------------------------------------------------------- probes
+    # ------------------------------------------------------- Essential mode
+    def essential(self) -> dict[str, Any]:
+        conf = (self.settings().get("essential") or {})
+        enabled = conf.get("enabled")
+        enabled = True if enabled is None else bool(enabled)
+        active = str(conf.get("active_provider") or "opencode")
+        ids = [str(p) for p in (conf.get("enabled_providers") or [active]) if str(p) in PROVIDER_ORDER]
+        if active not in ids:
+            ids.insert(0, active)
+        return {"enabled": enabled, "active_provider": active, "enabled_providers": ids}
+
+    def provider_enabled(self, provider_id: str) -> bool:
+        """In Essential i provider non attivati non vengono nemmeno interrogati."""
+        conf = self.essential()
+        if not conf["enabled"]:
+            return True
+        return provider_id in conf["enabled_providers"]
+
+    def active_provider_ids(self) -> list[str]:
+        conf = self.essential()
+        if not conf["enabled"]:
+            return list(PROVIDER_ORDER)
+        active = conf["active_provider"]
+        return [active] + [p for p in PROVIDER_ORDER if p in conf["enabled_providers"] and p != active]
+
+    def _disabled_probe(self, provider_id: str) -> dict[str, Any]:
+        adapter = self.adapter(provider_id)
+        return {
+            "provider": provider_id,
+            "label": getattr(adapter, "label", provider_id),
+            "kind": "cli" if getattr(adapter, "is_cli", False) else "http",
+            "local": bool(getattr(adapter, "is_local", False)),
+            "subscription": bool(getattr(adapter, "subscription_quota", False)),
+            "requires_key": bool(getattr(adapter, "requires_key", False)),
+            "state": STATE_UNAVAILABLE,
+            "installed": False,
+            "authenticated": False,
+            "detail": "disattivato: estensione opzionale (nessun controllo eseguito)",
+            "auth_detail": "",
+            "account": None,
+            "version": None,
+            "binary": None,
+            "models_count": 0,
+            "supports_vision": False,
+            "unknown_vision_models": 0,
+            "unknown_cost_models": 0,
+            "billing_kinds": [],
+            "attachments": False,
+            "attachment_mode": "",
+            "verified_operational": False,
+            "last_test_at": None,
+            "last_test_ok": None,
+            "last_latency_ms": None,
+            "docs_url": getattr(adapter, "docs_url", ""),
+            "extension": False,
+            "enabled": True,
+            "active": provider_id == self.essential()["active_provider"],
+            "cost_summary": {"zero_cost_models": 0, "paid_models": 0, "unknown": 0},
+            "extension": True,
+            "enabled": False,
+            "active": False,
+        }
+
     def probe(self, provider_id: str, refresh: bool = False) -> dict[str, Any]:
+        # refresh=True = verifica esplicita dell'utente su una singola estensione
+        if not self.provider_enabled(provider_id) and not refresh:
+            result = self._disabled_probe(provider_id)
+            self._probe_cache[provider_id] = (time.time(), result)
+            return result
         cached = self._probe_cache.get(provider_id)
         if cached and not refresh and (time.time() - cached[0]) < PROBE_TTL_SEC:
             return cached[1]
@@ -628,6 +762,9 @@ class AIEngineManager:
             "last_test_ok": provider_conf.get("last_test_ok"),
             "last_latency_ms": provider_conf.get("last_latency_ms"),
             "docs_url": getattr(adapter, "docs_url", ""),
+            "extension": False,
+            "enabled": True,
+            "active": provider_id == self.essential()["active_provider"],
             "cost_summary": {
                 "zero_cost_models": sum(1 for m in models if m.zero_cost),
                 "paid_models": cost_note.count(BILLING_PAID_API),
@@ -637,8 +774,32 @@ class AIEngineManager:
         self._probe_cache[provider_id] = (time.time(), result)
         return result
 
+    def extensions_catalog(self) -> list[dict[str, Any]]:
+        """Estensioni provider: attivabili, mai caricate se disattivate."""
+        conf = self.essential()
+        catalog = []
+        for pid in PROVIDER_ORDER:
+            adapter = self.adapter(pid)
+            catalog.append(
+                {
+                    "provider": pid,
+                    "label": getattr(adapter, "label", pid),
+                    "kind": "cli" if getattr(adapter, "is_cli", False) else "http",
+                    "local": bool(getattr(adapter, "is_local", False)),
+                    "enabled": pid in conf["enabled_providers"],
+                    "active": pid == conf["active_provider"],
+                    "docs_url": getattr(adapter, "docs_url", ""),
+                }
+            )
+        return catalog
+
     def status_board(self, refresh: bool = False) -> dict[str, Any]:
-        providers = [self.probe(pid, refresh=refresh) for pid in PROVIDER_ORDER]
+        # Essential: i provider disattivati non vengono né installati-check né interrogati
+        active = set(self.active_provider_ids()) if self.essential()["enabled"] else set(PROVIDER_ORDER)
+        providers = [
+            self.probe(pid, refresh=refresh) if pid in active else self._disabled_probe(pid)
+            for pid in PROVIDER_ORDER
+        ]
         settings = self.settings()
         return {
             "settings": self._public_settings(),
@@ -659,6 +820,8 @@ class AIEngineManager:
                 "spent_note": "Costo registrato solo dalle chiamate con prezzo pubblicato; saldo non verificabile.",
             },
             "activity": self.activity.summary(limit=200),
+            "extensions": self.extensions_catalog(),
+            "essential_mode": self.essential()["enabled"],
         }
 
     def _public_settings(self) -> dict[str, Any]:
@@ -675,6 +838,8 @@ class AIEngineManager:
             "declared_free_quota": settings["declared_free_quota"],
             "providers": settings.get("providers") or {},
             "agents": settings.get("agents") or {},
+            "fast_creative": settings.get("fast_creative") or dict(FAST_CREATIVE_DEFAULTS),
+            "essential": self.essential(),
         }
 
     def _configured_model(self, provider_id: str) -> Optional[str]:
@@ -800,12 +965,14 @@ class AIEngineManager:
             explicit_provider = provider_of(str(model_override))
 
         primary = settings["primary_provider"]
+        # Essential: solo i motori attivati possono essere interrogati
+        enabled_ids = self.active_provider_ids() if self.essential()["enabled"] else list(PROVIDER_ORDER)
         if explicit_provider:
-            order = [explicit_provider] + [p for p in PROVIDER_ORDER if p != explicit_provider]
-        elif primary != "auto":
-            order = [primary] + [p for p in PROVIDER_ORDER if p != primary]
+            order = [explicit_provider] + [p for p in enabled_ids if p != explicit_provider]
+        elif primary != "auto" and primary in enabled_ids:
+            order = [primary] + [p for p in enabled_ids if p != primary]
         else:
-            order = list(PROVIDER_ORDER)
+            order = list(enabled_ids)
 
         fallback = settings.get("fallback", FALLBACK_FREE_ONLY)
         strict = bool(explicit_provider)

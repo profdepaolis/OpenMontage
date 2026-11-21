@@ -94,6 +94,7 @@ class KoraDirector:
         target_duration_sec: float = 20.0,
         concept: Optional[CreativeConcept] = None,
         preferences: Optional[dict[str, Any]] = None,
+        prebuilt_scenes: Optional[list[Any]] = None,
     ) -> dict[str, Any]:
         project_id = f"prj_{uuid.uuid4().hex[:10]}"
         fps = DEFAULT_FPS
@@ -109,7 +110,11 @@ class KoraDirector:
             str(a) for a in (prefs_payload.get("selected_asset_ids") or []) if str(a).strip()
         ]
         storyboard: list[dict[str, Any]] = []
-        if concept is not None:
+        if prebuilt_scenes:
+            storyboard = [
+                s.model_dump() if hasattr(s, "model_dump") else dict(s) for s in prebuilt_scenes
+            ]
+        elif concept is not None:
             scenes = self.creative.build_storyboard(
                 concept,
                 voice_id=voice_id,
@@ -155,6 +160,62 @@ class KoraDirector:
 
         self.save_project_snapshot(project_id, "Creazione progetto iniziale", "KoraDirector")
         return self.get_project(project_id)  # type: ignore
+
+    # --------------------------------------------------- Essential: Progetta Reel
+    def design_reel(
+        self,
+        req: Optional[CreativeRequestPayload] = None,
+        proposal: Optional[Any] = None,
+        deadline_sec: float = 45.0,
+    ) -> Any:
+        """UNA sola richiesta creativa strutturata (concept + storyboard + caption)."""
+        from kora_studio.agents.reel_designer import ReelDesigner
+
+        if getattr(self, "reel_designer", None) is None:
+            self.reel_designer = ReelDesigner(self)
+        return self.reel_designer.design(req, proposal, deadline_sec=deadline_sec)
+
+    def create_project_from_design(
+        self,
+        design: Any,
+        theme: str,
+        *,
+        mode: str = "suggest",
+        production_mode: str = ProductionMode.AUTO.value,
+        destination_dir: Optional[str] = None,
+        hyperframes: Optional[dict[str, Any]] = None,
+        caption_style: Optional[str] = None,
+    ) -> dict[str, Any]:
+        preferences: dict[str, Any] = {
+            "reel_design": {
+                "caption": design.caption,
+                "cover": design.cover,
+                "sound_design": design.sound_design,
+                "generation_engine": design.generation_engine,
+                "fallback_reason": design.fallback_reason,
+                "timings_ms": design.timings_ms,
+                "schema_version": design.schema_version,
+            },
+            "creative_request": design.concept.creative_request,
+        }
+        if destination_dir:
+            preferences["destination_dir"] = destination_dir
+        if hyperframes:
+            preferences["hyperframes"] = hyperframes
+        if caption_style:
+            preferences["caption_style"] = caption_style
+        return self.create_project(
+            title=design.concept.title,
+            theme=theme,
+            mode=mode,
+            preset=design.concept.preset,
+            production_mode=production_mode,
+            voice_id=design.concept.recommended_voice_id,
+            target_duration_sec=design.concept.duration_sec,
+            concept=design.concept,
+            preferences=preferences,
+            prebuilt_scenes=design.scenes,
+        )
 
     def get_project(self, project_id: str) -> Optional[dict[str, Any]]:
         with self.db.session() as conn:

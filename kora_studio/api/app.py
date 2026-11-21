@@ -262,7 +262,7 @@ def create_app(db_path: Optional[Path] = None, auto_seed: bool = True) -> FastAP
         director.vault.seed_kora_authentic_assets()
         director.brand_brain.refresh_palette_from_vault()
 
-    app = FastAPI(title="KORA STUDIO", version="2.8.1")
+    app = FastAPI(title="KORA STUDIO", version="3.0.0")
     app.state.director = director
     app.state.backup_mgr = backup_mgr
     # 2.8.1 — scoperta motori in background: nessuna scansione completa per richiesta
@@ -513,6 +513,115 @@ def create_app(db_path: Optional[Path] = None, auto_seed: bool = True) -> FastAP
     @app.post("/api/creative/suggest-lite-cache/clear")
     def creative_suggest_lite_cache_clear() -> dict[str, Any]:
         return {"cleared": director.creative.ideation.cache.clear()}
+
+    @app.post("/api/creative/project-reel")
+    def creative_project_reel(payload: dict[str, Any]) -> dict[str, Any]:
+        """Essential: UNA richiesta creativa completa per progettare il Reel scelto."""
+        from kora_studio.agents.reel_designer import ReelDesigner
+        from kora_studio.db.models import ThemeProposalLite
+
+        raw_request = payload.get("request") or {}
+        try:
+            request = CreativeRequestPayload(**raw_request)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Richiesta non valida: {exc}")
+        proposal = None
+        if payload.get("proposal"):
+            try:
+                proposal = ThemeProposalLite(**payload["proposal"])
+            except Exception as exc:
+                raise HTTPException(status_code=400, detail=f"Proposta non valida: {exc}")
+        try:
+            design = director.design_reel(
+                request, proposal, deadline_sec=float(payload.get("deadline_sec") or 45.0)
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"Progettazione non riuscita: {exc}")
+        if design.generation_engine == "deterministic_offline_fallback":
+            ReelDesigner.log_deterministic(director, design.timings_ms, design.fallback_reason or "")
+        result: dict[str, Any] = {
+            "design": {
+                "concept": design.concept.model_dump(),
+                "scenes": [s.model_dump() for s in design.scenes],
+                "caption": design.caption,
+                "cover": design.cover,
+                "sound_design": design.sound_design,
+                "generation_engine": design.generation_engine,
+                "model": design.model,
+                "fallback_reason": design.fallback_reason,
+                "timings_ms": design.timings_ms,
+                "calls": design.calls,
+            },
+            "project": None,
+        }
+        if payload.get("create_project", True):
+            try:
+                project = director.create_project_from_design(
+                    design,
+                    theme=(proposal.title if proposal else request.theme) or design.concept.title,
+                    mode=str(payload.get("mode") or "suggest"),
+                    production_mode=str(payload.get("production_mode") or "AUTO"),
+                    destination_dir=payload.get("destination_dir"),
+                    hyperframes=payload.get("hyperframes"),
+                    caption_style=payload.get("caption_style"),
+                )
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Creazione progetto non riuscita: {exc}")
+            result["project"] = project
+        return result
+
+    @app.get("/api/studio/bootstrap")
+    def studio_bootstrap() -> dict[str, Any]:
+        """Essential: solo i dati della schermata Studio. Nessuna scansione provider."""
+        try:
+            voices = director.voice_director.list_voices()
+        except Exception:
+            voices = []
+        try:
+            projects = director.list_projects()[:6]
+        except Exception:
+            projects = []
+        try:
+            assets = director.vault.list_assets()
+        except Exception:
+            assets = []
+        categories: dict[str, int] = {}
+        for asset in assets:
+            if asset.get("category") == "Logo":
+                continue
+            categories[str(asset.get("category") or "Altro")] = categories.get(
+                str(asset.get("category") or "Altro"), 0
+            ) + 1
+        engine_summary = {"active_provider": "", "state": "non verificato", "model": "", "essential": True}
+        engine = director.ai_engine
+        try:
+            conf = engine.essential()
+            engine_summary["active_provider"] = conf["active_provider"]
+            engine_summary["essential"] = conf["enabled"]
+            snapshot = engine.snapshot()
+            info = ((snapshot.get("providers") or {}).get(conf["active_provider"]) or {})
+            if info:
+                engine_summary["state"] = str(info.get("state") or "")
+                models = info.get("models") or []
+                engine_summary["model"] = getattr(models[0], "id", "") if models else ""
+        except Exception:
+            pass
+        try:
+            with db.session() as conn:
+                row = conn.execute("SELECT COUNT(*) AS c FROM theme_proposal_cache").fetchone()
+                cached = int(row["c"]) if row else 0
+        except Exception:
+            cached = 0
+        return {
+            "voices": voices,
+            "recent_projects": projects,
+            "vault": {
+                "total": sum(categories.values()),
+                "categories": dict(sorted(categories.items())),
+            },
+            "engine": engine_summary,
+            "cached_proposals": cached,
+        }
 
     @app.post("/api/creative/expand-theme")
     def creative_expand_theme(payload: dict[str, Any]) -> dict[str, Any]:

@@ -167,6 +167,45 @@ export const koraApi = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+  // KORA STUDIO Essential — un solo payload per la schermata Studio
+  studioBootstrap: () =>
+    apiFetch<{
+      voices: VoiceOption[];
+      recent_projects: ProjectRecord[];
+      vault: { total: number; categories: Record<string, number> };
+      engine: { active_provider: string; state: string; model: string; essential: boolean };
+      cached_proposals: number;
+    }>("/api/studio/bootstrap"),
+  // Essential: Progetta Reel in UNA sola richiesta creativa strutturata
+  projectReel: (payload: {
+    request: Partial<CreativeRequestPayload>;
+    proposal?: unknown | null;
+    create_project?: boolean;
+    mode?: string;
+    production_mode?: string;
+    hyperframes?: Partial<HyperframesConfig>;
+    caption_style?: string;
+    destination_dir?: string | null;
+    deadline_sec?: number;
+  }) =>
+    apiFetch<{
+      design: {
+        concept: CreativeConcept;
+        scenes: Record<string, unknown>[];
+        caption: string;
+        cover: { title: string; subtitle: string };
+        sound_design: Record<string, string>;
+        generation_engine: string;
+        model: string;
+        fallback_reason: string | null;
+        timings_ms: Record<string, number | string | null | undefined>;
+        calls: number;
+      };
+      project: (ProjectRecord & { storyboard?: Record<string, unknown>[] }) | null;
+    }>("/api/creative/project-reel", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
   recommendHyperframes: (theme: string, durationSec = 20) =>
     apiFetch<ThemeSuggestionResponse>("/api/hyperframes/recommend", {
       method: "POST",

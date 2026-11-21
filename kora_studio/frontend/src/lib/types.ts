@@ -304,6 +304,9 @@ export type AIEngineState =
 export type AIEngineStrategy = "auto" | "max_quality" | "min_cost" | "local_only";
 
 export interface AIEngineProvider {
+  extension?: boolean;
+  enabled?: boolean;
+  active?: boolean;
   provider: string;
   label: string;
   kind: "cli" | "http";
@@ -355,6 +358,11 @@ export interface AIEngineSettings {
   declared_free_quota: Record<string, boolean>;
   providers: Record<string, { enabled?: boolean; model?: string; base_url?: string }>;
   agents: Record<string, { mode: "inherit" | "provider"; provider?: string; model?: string }>;
+  essential?: {
+    enabled?: boolean;
+    active_provider?: string;
+    enabled_providers?: string[];
+  };
   fast_creative?: {
     enabled?: boolean;
     global_budget_sec?: number;
@@ -367,8 +375,20 @@ export interface AIEngineSettings {
   };
 }
 
+export interface AIEngineExtension {
+  provider: string;
+  label: string;
+  kind: string;
+  local: boolean;
+  enabled: boolean;
+  active: boolean;
+  docs_url?: string;
+}
+
 export interface AIEngineStatus {
   settings: AIEngineSettings;
+  extensions?: AIEngineExtension[];
+  essential_mode?: boolean;
   providers: AIEngineProvider[];
   agents: AIEngineAgent[];
   strategies: AIEngineStrategy[];

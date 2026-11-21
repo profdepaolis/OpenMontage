@@ -70,6 +70,9 @@ export function AIEngineView() {
   const [fastBudget, setFastBudget] = useState("25");
   const [fastFirst, setFastFirst] = useState("15");
   const [fastModel, setFastModel] = useState("");
+  // Essential: un solo motore creativo attivo
+  const [activeProvider, setActiveProvider] = useState("opencode");
+  const [enabledProviders, setEnabledProviders] = useState<string[]>(["opencode"]);
 
   const applyStatus = useCallback((next: AIEngineStatus) => {
     setStatus(next);
@@ -84,6 +87,8 @@ export function AIEngineView() {
     setFastBudget(String(next.settings.fast_creative?.global_budget_sec ?? 25));
     setFastFirst(String(next.settings.fast_creative?.first_attempt_sec ?? 15));
     setFastModel(next.settings.fast_creative?.prefer_model || "");
+    setActiveProvider(next.settings.essential?.active_provider || "opencode");
+    setEnabledProviders(next.settings.essential?.enabled_providers || ["opencode"]);
   }, []);
 
   const loadActivity = useCallback(async (limit = 60) => {
@@ -460,6 +465,92 @@ export function AIEngineView() {
         </div>
       </section>
 
+
+      {/* KORA STUDIO Essential — un solo motore, estensioni spente */}
+      <section className="rounded-2xl border border-[#EDE6D9] bg-white p-4">
+        <h3 className="flex items-center gap-2 text-sm font-semibold text-[#1D1B18]">
+          <Cpu className="h-4 w-4 text-[#9A8052]" /> Motore creativo attivo
+          <span className="rounded-full bg-[#224C66]/10 px-2 py-0.5 text-[10px] font-medium text-[#224C66]">
+            Essential
+          </span>
+        </h3>
+        <p className="mt-1 text-[11px] text-[#6C6459]">
+          Un solo motore attivo per volta. Gli altri provider sono <strong>estensioni disattivate</strong>:
+          non vengono installati, interrogati né monitorati finché non le attivi qui.
+        </p>
+        <div className="mt-3 flex flex-wrap items-end gap-3">
+          <label className="text-[11px] text-[#4A443C]">
+            Provider attivo
+            <select
+              value={activeProvider}
+              onChange={(event) => {
+                const value = event.target.value;
+                setActiveProvider(value);
+                setEnabledProviders((prev) => (prev.includes(value) ? prev : [...prev, value]));
+              }}
+              className="mt-1 block rounded-xl border border-[#DDD4C4] bg-[#FAF7F2] px-3 py-2 text-xs"
+            >
+              {(status?.extensions || []).map((ext) => (
+                <option key={ext.provider} value={ext.provider}>
+                  {ext.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button
+            type="button"
+            disabled={busy === "settings"}
+            onClick={() =>
+              saveSettings(
+                {
+                  primary_provider: activeProvider,
+                  essential: { enabled: true, active_provider: activeProvider, enabled_providers: enabledProviders },
+                },
+                "Motore creativo aggiornato. Le estensioni disattivate non vengono interrogate."
+              )
+            }
+            className="inline-flex items-center gap-2 rounded-xl bg-[#224C66] px-3.5 py-2 text-xs font-medium text-white disabled:opacity-50"
+          >
+            {busy === "settings" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+            Salva motore attivo
+          </button>
+        </div>
+        <div className="mt-3 grid gap-2 sm:grid-cols-2">
+          {(status?.extensions || []).map((ext) => {
+            const checked = enabledProviders.includes(ext.provider);
+            return (
+              <label
+                key={ext.provider}
+                className="flex items-center justify-between gap-2 rounded-xl border border-[#E7DFD2] bg-[#FAF7F2] px-3 py-2 text-[11px] text-[#4A443C]"
+              >
+                <span>
+                  {ext.label}
+                  <span className="ml-1 text-[#9A8052]">
+                    {ext.kind === "cli" ? "CLI" : "API"}
+                    {ext.local ? " · locale" : ""}
+                  </span>
+                </span>
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  onChange={(event) =>
+                    setEnabledProviders((prev) =>
+                      event.target.checked
+                        ? [...prev, ext.provider]
+                        : prev.filter((p) => p !== ext.provider)
+                    )
+                  }
+                  className="h-4 w-4"
+                />
+              </label>
+            );
+          })}
+        </div>
+        <p className="mt-2 text-[10px] text-[#9A8052]">
+          Le estensioni spente restano disponibili per usi futuri: nessun download, nessuna installazione
+          automatica, nessuna scansione periodica.
+        </p>
+      </section>
 
       {/* 2.8.1 — Fast Creative Mode */}
       <section className="rounded-2xl border border-[#EDE6D9] bg-white p-4">

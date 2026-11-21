@@ -835,6 +835,8 @@ class CreativeDirector:
         voice_id: str = "brando",
         fps: int = DEFAULT_FPS,
         authorized_asset_ids: Optional[list[str]] = None,
+        annotate_vault: bool = True,
+        use_story_director: bool = True,
     ) -> list[StoryboardScene]:
         """Storyboard Engine 2.0: narrative-driven asset planning & exact 25fps frame math.
 
@@ -954,7 +956,7 @@ class CreativeDirector:
         # Visual Intelligence reale: rivede il materiale e arricchisce l'analisi
         # (solo con un modello visivo VERIFICATO; altrimenti analisi deterministica dichiarata).
         visual = getattr(self, "visual_intelligence", None)
-        if visual is not None and getattr(self, "ai_engine", None) is not None:
+        if annotate_vault and visual is not None and getattr(self, "ai_engine", None) is not None:
             try:
                 updated = visual.annotate_vault(production_id=getattr(concept, "id", None), limit=6)
                 if updated:
@@ -1106,7 +1108,7 @@ class CreativeDirector:
         )
         # Cinematic Story Director: piano delle inquadrature (motore configurabile,
         # fallback deterministico proporzionale — mai sequenze cicliche).
-        story_director = getattr(self, "story_director", None)
+        story_director = getattr(self, "story_director", None) if use_story_director else None
         if story_director is not None:
             # Only the authorised inventory reaches the director (outro logo excluded).
             assets_now = [a for a in assets_pool if a["category"] != "Logo"]

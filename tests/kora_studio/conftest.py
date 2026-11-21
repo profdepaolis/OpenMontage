@@ -49,6 +49,7 @@ def isolated_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         d.mkdir(parents=True, exist_ok=True)
 
     import kora_studio.config as cfg
+    import kora_studio.db.database as db_mod
     import kora_studio.vault.media_vault as mv
     import kora_studio.vault.sound_library as sl
     import kora_studio.agents.director as dir_mod
@@ -75,12 +76,13 @@ def isolated_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
     # Patch module-level imported path constants where referenced directly
     for mod, attrs in [
+        (db_mod, {"DB_PATH": db_path}),
         (mv, {"VAULT_ORIGINALS_DIR": originals_dir, "VAULT_WORKING_DIR": working_dir, "VAULT_THUMBS_DIR": thumbs_dir}),
         (sl, {"SOUND_LIBRARY_DIR": sound_dir}),
         (dir_mod, {"PROJECTS_DIR": projects_dir}),
         (exp_mod, {"EXPORTS_DIR": exports_dir}),
         (ed_mod, {"CACHE_DIR": cache_dir}),
-        (vd_mod, {"VOICES_PIPER_DIR": voices_dir}),
+        (vd_mod, {"VOICES_PIPER_DIR": voices_dir, "CACHE_DIR": cache_dir}),
         (ml_mod, {"CACHE_DIR": cache_dir}),
         (bm_mod, {"DATA_DIR": data_dir, "BACKUPS_DIR": backups_dir, "CACHE_DIR": cache_dir, "PROJECTS_DIR": projects_dir, "EXPORTS_DIR": exports_dir, "VAULT_ORIGINALS_DIR": originals_dir}),
         (app_mod, {"BACKUPS_DIR": backups_dir, "PROJECTS_DIR": projects_dir}),

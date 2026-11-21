@@ -1,25 +1,13 @@
 "use client";
 
-import React, { useCallback, useEffect, useState } from "react";
-import {
-  Home,
-  FolderKanban,
-  Images,
-  Clapperboard,
-  Activity,
-  PlaySquare,
-  Cpu,
-  Gauge,
-  Palette,
-  Download,
-} from "lucide-react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
+import { Home, Images, FolderKanban, SlidersHorizontal, AlertCircle, ArrowLeft } from "lucide-react";
 import type {
   BudgetSettings,
   CreativeConcept,
   HyperframesConfig,
   JobRecord,
   MediaAsset,
-  NavSection,
   ProductionMode,
   ProjectRecord,
   ProviderRecord,
@@ -37,71 +25,153 @@ import { AIEngineView } from "@/components/AIEngineView";
 import { BrandProfileView } from "@/components/BrandProfileView";
 import { ExportView } from "@/components/ExportView";
 
-const NAV_ITEMS: Array<{ id: NavSection; label: string; icon: React.ComponentType<{ className?: string }> }> = [
-  { id: "home", label: "Home", icon: Home },
+/** Essential: quattro sezioni visibili. Le schermate interne restano raggiungibili dal flusso. */
+type NavId = "studio" | "vault" | "projects" | "settings";
+type StudioPanel = "home" | "preview" | "export" | "production" | "creative";
+type SettingsTab = "engine" | "providers" | "brand";
+
+const NAV_ITEMS: Array<{ id: NavId; label: string; icon: React.ComponentType<{ className?: string }> }> = [
+  { id: "studio", label: "Studio", icon: Home },
+  { id: "vault", label: "Archivio", icon: Images },
   { id: "projects", label: "Progetti", icon: FolderKanban },
-  { id: "vault", label: "Media Vault", icon: Images },
-  { id: "creative", label: "Creative Studio", icon: Clapperboard },
-  { id: "production", label: "Production", icon: Activity },
-  { id: "preview", label: "Preview", icon: PlaySquare },
-  { id: "providers", label: "AI Providers", icon: Cpu },
-  { id: "engine", label: "AI Engine Manager", icon: Gauge },
-  { id: "brand", label: "Brand Profile", icon: Palette },
-  { id: "export", label: "Export", icon: Download },
+  { id: "settings", label: "Impostazioni", icon: SlidersHorizontal },
 ];
 
+const TERMINAL_JOB_STATES = ["Completato", "Errore", "Richiede intervento"];
+
 export default function KoraStudioPage() {
-  const [section, setSection] = useState<NavSection>("home");
+  const [nav, setNav] = useState<NavId>("studio");
+  const [studioPanel, setStudioPanel] = useState<StudioPanel>("home");
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>("engine");
+
+  // Cache per sezione: nessun caricamento indiscriminato all'avvio.
   const [assets, setAssets] = useState<MediaAsset[]>([]);
   const [projects, setProjects] = useState<ProjectRecord[]>([]);
   const [voices, setVoices] = useState<VoiceOption[]>([]);
   const [jobs, setJobs] = useState<JobRecord[]>([]);
   const [providers, setProviders] = useState<ProviderRecord[]>([]);
   const [budget, setBudget] = useState<BudgetSettings | null>(null);
+  const [vaultSummary, setVaultSummary] = useState<{ total: number; categories: Record<string, number> }>({
+    total: 0,
+    categories: {},
+  });
+  const [engineSummary, setEngineSummary] = useState<{
+    active_provider: string;
+    state: string;
+    model: string;
+    essential: boolean;
+  } | null>(null);
+  const [banner, setBanner] = useState<string | null>(null);
+  const [bootReady, setBootReady] = useState(false);
 
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
 
-  const refreshAll = useCallback(async () => {
-    const [vAssets, pList, vList, jList, provList, bData] = await Promise.all([
-      koraApi.listVault(),
-      koraApi.listProjects(),
-      koraApi.listVoices(),
-      koraApi.listJobs(),
+  const loaded = useRef<Record<string, boolean>>({});
+  const jobTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // ---------------------------------------------------------------- loaders
+  const loadStudio = useCallback(async (force = false) => {
+    if (loaded.current.studio && !force) return;
+    const boot = await koraApi.studioBootstrap();
+    setVoices(boot.voices || []);
+    setProjects(boot.recent_projects || []);
+    setVaultSummary(boot.vault || { total: 0, categories: {} });
+    setEngineSummary(boot.engine || null);
+    loaded.current.studio = true;
+  }, []);
+
+  const loadVault = useCallback(async (force = false) => {
+    if (loaded.current.vault && !force) return;
+    const list = await koraApi.listVault();
+    setAssets(list);
+    loaded.current.vault = true;
+  }, []);
+
+  const loadProjects = useCallback(async (force = false) => {
+    if (loaded.current.projects && !force) return;
+    const [list, jobList] = await Promise.all([koraApi.listProjects(), koraApi.listJobs()]);
+    setProjects(list);
+    setJobs(jobList);
+    loaded.current.projects = true;
+  }, []);
+
+  const loadSettingsData = useCallback(async (force = false) => {
+    if (loaded.current.settings && !force) return;
+    const [providerList, budgetData] = await Promise.all([
       koraApi.listProviders(),
       koraApi.getBudget(),
     ]);
-    setAssets(vAssets);
-    setProjects(pList);
-    setVoices(vList);
-    setJobs(jList);
-    setProviders(provList);
-    setBudget(bData);
+    setProviders(providerList);
+    setBudget(budgetData);
+    loaded.current.settings = true;
   }, []);
 
+  // Solo i dati della sezione corrente (Essential)
   useEffect(() => {
-    refreshAll().catch(() => {});
-  }, [refreshAll]);
-
-  // Poll active running job automatically until completion/error
-  const activeJob = jobs.find((j) => j.id === activeJobId) || null;
-  useEffect(() => {
-    if (!activeJob) return;
-    const isTerminal =
-      activeJob.state === "Completato" ||
-      activeJob.state === "Errore" ||
-      activeJob.state === "Richiede intervento";
-    if (isTerminal) return;
-
-    const timer = setInterval(() => {
-      refreshAll().catch(() => {});
-    }, 1500);
-    return () => clearInterval(timer);
-  }, [activeJob, refreshAll]);
+    let cancelled = false;
+    (async () => {
+      try {
+        if (nav === "studio") await loadStudio();
+        if (nav === "vault") await loadVault();
+        if (nav === "projects") await loadProjects();
+        if (nav === "settings") {
+          await loadSettingsData();
+          if (settingsTab === "providers") await loadSettingsData();
+        }
+      } catch (err) {
+        if (!cancelled) setBanner((err as Error).message);
+      } finally {
+        if (!cancelled) setBootReady(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [nav, settingsTab, loadStudio, loadVault, loadProjects, loadSettingsData]);
 
   const activeProject = projects.find((p) => p.id === activeProjectId) || projects[0] || null;
+  const activeJob = jobs.find((j) => j.id === activeJobId) || null;
 
-  const handleStartProduction = async (
+  // Durante il rendering: SOLO lo stato del job attivo, nessun refresh globale.
+  useEffect(() => {
+    if (jobTimer.current) {
+      clearInterval(jobTimer.current);
+      jobTimer.current = null;
+    }
+    if (!activeJobId) return;
+    let stopped = false;
+    const poll = async () => {
+      try {
+        const job = await koraApi.getJob(activeJobId);
+        if (stopped) return;
+        setJobs((prev) => prev.map((j) => (j.id === job.id ? job : j)));
+        if (TERMINAL_JOB_STATES.includes(job.state)) {
+          if (jobTimer.current) {
+            clearInterval(jobTimer.current);
+            jobTimer.current = null;
+          }
+          // a fine job aggiorno solo i progetti (non provider, budget, voci o archivio)
+          const list = await koraApi.listProjects();
+          if (!stopped) setProjects(list);
+        }
+      } catch {
+        // un errore di polling non blocca l'interfaccia
+      }
+    };
+    void poll();
+    jobTimer.current = setInterval(poll, 1500);
+    return () => {
+      stopped = true;
+      if (jobTimer.current) {
+        clearInterval(jobTimer.current);
+        jobTimer.current = null;
+      }
+    };
+  }, [activeJobId]);
+
+  // ---------------------------------------------------------------- actions
+  const handleProjectReel = async (
     concept: CreativeConcept,
     theme: string,
     mode: string,
@@ -114,66 +184,92 @@ export default function KoraStudioPage() {
     destinationDir?: string | null
   ) => {
     const effectiveMode: ProductionMode = customizeFirst ? "GUIDATA" : prodMode;
-    const res = await koraApi.createProject({
-      title: concept.title,
-      theme,
-      mode,
-      preset: concept.preset,
-      production_mode: effectiveMode,
+    const request: Partial<CreativeConcept["creative_request"]> = {
+      ...(concept.creative_request || {}),
+      theme: theme || concept.title,
+      objective: concept.objective || "",
+      duration_sec: concept.duration_sec,
       voice_id: voiceId,
-      target_duration_sec: concept.duration_sec,
-      concept,
-      caption_style: captionStyle || hyperframes?.caption_style,
-      hyperframes,
-      creative_request: concept.creative_request,
-      asset_ids: assetIds && assetIds.length > 0 ? assetIds : undefined,
-      destination_dir: destinationDir || undefined,
-      // 2.8 flow: Progetta Reel → anteprima cinematografica → Realizza Reel
-      auto_start: false,
-    });
-    setActiveProjectId(res.project.id);
-    setSection("preview");
-    await refreshAll();
+      asset_ids: assetIds && assetIds.length > 0 ? assetIds : concept.available_asset_ids.slice(0, 3),
+      media_selection: "vault_auto",
+      generation_policy: "authentic_first",
+    };
+    const proposal = (concept.creative_request as Record<string, unknown> | undefined)?.lite_proposal;
+    setBanner(null);
+    try {
+      const res = await koraApi.projectReel({
+        request,
+        proposal: proposal || null,
+        create_project: true,
+        mode: mode || "suggest",
+        production_mode: effectiveMode,
+        hyperframes,
+        caption_style: captionStyle || hyperframes?.caption_style,
+        destination_dir: destinationDir || null,
+      });
+      if (res.project) {
+        setActiveProjectId(res.project.id);
+        setProjects((prev) => [res.project as ProjectRecord, ...prev.filter((p) => p.id !== res.project?.id)]);
+      }
+      if (res.design.fallback_reason) setBanner(res.design.fallback_reason);
+      setNav("studio");
+      setStudioPanel("preview");
+    } catch (err) {
+      setBanner(`Progettazione non riuscita: ${(err as Error).message}`);
+      throw err;
+    }
   };
 
   const handleProduceExisting = async (projectId: string) => {
     const res = await koraApi.produceProject(projectId);
     setActiveProjectId(projectId);
     setActiveJobId(res.job.id);
-    setSection("production");
-    await refreshAll();
+    setStudioPanel("production");
+    setNav("studio");
   };
+
+  const goProjectTab = (id: string, tab?: "creative" | "production" | "preview" | "export") => {
+    setActiveProjectId(id);
+    setNav("studio");
+    if (tab === "preview" || tab === "export") setStudioPanel(tab);
+    else if (tab === "production") {
+      setStudioPanel("production");
+    } else setStudioPanel("creative");
+  };
+
+  // ---------------------------------------------------------------- render
+  const sidebarBadge = activeJob && !TERMINAL_JOB_STATES.includes(activeJob.state) ? activeJob.state : null;
 
   return (
     <div className="min-h-screen flex flex-col lg:flex-row bg-[#FAF7F2]">
-      {/* Sidebar Desktop + Header Mobile */}
       <aside className="border-b border-[#DDD4C4] bg-white/90 px-4 py-4 lg:w-64 lg:shrink-0 lg:border-b-0 lg:border-r lg:py-8 lg:px-5">
         <div className="flex items-center justify-between lg:block">
           <div>
             <div className="font-editorial text-xl tracking-wide text-[#1D1B18]">KORA STUDIO</div>
             <div className="text-[10px] uppercase tracking-[0.2em] text-[#9A8052]">
-              The Art of Being · Policoro
+              Essential · The Art of Being · Policoro
             </div>
           </div>
-          {activeJob &&
-            activeJob.state !== "Completato" &&
-            activeJob.state !== "Errore" && (
-              <span className="lg:mt-3 inline-flex items-center gap-1.5 rounded-full bg-[#224C66]/10 px-2.5 py-1 text-[11px] font-medium text-[#224C66]">
-                <span className="h-2 w-2 rounded-full bg-[#224C66] animate-pulse" />
-                {activeJob.state}
-              </span>
-            )}
+          {sidebarBadge && (
+            <span className="lg:mt-3 inline-flex items-center gap-1.5 rounded-full bg-[#224C66]/10 px-2.5 py-1 text-[11px] font-medium text-[#224C66]">
+              <span className="h-2 w-2 rounded-full bg-[#224C66] animate-pulse" />
+              {sidebarBadge}
+            </span>
+          )}
         </div>
 
         <nav className="mt-4 flex gap-1.5 overflow-x-auto pb-1 lg:mt-8 lg:flex-col lg:overflow-visible">
           {NAV_ITEMS.map((item) => {
             const Icon = item.icon;
-            const active = section === item.id;
+            const active = nav === item.id;
             return (
               <button
                 key={item.id}
                 type="button"
-                onClick={() => setSection(item.id)}
+                onClick={() => {
+                  setNav(item.id);
+                  if (item.id === "studio") setStudioPanel("home");
+                }}
                 className={`flex shrink-0 items-center gap-2.5 rounded-xl px-3.5 py-2.5 text-xs font-medium transition ${
                   active
                     ? "bg-[#1D1B18] text-[#FAF7F2]"
@@ -187,128 +283,186 @@ export default function KoraStudioPage() {
           })}
         </nav>
 
-        {activeProject && (
-          <div className="mt-8 hidden rounded-2xl border border-[#EDE6D9] bg-[#FAF7F2] p-3.5 lg:block">
-            <div className="text-[10px] uppercase tracking-wider text-[#9A8052]">Progetto attivo</div>
-            <div className="mt-1 truncate text-xs font-medium text-[#1D1B18]">
-              {activeProject.title}
+        <div className="mt-6 hidden rounded-2xl border border-[#EDE6D9] bg-[#FAF7F2] p-3.5 text-[11px] text-[#6C6459] lg:block">
+          <div className="text-[10px] uppercase tracking-wider text-[#9A8052]">Motore creativo</div>
+          <div className="mt-1 truncate text-xs font-medium text-[#1D1B18]">
+            {engineSummary?.active_provider || "—"}
+          </div>
+          <div className="mt-0.5 text-[11px] text-[#6C6459]">
+            {engineSummary?.state || "non verificato"}
+            {engineSummary?.model ? ` · ${engineSummary.model}` : ""}
+          </div>
+          <div className="mt-2 border-t border-[#EDE6D9] pt-2">
+            Archivio: <strong>{vaultSummary.total}</strong> elementi
+          </div>
+          {budget && (
+            <div className="mt-1">
+              Spesa mese: {budget.actual_month_eur.toFixed(2)} / {budget.monthly_cap_eur.toFixed(0)} €
             </div>
+          )}
+        </div>
+
+        {activeProject && nav !== "studio" && (
+          <div className="mt-3 hidden rounded-2xl border border-[#EDE6D9] bg-white p-3.5 lg:block">
+            <div className="text-[10px] uppercase tracking-wider text-[#9A8052]">Progetto attivo</div>
+            <div className="mt-1 truncate text-xs font-medium text-[#1D1B18]">{activeProject.title}</div>
             <div className="mt-0.5 text-[11px] text-[#6C6459]">
               {activeProject.status} · v{activeProject.current_version}
             </div>
           </div>
         )}
-
-        {budget && (
-          <div className="mt-3 hidden rounded-2xl border border-[#EDE6D9] bg-white p-3.5 text-[11px] text-[#6C6459] lg:block">
-            <div className="flex items-center justify-between">
-              <span>Motore locale</span>
-              <span className="font-medium text-emerald-700">Operativo</span>
-            </div>
-            <div className="mt-1 flex items-center justify-between">
-              <span>Spesa mese</span>
-              <span className="font-medium text-[#1D1B18]">
-                {budget.actual_month_eur.toFixed(2)} / {budget.monthly_cap_eur.toFixed(0)} €
-              </span>
-            </div>
-            <div className="mt-1 flex items-center justify-between">
-              <span>Budget pagam.</span>
-              <span
-                className={`font-medium ${
-                  budget.paid_budget_eur > 0 ? "text-emerald-700" : "text-amber-700"
-                }`}
-              >
-                {budget.paid_budget_eur.toFixed(2)} €
-              </span>
-            </div>
-          </div>
-        )}
       </aside>
 
-      {/* Main Content */}
-      <main className="flex-1 p-5 md:p-8 lg:p-10 overflow-y-auto">
-        {section === "home" && (
-          <HomeHub
-            voices={voices}
-            recentProjects={projects}
-            onConceptsReady={() => {}}
-            onStartProduction={handleStartProduction}
-            onOpenProject={(id) => {
-              setActiveProjectId(id);
-              const pr = projects.find((x) => x.id === id);
-              setSection(pr?.output_video_path ? "preview" : "creative");
-            }}
-            onVaultUpdated={() => refreshAll()}
-          />
+      <main className="flex-1 overflow-y-auto p-5 md:p-8 lg:p-10">
+        {banner && (
+          <div className="mb-4 flex items-start justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-900">
+            <span className="flex items-start gap-2">
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>{banner}</span>
+            </span>
+            <button
+              type="button"
+              onClick={() => setBanner(null)}
+              className="rounded-lg border border-amber-300 px-2 py-0.5 text-[11px] hover:bg-amber-100"
+            >
+              Chiudi
+            </button>
+          </div>
         )}
 
-        {section === "projects" && (
+        {!bootReady && nav === "studio" && (
+          <div className="rounded-2xl border border-[#EDE6D9] bg-white p-6 text-sm text-[#6C6459]">
+            Caricamento Studio…
+          </div>
+        )}
+
+        {nav === "studio" && bootReady && (
+          <div className="space-y-4">
+            {studioPanel !== "home" && (
+              <button
+                type="button"
+                onClick={() => setStudioPanel("home")}
+                className="inline-flex items-center gap-1.5 text-xs font-medium text-[#224C66] hover:underline"
+              >
+                <ArrowLeft className="h-3.5 w-3.5" /> Torna a Studio
+              </button>
+            )}
+            {studioPanel === "home" && (
+              <HomeHub
+                voices={voices}
+                recentProjects={projects}
+                onConceptsReady={() => {}}
+                onStartProduction={handleProjectReel}
+                onOpenProject={(id) => {
+                  setActiveProjectId(id);
+                  const pr = projects.find((x) => x.id === id);
+                  setStudioPanel(pr?.output_video_path ? "preview" : "creative");
+                }}
+                onVaultUpdated={() => {
+                  loaded.current.vault = false;
+                  setBanner(null);
+                }}
+              />
+            )}
+            {studioPanel === "creative" && (
+              <CreativeStudioView
+                project={activeProject}
+                assets={assets.length ? assets : []}
+                voices={voices}
+                onUpdated={async () => {
+                  const list = await koraApi.listProjects();
+                  setProjects(list);
+                }}
+                onProduce={handleProduceExisting}
+              />
+            )}
+            {studioPanel === "preview" && (
+              <PreviewView
+                project={activeProject}
+                onRevisionStarted={(jobId) => {
+                  setActiveJobId(jobId);
+                  setStudioPanel("production");
+                }}
+                onRestored={async () => {
+                  const list = await koraApi.listProjects();
+                  setProjects(list);
+                }}
+                onGoExport={() => setStudioPanel("export")}
+                onProduce={(projectId) => void handleProduceExisting(projectId)}
+              />
+            )}
+            {studioPanel === "production" && (
+              <ProductionView
+                jobs={jobs}
+                activeJob={activeJob}
+                onRefresh={async () => {
+                  const jobList = await koraApi.listJobs();
+                  setJobs(jobList);
+                }}
+                onOpenPreview={(pid) => {
+                  setActiveProjectId(pid);
+                  setStudioPanel("preview");
+                }}
+              />
+            )}
+            {studioPanel === "export" && (
+              <ExportView
+                project={activeProject}
+                onRefresh={async () => {
+                  const list = await koraApi.listProjects();
+                  setProjects(list);
+                }}
+              />
+            )}
+          </div>
+        )}
+
+        {nav === "vault" && <MediaVaultView assets={assets} onRefresh={() => loadVault(true)} />}
+
+        {nav === "projects" && (
           <ProjectsView
             projects={projects}
             activeProjectId={activeProject?.id || null}
-            onSelectProject={(id, tab) => {
-              setActiveProjectId(id);
-              if (tab) setSection(tab);
-            }}
-            onRefresh={() => refreshAll()}
+            onSelectProject={goProjectTab}
+            onRefresh={() => loadProjects(true)}
           />
         )}
 
-        {section === "vault" && (
-          <MediaVaultView assets={assets} onRefresh={() => refreshAll()} />
-        )}
-
-        {section === "creative" && (
-          <CreativeStudioView
-            project={activeProject}
-            assets={assets}
-            voices={voices}
-            onUpdated={() => refreshAll()}
-            onProduce={handleProduceExisting}
-          />
-        )}
-
-        {section === "production" && (
-          <ProductionView
-            jobs={jobs}
-            activeJob={activeJob}
-            onRefresh={() => refreshAll()}
-            onOpenPreview={(pid) => {
-              setActiveProjectId(pid);
-              setSection("preview");
-            }}
-          />
-        )}
-
-        {section === "preview" && (
-          <PreviewView
-            project={activeProject}
-            onRevisionStarted={(jobId) => {
-              setActiveJobId(jobId);
-              setSection("production");
-              refreshAll();
-            }}
-            onRestored={() => refreshAll()}
-            onGoExport={() => setSection("export")}
-            onProduce={(projectId) => void handleProduceExisting(projectId)}
-          />
-        )}
-
-        {section === "providers" && (
-          <ProvidersView
-            providers={providers}
-            budget={budget}
-            voices={voices}
-            onRefresh={() => refreshAll()}
-          />
-        )}
-
-        {section === "engine" && <AIEngineView />}
-
-        {section === "brand" && <BrandProfileView />}
-
-        {section === "export" && (
-          <ExportView project={activeProject} onRefresh={() => refreshAll()} />
+        {nav === "settings" && (
+          <div className="space-y-5">
+            <div className="flex flex-wrap gap-2">
+              {(
+                [
+                  ["engine", "Motore AI"],
+                  ["providers", "Provider & budget"],
+                  ["brand", "Profilo KORA"],
+                ] as [SettingsTab, string][]
+              ).map(([id, label]) => (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => setSettingsTab(id)}
+                  className={`rounded-xl px-3.5 py-2 text-xs font-medium transition ${
+                    settingsTab === id
+                      ? "bg-[#1D1B18] text-[#FAF7F2]"
+                      : "border border-[#DDD4C4] bg-white text-[#4A443C] hover:border-[#9A8052]"
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            {settingsTab === "engine" && <AIEngineView />}
+            {settingsTab === "providers" && (
+              <ProvidersView
+                providers={providers}
+                budget={budget}
+                voices={voices}
+                onRefresh={() => loadSettingsData(true)}
+              />
+            )}
+            {settingsTab === "brand" && <BrandProfileView />}
+          </div>
         )}
       </main>
     </div>

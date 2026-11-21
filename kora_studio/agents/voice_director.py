@@ -17,7 +17,9 @@ from typing import Any, Optional
 
 import requests
 
-from kora_studio.config import VOICES_PIPER_DIR
+import hashlib
+
+from kora_studio.config import CACHE_DIR, VOICES_PIPER_DIR
 from kora_studio.db.models import StoryboardScene
 from kora_studio.media_tools import probe_media, run_ffmpeg
 from kora_studio.providers.registry import ProviderManager
@@ -779,8 +781,18 @@ class VoiceDirector:
                     else primary_vid
                 )
                 ok_seg: Optional[Path] = None
+                # Step 10 — ogni segmento è generato UNA volta: se testo e voce non
+                # cambiano, si riusa il WAV in cache anche quando la timeline cambia.
+                seg_key = hashlib.sha256(
+                    f"{scene_vid}|{sc.spoken_text.strip()}".encode("utf-8")
+                ).hexdigest()[:32]
+                seg_cached = CACHE_DIR / "voice_segments" / f"{seg_key}.wav"
+                if seg_cached.is_file() and seg_cached.stat().st_size > 1024:
+                    ok_seg = seg_cached
                 try:
-                    if source_used == "elevenlabs_api":
+                    if ok_seg is not None:
+                        pass
+                    elif source_used == "elevenlabs_api":
                         ok_seg = self._synthesize_elevenlabs(scene_vid, sc.spoken_text.strip(), seg_mp3)
                     elif source_used == "openai_tts":
                         ok_seg = self._synthesize_openai_tts(scene_vid, sc.spoken_text.strip(), seg_mp3)
@@ -790,6 +802,12 @@ class VoiceDirector:
                         ok_seg = self._synthesize_edge_tts(scene_vid, sc.spoken_text.strip(), seg_mp3)
                 except Exception:
                     ok_seg = None
+                if ok_seg and ok_seg.is_file() and ok_seg != seg_cached:
+                    try:
+                        seg_cached.parent.mkdir(parents=True, exist_ok=True)
+                        self.normalize_audio(ok_seg, seg_cached)
+                    except Exception:
+                        pass
                 if ok_seg and ok_seg.is_file():
                     s_probe = probe_media(ok_seg)
                     s_dur = float(s_probe["format"].get("duration", 0.0) or 0.0)

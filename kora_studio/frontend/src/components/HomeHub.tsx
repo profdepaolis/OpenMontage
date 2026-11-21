@@ -299,6 +299,11 @@ export function HomeHub({
       if (res.recommendation) setRecommendation(res.recommendation);
       const concept = res.concepts[0];
       if (concept) {
+        // Essential: la proposta scelta viaggia con il concept fino a "Progetta Reel"
+        concept.creative_request = {
+          ...(concept.creative_request || {}),
+          lite_proposal: proposal,
+        } as unknown as CreativeConcept["creative_request"];
         selectConceptAndPrefill(concept);
         onConceptsReady(res.concepts, proposal.title, "suggest");
       }
