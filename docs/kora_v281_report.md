@@ -162,7 +162,7 @@ Suite completa (`./run_kora_tests.sh`): **98 passed, 3 skipped in 523,06 s** (10
 ## 6. Come aggiornare (comando unico)
 
 ```bash
-curl -L --fail --retry 3 -o /tmp/kora.zip "https://drive.usercontent.google.com/download?id=<ZIP_ID>&export=download&confirm=t" \
+curl -L --fail --retry 3 -o /tmp/kora.zip "https://drive.usercontent.google.com/download?id=1H2e2N057iNYtnXbX76lGV9v0tt29ahkF&export=download&confirm=t" \
   && unzip -tq /tmp/kora.zip \
   && cp -R kora_studio "/tmp/kora_studio_backup_$(date +%Y%m%d-%H%M)" \
   && unzip -oq /tmp/kora.zip -d . && rm -f /tmp/kora.zip \
