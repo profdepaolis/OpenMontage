@@ -45,6 +45,15 @@ terminale (`./diagnostica_motori.sh`).
 | Qwen3-TTS | **non collaudato** | modello e runtime assenti |
 | Brando/Tiziana con voce sintetica sostitutiva | **mai** | solo registrazione autentica o voce ElevenLabs autorizzata |
 
+## Aggiornamento 3.6.3
+
+| Funzione | Stato dopo la 3.6.3 | Perché |
+|---|---|---|
+| Limite di tempo del montaggio proporzionale ai frame | collaudato (test + misura 625 frame) | 5 test dedicati |
+| Errore italiano quando il tempo non basta | collaudato (timeout forzato) | test con limite a 1 s |
+| Render di 718 frame su un Mac Intel | **non collaudato** | questo collaudo gira su Linux; il margine è calcolato, non misurato su macOS |
+| Preset `veryfast` e peso dei file | collaudato sul funzionamento, non sul confronto percettivo | nessun test visivo comparativo |
+
 ## Elenco
 
 | Funzione | Stato | Perché | Cosa serve |

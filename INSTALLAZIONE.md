@@ -1,4 +1,4 @@
-# Installazione tecnica — KORA STUDIO LIGHT 3.6.1
+# Installazione tecnica — KORA STUDIO LIGHT 3.6.3
 
 Documento per chi vuole capire cosa fa il doppio clic, o riparare un guasto.
 Per l'uso normale basta `LEGGIMI.txt`.
@@ -60,6 +60,23 @@ versione 3.6.1, `verifica.sh` 36 OK · 0 KO · 1 avviso, server avviato e rispon
 diagnostica con esito onesto, stop del server via `pgrep` quando `lsof` non c'è,
 download fallito gestito con messaggio e rimedio, `--solo-verifica` senza modifiche.
 
+
+## 1c. Rendering lento o «timed out» (3.6.3)
+
+Dal 3.6.3 il limite di tempo del montaggio è proporzionale ai frame
+(`max(600 s, frame × 1.6)`) e i sottotitoli vengono decodificati solo per il
+loro intervallo. Se una macchina resta comunque troppo lenta:
+
+```bash
+KORA_RENDER_TIMEOUT_SEC=2400 KORA_X264_PRESET=ultrafast ./start.sh
+```
+
+- `KORA_RENDER_TIMEOUT_SEC` — secondi massimi per il solo montaggio (default automatico);
+- `KORA_X264_PRESET` — `veryfast` (default), `superfast`, `ultrafast`, `fast`, `medium`
+  (più lento = file più piccoli a parità di qualità).
+
+Dopo un errore di rendering le scene restano in cache: **Riprova** ripete solo il
+montaggio. Dettagli: `docs/KORA_3.6.3_RENDER_ROBUSTO.md`.
 
 ## 2. Cosa fa `setup.sh`
 
@@ -123,7 +140,7 @@ cancella anche quella solo se vuoi perdere progetti e materiali importati.
 ## 7. Prove eseguite su questa build
 
 - `./setup.sh` in cartella pulita → completato senza errori;
-- `./verifica.sh` → **37 OK · 0 KO · 0 avvisi** (server fermo);
+- `./verifica.sh` → 38 controlli (37 + diagnostica motori 3.6.2), esito nel report;
 - `pytest tests/kora_studio` → suite completa verde, incluso il nuovo
   `test_v36_model_manager.py` (19 verifiche) e `test_v36_consolidation.py`;
 - produzione completa di Reel 20 s (500 frame) e 30 s (750 frame), QC reale

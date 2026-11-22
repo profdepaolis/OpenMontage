@@ -1032,6 +1032,20 @@ class KoraDirector:
             self._update_job(job_id, JobState.RENDERING, "Rendering MP4 1080x1920 25fps", completed)
             rendered_mp4 = project_dir / f"{project_id}_preview.mp4"
             prefs = proj.get("preferences") or {}
+            total_frames = sum(sc.duration_frames for sc in scenes)
+            try:
+                from kora_studio.agents.cinematic_editor import render_timeout_seconds
+
+                self.log_job(
+                    job_id,
+                    "INFO",
+                    "CinematicEditor",
+                    f"Montaggio: {total_frames} frame a {proj['fps']} fps "
+                    f"(limite {render_timeout_seconds(total_frames)} s, x264 veryfast). "
+                    "Le scene sono già in cache: un nuovo tentativo ripete solo il montaggio.",
+                )
+            except Exception:
+                pass
             caption_style = prefs.get("caption_style")
             if isinstance(caption_style, dict):
                 caption_style = caption_style.get("preset")
@@ -1052,7 +1066,12 @@ class KoraDirector:
                 caption_overrides=caption_overrides,
             )
             completed.append("Rendering")
-            self.log_job(job_id, "INFO", "CinematicEditor", f"Render completato: {rendered_mp4.name}")
+            self.log_job(
+                job_id,
+                "INFO",
+                "CinematicEditor",
+                f"Render completato in {edit_res.get('render_seconds', 0)} s: {rendered_mp4.name}",
+            )
             check_cancelled()
 
             # 7. Controllo qualità & Export Bundle

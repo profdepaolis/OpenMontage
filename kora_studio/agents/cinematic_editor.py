@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import subprocess
 import textwrap
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -25,6 +28,29 @@ from kora_studio.config import ASSETS_KORA_DIR, DEFAULT_FPS, DEFAULT_HEIGHT, DEF
 from kora_studio.db.models import EditingPreset, StoryboardScene
 from kora_studio.media_tools import check_remotion_runtime, run_ffmpeg
 from kora_studio.vault.media_vault import MediaVault
+
+# --------------------------------------------------------------- 3.6.2 velocità
+# Il render deve adattarsi alla macchina, non a un numero fisso: su un Mac Intel
+# 718 frame a 1080x1920 con otto sottotitoli non stanno in 240 secondi.
+X264_PRESET = os.environ.get("KORA_X264_PRESET", "veryfast")
+
+
+def render_timeout_seconds(
+    frames: int, *, per_frame: float = 1.6, minimum: float = 600.0
+) -> int:
+    """Tempo massimo concesso al montaggio, proporzionale al lavoro richiesto.
+
+    `KORA_RENDER_TIMEOUT_SEC` (secondi) ha la precedenza: serve a chi ha una
+    macchina molto lenta o vuole un limite più stretto.
+    """
+    override = os.environ.get("KORA_RENDER_TIMEOUT_SEC")
+    if override:
+        try:
+            return max(60, int(float(override)))
+        except (TypeError, ValueError):
+            pass
+    return int(max(minimum, round(max(1, frames) * per_frame)))
+
 
 PRESET_DEFINITIONS: dict[str, dict[str, Any]] = {
     EditingPreset.CINEMATIC_IDENTITY.value: {
@@ -303,6 +329,9 @@ class CinematicEditor:
             return cached_mp4, {"cache_hit": True, "scene_number": scene.scene_number}
 
         dur_sec = scene.duration_frames / fps
+        # una scena corta su un Mac lento può superare i 2 minuti: il limite cresce
+        # con la durata della scena invece di essere un numero fisso
+        scene_timeout = max(180, int(round(scene.duration_frames * 4)))
         src_path = Path(asset["working_path"] or asset["original_path"])
 
         if scene.is_outro:
@@ -328,14 +357,14 @@ class CinematicEditor:
                     "-c:v",
                     "libx264",
                     "-preset",
-                    "medium",
+                    X264_PRESET,
                     "-crf",
                     str(crf),
                     "-pix_fmt",
                     "yuv420p",
                     str(cached_mp4),
                 ],
-                timeout=120,
+                timeout=scene_timeout,
             )
             return cached_mp4, {"cache_hit": False, "scene_number": scene.scene_number, "type": "outro"}
 
@@ -371,14 +400,14 @@ class CinematicEditor:
                     "-c:v",
                     "libx264",
                     "-preset",
-                    "medium",
+                    X264_PRESET,
                     "-crf",
                     str(crf),
                     "-pix_fmt",
                     "yuv420p",
                     str(cached_mp4),
                 ],
-                timeout=180,
+                timeout=scene_timeout,
             )
             return cached_mp4, {
             "cache_hit": False,
@@ -429,14 +458,14 @@ class CinematicEditor:
                 "-c:v",
                 "libx264",
                 "-preset",
-                "medium",
+                X264_PRESET,
                 "-crf",
                 "18",
                 "-pix_fmt",
                 "yuv420p",
                 str(cached_mp4),
             ],
-            timeout=120,
+            timeout=scene_timeout,
         )
         return cached_mp4, {"cache_hit": False, "scene_number": scene.scene_number, "grade": grade["adjustments"]}
 
@@ -525,11 +554,12 @@ class CinematicEditor:
         if hf_cfg.get("title_card_intro", "none") != "none" and scenes and not scenes[0].is_outro:
             tc_png = sub_dir / "title_card_intro.png"
             render_title_card_png(title, tc_png, style=hf_cfg["title_card_intro"])
-            inputs.extend(["-loop", "1", "-t", f"{expected_duration:.4f}", "-i", str(tc_png)])
             tc_en = max(1.5, min(2.9, scenes[0].end_sec - 0.15))
-            filter_parts.append(
-                f"{cur_v}[{next_idx}:v]overlay=0:0:enable='between(t,0.25,{tc_en:.3f})'[vtc]"
+            inputs.extend(
+                ["-framerate", str(fps), "-loop", "1", "-t", f"{tc_en - 0.20:.4f}", "-i", str(tc_png)]
             )
+            filter_parts.append(f"[{next_idx}:v]setpts=PTS+0.25/TB,format=rgba[vtcsrc]")
+            filter_parts.append(f"{cur_v}[vtcsrc]overlay=0:0:eof_action=pass:repeatlast=0[vtc]")
             cur_v = "[vtc]"
             next_idx += 1
 
@@ -556,12 +586,22 @@ class CinematicEditor:
                     overrides={**(caption_overrides or {}), **(sc.caption_overrides or {})} or None,
                 )
                 for seg in segs:
-                    inputs.extend(["-loop", "1", "-t", f"{expected_duration:.4f}", "-i", str(seg["png"])])
-                    out_lbl = f"[vsub_{seg_counter}]"
                     st = float(seg["start_sec"])
                     en = float(seg["end_sec"])
+                    seg_dur = max(0.12, en - st)
+                    # Si decodifica SOLO la durata del sottotitolo e lo si sposta nel
+                    # tempo: prima ogni PNG veniva espanso su tutto il reel (28 s x 8
+                    # sottotitoli) e su un Mac non bastavano 4 minuti.
+                    inputs.extend(
+                        ["-framerate", str(fps), "-loop", "1", "-t", f"{seg_dur:.4f}", "-i", str(seg["png"])]
+                    )
+                    out_lbl = f"[vsub_{seg_counter}]"
+                    src_lbl = f"[vsubsrc_{seg_counter}]"
                     filter_parts.append(
-                        f"{cur_v}[{next_idx}:v]overlay=0:0:enable='between(t,{st:.3f},{en:.3f})'{out_lbl}"
+                        f"[{next_idx}:v]setpts=PTS+{st:.4f}/TB,format=rgba{src_lbl}"
+                    )
+                    filter_parts.append(
+                        f"{cur_v}{src_lbl}overlay=0:0:eof_action=pass:repeatlast=0{out_lbl}"
                     )
                     cur_v = out_lbl
                     next_idx += 1
@@ -601,7 +641,7 @@ class CinematicEditor:
             "-profile:v",
             "high",
             "-preset",
-            "medium",
+            X264_PRESET,
             "-crf",
             "19",
             "-pix_fmt",
@@ -616,7 +656,18 @@ class CinematicEditor:
             "+faststart",
             str(output_mp4),
         ]
-        run_ffmpeg(cmd, timeout=240)
+        render_started = time.perf_counter()
+        montaggio_timeout = render_timeout_seconds(total_frames or expected_duration * fps)
+        try:
+            run_ffmpeg(cmd, timeout=montaggio_timeout)
+        except subprocess.TimeoutExpired as exc:
+            raise ValueError(
+                f"Montaggio troppo lento su questa macchina: superato il limite di "
+                f"{montaggio_timeout} s per {int(total_frames or 0)} frame. "
+                "Le scene sono già in cache: premi «Riprova» per completare solo il montaggio. "
+                "Puoi anche alzare il limite con KORA_RENDER_TIMEOUT_SEC=1800 e riavviare KORA."
+            ) from exc
+        render_seconds = round(time.perf_counter() - render_started, 2)
 
         # Emit Remotion-compatible spec & TSX descriptor for interoperability
         remotion_spec_path = project_dir / "remotion_composition.json"
@@ -637,6 +688,10 @@ class CinematicEditor:
         )
 
         return {
+            "render_engine": "ffmpeg_deterministic_25fps",
+            "render_seconds": render_seconds,
+            "render_timeout_sec": montaggio_timeout,
+            "x264_preset": X264_PRESET,
             "output_mp4": str(output_mp4),
             "total_frames": total_frames,
             "expected_duration_sec": round(expected_duration, 3),
@@ -646,7 +701,6 @@ class CinematicEditor:
             "caption_engine": CAPTION_STYLES.get(active_caption_style, {}).get("engine", "kora_native"),
             "hyperframes_config": hf_cfg,
             "hyperframes_workspace": hyperframes_ws,
-            "render_engine": "ffmpeg_deterministic_25fps",
         }
 
 
@@ -897,11 +951,16 @@ class CinematicPreviewRenderer:
                 height=PREVIEW_HEIGHT,
                 title=scene.title_text or "",
             )
-            inputs.extend(["-loop", "1", "-t", f"{total_sec:.3f}", "-i", str(png)])
-            out = f"[vsub_{next_idx}]"
-            filter_parts.append(
-                f"{cur}[{next_idx}:v]overlay=0:0:enable='between(t,{scene.start_sec:.3f},{scene.end_sec:.3f})'{out}"
+            seg_dur = max(0.12, float(scene.end_sec) - float(scene.start_sec))
+            inputs.extend(
+                ["-framerate", str(fps), "-loop", "1", "-t", f"{seg_dur:.4f}", "-i", str(png)]
             )
+            out = f"[vsub_{next_idx}]"
+            src = f"[vsubsrc_{next_idx}]"
+            filter_parts.append(
+                f"[{next_idx}:v]setpts=PTS+{float(scene.start_sec):.4f}/TB,format=rgba{src}"
+            )
+            filter_parts.append(f"{cur}{src}overlay=0:0:eof_action=pass:repeatlast=0{out}")
             cur = out
             next_idx += 1
         filter_parts.append(f"{cur}format=yuv420p[vfinal]")
@@ -945,7 +1004,7 @@ class CinematicPreviewRenderer:
                 "+faststart",
                 str(preview_mp4),
             ],
-            timeout=600,
+            timeout=render_timeout_seconds(total_frames, per_frame=1.2, minimum=300.0),
         )
         manifest = {
             "project_id": project_id,

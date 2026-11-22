@@ -1,5 +1,8 @@
 # KORA STUDIO 3.6.2 — Restauro funzionale e audiovisivo
 
+> **Aggiornamento 3.6.3** — il montaggio finale non ha più un limite fisso di 240 s:
+> vedi `docs/KORA_3.6.3_RENDER_ROBUSTO.md`.
+
 **Base:** 3.6.1 (commit `56ea9ce`) + aggiornatore `aggiorna_kora.sh` (`b6f0729`)
 **Rilascio:** 3.6.2 — 22 novembre 2026
 **Marchio:** KORA STUDIO — *The Art of Being* · Policoro
@@ -228,19 +231,15 @@ Suite completa: vedi `docs/KORA_3.6.2_QA.md` (esito registrato dopo l'esecuzione
 L'aggiornatore è lo stesso (`aggiorna_kora.sh`), con il pacchetto 3.6.2:
 
 ```bash
-curl -fsSL "https://drive.google.com/uc?export=download&id=1rC7_h2xNKf6n-1aHeRgzFHYF-8bqOIIq" -o /tmp/aggiorna_kora.sh && bash /tmp/aggiorna_kora.sh
+# dalla cartella dove hai scaricato aggiorna_kora.sh e il pacchetto
+bash aggiorna_kora.sh --da-zip ~/Downloads/KORA_Studio_Light_3.6.x_installer.zip
 ```
 
-Se il pacchetto l'hai già scaricato a mano:
+Lo script e il pacchetto si scaricano dal link della release (consegna della
+versione): l'ID di Drive cambia a ogni rilascio, quindi non è scritto qui dentro.
 
-```bash
-curl -fsSL "https://drive.google.com/uc?export=download&id=1rC7_h2xNKf6n-1aHeRgzFHYF-8bqOIIq" -o /tmp/aggiorna_kora.sh \
-  && bash /tmp/aggiorna_kora.sh --da-zip ~/Downloads/KORA_Studio_Light_3.6.2_installer.zip
-```
-
-**Pacchetto 3.6.2:** `KORA_Studio_Light_3.6.2_installer.zip` —
-62 813 998 byte · md5 `a10a7c9aaf58d2d744c2bfe4b924c292` —
-<https://drive.google.com/file/d/1aHGOegELmKTVe1okKkymqdTfN5fS5Okw/view>
+Il comando senza argomenti (`bash aggiorna_kora.sh`) scarica da solo l'ultimo
+pacchetto indicato nello script.
 
 - backup del database **prima** di ogni modifica (cartella `kora_data/backups`)
 - `kora_data/` (database, Vault, progetti, export) non viene mai sostituita
