@@ -43,6 +43,7 @@ from kora_studio.ai_engine.models import (
     AUTH_LOCAL_NO_AUTH,
     AUTH_OAUTH_SUBSCRIPTION,
     AUTH_UNKNOWN,
+    BILLING_FREE_QUOTA,
     BILLING_LOCAL,
     BILLING_SUBSCRIPTION,
     BILLING_UNKNOWN,
@@ -445,6 +446,10 @@ class _CliAdapter(AIProviderAdapter):
         for model_id in model_ids:
             provider = provider_of(model_id, default=default_provider)
             billing, plan, auth_type = self._provider_billing(provider)
+            # 3.6.1 — il nome «-free» dichiara la fascia gratuita: un costo
+            # sconosciuto non deve bloccare i modelli che il provider offre gratis.
+            if billing == BILLING_UNKNOWN and str(model_id).lower().endswith("-free"):
+                billing = BILLING_FREE_QUOTA
             out.append(
                 _model_info(
                     model_id,

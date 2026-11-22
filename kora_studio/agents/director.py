@@ -79,6 +79,14 @@ class KoraDirector:
         from kora_studio.ai_engine.model_manager import ModelManager
 
         self.model_manager = ModelManager(self.db, self.ai_engine.adapter)
+        # 3.6.1 — il Model Manager è la fonte unica del modello creativo; la
+        # vecchia configurazione (DeepSeek) viene migrata una sola volta.
+        self.ai_engine.model_manager = self.model_manager
+        try:
+            self.model_manager.migrate_legacy(self.ai_engine)
+        except Exception:
+            # la migrazione non deve mai impedire l'avvio dell'applicazione
+            pass
         self.creative.brand_context = self.brand_context
         self.creative.attach_engine_manager(self.ai_engine)
         self.curator = MediaCurator(self.vault)

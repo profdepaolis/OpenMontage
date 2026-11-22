@@ -216,6 +216,12 @@ export function CreativeEngineModels() {
             </span>
           </div>
         )}
+        {config?.migration?.detail && (
+          <div className="mt-3 rounded-xl border border-[#E4D3B4] bg-[#FBF4E6] px-3 py-2 text-[11px] text-[#7A5C2E]">
+            <strong>Configurazione precedente migrata.</strong> {config.migration.detail}
+            {config.migration.from ? ` — prima: «${config.migration.from}»` : ""}
+          </div>
+        )}
         {message && (
           <div
             className={`mt-3 rounded-xl px-3 py-2 text-[11px] ${

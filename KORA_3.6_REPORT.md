@@ -199,7 +199,7 @@ Modificati (principali):
 - `backup/backup_manager.py` — ripristino mappato e reversibile
 - `api/app.py` — endpoint modelli, backup restore, versione 3.6.0
 - `frontend/src/app/page.tsx`, `HomeHub.tsx`, `lib/api.ts` — tre passi, errori, pannello modelli
-- `verifica.sh` (36 controlli), `INSTALLAZIONE.md`, `LEGGIMI.txt`, `tools/pack_kora.py`
+- `verifica.sh` (37 controlli), `INSTALLAZIONE.md`, `LEGGIMI.txt`, `tools/pack_kora.py`
 
 Dipendenze: **nessuna aggiunta**, nessuna rimozione.
 
@@ -210,7 +210,7 @@ Dipendenze: **nessuna aggiunta**, nessuna rimozione.
 | Operazione | Tempo |
 |---|---|
 | Suite pytest completa (209 test + 3 skip) | 900,7 s |
-| `verifica.sh` (36 controlli) | ~5 s |
+| `verifica.sh` (37 controlli) | ~5 s |
 | Progettazione deterministica 20 s (8 scene) | < 1 s |
 | Produzione completa Reel 20 s (500 frame) | 168,4 s |
 | Progettazione deterministica 30 s (12 scene) | < 1 s |
@@ -270,3 +270,40 @@ non sono stati riprodotti qui e non vengono inventati.
    e autorizzazione di spesa.
 
 Nessuna funzione è stata marcata come «funzionante» senza una prova reale.
+
+---
+
+## 14. Aggiornamento 3.6.1 — ripristino della pipeline AI
+
+Dettaglio completo: `docs/KORA_3.6.1_RIPRISTINO_AI.md`.
+
+**Cause trovate (sei, tutte nel prodotto):** la scelta del modello era ancora
+delegata al piano automatico alimentato dalla configurazione legacy (DeepSeek
+v4.1); il primo tentativo aveva un limite nascosto di 15 s; con la politica
+«Chiedi conferma» ogni fallimento restituiva temi locali senza consenso;
+collegare Gemini cambiava il motore attivo; la configurazione del Model Manager
+letta in forma grezza non applicava i default; un modello esplicito assente
+dall'elenco del CLI veniva ignorato.
+
+**Correzioni:** migrazione automatica della configurazione legacy (DeepSeek →
+HY4, preferenze valide conservate, scelte esplicite mai sovrascritte, chiavi
+legacy archiviate e svuotate); `creative_entry()` che trasmette provider e model
+ID del Model Manager; timeout di ideazione intero (45 s) al tentativo
+autorizzato; politica «Chiedi conferma» con quattro scelte esplicite
+(Riprova / Usa Nemotron / Usa proposte locali / Annulla) e nessun deterministico
+automatico; Gemini resta estensione inattiva; diagnostica visibile in Home
+(provider, modello, modalità, ultimo test, ultima inferenza, fallback,
+migrazione).
+
+**Prove:** 11 nuovi test (`test_v361_ai_pipeline.py`) inclusi migrazione,
+Everyday→HY4 / Premium→MiMo, risposta valida accettata dopo 21 s, decisioni,
+Gemini e un end-to-end completo con CLI doppio di prova che produce un MP4
+1080×1920 · 25 fps · 20,00 s con QC superato. Suite completa: **220 passed,
+3 skipped in 977,27 s**. Prova sull'applicazione avviata:
+suggest in 310,7 ms con 4 proposte `ai_engine:opencode/hy4-flash-free`, design in
+una sola chiamata, 10 scene, 10 fotografie autentiche, job visibile in pipeline,
+QC 18 controlli (1 non applicabile), 285,8 s totali.
+
+**Cosa resta da fare sulla macchina dell'utente:** eseguire `./diagnostica_ai.sh`
+con OpenCode reale. Nell'ambiente di collaudo il CLI non esiste: nessuna misura
+di HY4/MiMo/Nemotron è dichiarata come reale in questo report.

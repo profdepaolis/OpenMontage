@@ -1,5 +1,5 @@
 ======================================================
-  KORA STUDIO LIGHT 3.6 — The Art of Being
+  KORA STUDIO LIGHT 3.6.1 — The Art of Being
   Guida per chi non vuole usare il terminale
 ======================================================
 
@@ -27,7 +27,7 @@ COME PARTIRE (3 passi)
    non identificato»:
       tasto destro sul file → Apri → poi di nuovo Apri.
 
-Cosa c'è di nuovo nella 3.6
+Cosa c'è di nuovo nella 3.6.1 (correzione della 3.6)
 ---------------------------
 - Tre passi chiari in home: 01 Suggerisci un tema → 02 Progetta Reel →
   03 Realizza Reel.
@@ -88,3 +88,12 @@ Nota sull'audio
 Se non hai collegato un servizio di voce (ElevenLabs, OpenAI o la voce
 offline), i Reel escono con musica, effetti e sottotitoli: è dichiarato
 nel report del Reel, non è un errore.
+
+Se il motore creativo non risponde («Suggerisci un tema» restituisce temi locali
+o va in timeout), esegui:
+
+    cd "Kora Studio Light"
+    ./diagnostica_ai.sh
+
+Lo script mostra provider e modello realmente attivi, esegue un test reale e
+indica cosa correggere. Dettagli: docs/KORA_3.6.1_RIPRISTINO_AI.md

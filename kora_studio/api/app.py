@@ -447,7 +447,7 @@ def create_app(db_path: Optional[Path] = None, auto_seed: bool = True) -> FastAP
         except Exception as exc:  # pragma: no cover
             _log_error(exc, "refresh_palette_from_vault")
 
-    app = FastAPI(title="KORA STUDIO", version="3.6.0")
+    app = FastAPI(title="KORA STUDIO", version="3.6.1")
 
     def _v35(fn: Any) -> Any:
         """Errori v3.5 tradotti in risposte parlanti: 404 scena, 400 richiesta, 409 blocco."""
@@ -682,6 +682,17 @@ def create_app(db_path: Optional[Path] = None, auto_seed: bool = True) -> FastAP
     def creative_suggest_lite_cancel(run_id: str) -> dict[str, Any]:
         return director.creative.ideation.cancel(run_id)
 
+    @app.post("/api/creative/suggest-lite/{run_id}/decide")
+    def creative_suggest_lite_decide(run_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        """Politica «Chiedi conferma»: la scelta è dell'utente, non del codice."""
+        try:
+            result = director.creative.ideation.decide(run_id, str(payload.get("action") or ""))
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Decisione non applicata: {exc}") from exc
+        if not result.get("ok"):
+            raise HTTPException(status_code=409, detail=result.get("detail") or "decisione non valida")
+        return result
+
     @app.get("/api/creative/suggest-lite/{run_id}/stream")
     def creative_suggest_lite_stream(run_id: str) -> StreamingResponse:
         """SSE con gli stage reali del backend (in alternativa al polling)."""
@@ -805,18 +816,48 @@ def create_app(db_path: Optional[Path] = None, auto_seed: bool = True) -> FastAP
             categories[str(asset.get("category") or "Altro")] = categories.get(
                 str(asset.get("category") or "Altro"), 0
             ) + 1
-        engine_summary = {"active_provider": "", "state": "non verificato", "model": "", "essential": True}
+        engine_summary = {
+            "active_provider": "",
+            "state": "non verificato",
+            "model": "",
+            "essential": True,
+            "mode": "",
+            "role": "",
+            "model_label": "",
+            "last_test": None,
+            "last_inference": None,
+            "fallback_model": "",
+            "migration": None,
+            "policy": "",
+            "detail": "",
+        }
         engine = director.ai_engine
         try:
+            # 3.6.1 — provider/modello mostrati = quelli realmente usati dal Model Manager
+            status = director.model_manager.status(engine)
+            engine_summary.update(
+                {
+                    "active_provider": status.get("provider") or "",
+                    "model": status.get("model") or "",
+                    "model_label": status.get("model_label") or "",
+                    "mode": status.get("mode") or "",
+                    "role": status.get("role") or "",
+                    "policy": status.get("policy") or "",
+                    "last_test": status.get("last_test"),
+                    "last_inference": status.get("last_inference"),
+                    "fallback_model": status.get("fallback_model") or "",
+                    "migration": status.get("migration"),
+                    "detail": status.get("detail") or "",
+                }
+            )
             conf = engine.essential()
-            engine_summary["active_provider"] = conf["active_provider"]
             engine_summary["essential"] = conf["enabled"]
             snapshot = engine.snapshot()
             info = ((snapshot.get("providers") or {}).get(conf["active_provider"]) or {})
             if info:
                 engine_summary["state"] = str(info.get("state") or "")
-                models = info.get("models") or []
-                engine_summary["model"] = getattr(models[0], "id", "") if models else ""
+            elif status.get("installed"):
+                engine_summary["state"] = "installato"
         except Exception:
             pass
         try:
@@ -826,6 +867,7 @@ def create_app(db_path: Optional[Path] = None, auto_seed: bool = True) -> FastAP
         except Exception:
             cached = 0
         return {
+            "ai_status": engine_summary,
             "voices": voices,
             "recent_projects": projects,
             "vault": {
@@ -1979,6 +2021,16 @@ def create_app(db_path: Optional[Path] = None, auto_seed: bool = True) -> FastAP
     @app.get("/api/ai-models/diagnostics", dependencies=[Depends(_require_local_trust)])
     def model_diagnostics() -> dict[str, Any]:
         return director.model_manager.diagnostics()
+
+    @app.get("/api/ai-models/status", dependencies=[Depends(_require_local_trust)])
+    def model_status() -> dict[str, Any]:
+        """Diagnostica visibile: provider e modello realmente attivi, ultimo esito."""
+        return director.model_manager.status(director.ai_engine)
+
+    @app.post("/api/ai-models/migrate-legacy", dependencies=[Depends(_require_local_trust)])
+    def model_migrate_legacy() -> dict[str, Any]:
+        """Riesegue la migrazione della vecchia configurazione (idempotente)."""
+        return director.model_manager.migrate_legacy(director.ai_engine)
 
     @app.post("/api/ai-models/test", dependencies=[Depends(_require_local_trust)])
     def test_model(req: ModelTestRequest) -> dict[str, Any]:

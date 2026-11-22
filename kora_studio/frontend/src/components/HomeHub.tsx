@@ -29,6 +29,8 @@ import type {
   ProjectRecord,
   ThemeSuggestionResponse,
   IdeationStageEvent,
+  IdeationDecision,
+  AIStatus,
   ThemeProposalLite,
   ThemeProposalsLiteEnvelope,
   VoiceOption,
@@ -181,12 +183,23 @@ export function HomeHub({
   const [liteElapsedMs, setLiteElapsedMs] = useState(0);
   const [liteBudgetMs, setLiteBudgetMs] = useState(45000);
   const [liteRunId, setLiteRunId] = useState<string | null>(null);
-  const [liteStatus, setLiteStatus] = useState<"idle" | "running" | "done" | "cancelled" | "error">(
-    "idle"
-  );
+  const [liteStatus, setLiteStatus] = useState<
+    "idle" | "running" | "done" | "cancelled" | "error" | "needs_decision"
+  >("idle");
+  // 3.6.1 — politica «Chiedi conferma» + diagnostica visibile del motore
+  const [liteDecision, setLiteDecision] = useState<IdeationDecision | null>(null);
+  const [deciding, setDeciding] = useState(false);
+  const [aiStatus, setAiStatus] = useState<AIStatus | null>(null);
   const [expandingId, setExpandingId] = useState<string | null>(null);
   const liteRunRef = useRef<string | null>(null);
   const [uploadedInfo, setUploadedInfo] = useState<MediaAsset[]>([]);
+
+  React.useEffect(() => {
+    koraApi
+      .aiModelsStatus()
+      .then(setAiStatus)
+      .catch(() => setAiStatus(null));
+  }, []);
 
   React.useEffect(() => {
     if (!showAdvanced || assets.length > 0) return;
@@ -220,58 +233,98 @@ export function HomeHub({
     setLiteEnvelope(null);
     setLiteStages([]);
     setLiteElapsedMs(0);
+    setLiteDecision(null);
     setLiteStatus("running");
 
     try {
       const start = await koraApi.suggestThemesLite(buildRequestPayload(""));
-      liteRunRef.current = start.run_id;
-      setLiteRunId(start.run_id);
-      const budgetMs = start.budget_ms || 45000;
-      setLiteBudgetMs(budgetMs);
-      const localDeadline = Date.now() + budgetMs + 8000;
-      // polling degli eventi reali del backend (stage + esito)
-      for (;;) {
-        await new Promise((resolve) => setTimeout(resolve, 220));
-        if (liteRunRef.current !== start.run_id) return; // annullato dall'utente
-        if (Date.now() > localDeadline) {
-          setLiteStatus("error");
-          setError(
-            `Il backend non ha risposto entro il budget di ${Math.round(budgetMs / 1000)} s (nessun processo lasciato attivo). Riprova: la cache dei motori è più calda.`
-          );
-          return;
-        }
-        const snapshot = await koraApi.getSuggestThemesLite(start.run_id);
-        if (liteRunRef.current !== start.run_id) return;
-        setLiteStages(snapshot.events);
-        setLiteElapsedMs(snapshot.elapsed_ms);
-        if (snapshot.status === "cancelled") {
-          setLiteStatus("cancelled");
-          setError(friendlyLiteError("annullata"));
-          return;
-        }
-        if (snapshot.status === "error") {
-          setLiteStatus("error");
-          setError(friendlyLiteError(snapshot.error || "Errore ideazione", Math.round(liteBudgetMs / 1000)));
-          return;
-        }
-        if (snapshot.status === "done" && snapshot.envelope) {
-          setLiteEnvelope(snapshot.envelope);
-          setLiteProposals(snapshot.envelope.proposals || []);
-          setEngineInfo({
-            engine: snapshot.envelope.generation_engine,
-            fallback: snapshot.envelope.fallback_reason,
-          });
-          setLiteStatus("done");
-          if (snapshot.envelope.fallback_reason) {
-            setError(friendlyLiteError(snapshot.envelope.fallback_reason, Math.round(liteBudgetMs / 1000)));
-          }
-          return;
-        }
-      }
+      await pollLiteRun(start.run_id, start.budget_ms || 45000);
     } catch (e) {
       setLiteStatus("error");
       setError(friendlyLiteError((e as Error).message));
     } finally {
+      liteRunRef.current = null;
+      setLoading(false);
+    }
+  };
+
+  // 3.6.1 — un solo ciclo di polling, riusato da «Suggerisci» e dalle decisioni
+  const pollLiteRun = async (runId: string, budgetMs: number) => {
+    liteRunRef.current = runId;
+    setLiteRunId(runId);
+    setLiteBudgetMs(budgetMs);
+    const localDeadline = Date.now() + budgetMs + 20000;
+    for (;;) {
+      await new Promise((resolve) => setTimeout(resolve, 220));
+      if (liteRunRef.current !== runId) return; // annullato dall'utente
+      if (Date.now() > localDeadline) {
+        setLiteStatus("error");
+        setError(
+          `Il backend non ha risposto entro il budget di ${Math.round(budgetMs / 1000)} s (nessun processo lasciato attivo). Riprova: la cache dei motori è più calda.`
+        );
+        return;
+      }
+      const snapshot = await koraApi.getSuggestThemesLite(runId);
+      if (liteRunRef.current !== runId) return;
+      setLiteStages(snapshot.events);
+      setLiteElapsedMs(snapshot.elapsed_ms);
+      if (snapshot.status === "cancelled") {
+        setLiteStatus("cancelled");
+        setError(friendlyLiteError("annullata"));
+        return;
+      }
+      if (snapshot.status === "needs_decision") {
+        // politica «Chiedi conferma»: nessuna proposta locale senza il tuo consenso
+        setLiteDecision(snapshot.decision);
+        setLiteStatus("needs_decision");
+        setError(snapshot.decision?.reason || snapshot.error || "Il motore AI non ha risposto");
+        return;
+      }
+      if (snapshot.status === "error") {
+        setLiteStatus("error");
+        setError(friendlyLiteError(snapshot.error || "Errore ideazione", Math.round(budgetMs / 1000)));
+        return;
+      }
+      if (snapshot.status === "done" && snapshot.envelope) {
+        setLiteDecision(null);
+        setLiteEnvelope(snapshot.envelope);
+        setLiteProposals(snapshot.envelope.proposals || []);
+        setEngineInfo({
+          engine: snapshot.envelope.generation_engine,
+          fallback: snapshot.envelope.fallback_reason,
+        });
+        setLiteStatus("done");
+        if (snapshot.envelope.fallback_reason) {
+          setError(friendlyLiteError(snapshot.envelope.fallback_reason, Math.round(budgetMs / 1000)));
+        }
+        void koraApi.aiModelsStatus().then(setAiStatus).catch(() => {});
+        return;
+      }
+    }
+  };
+
+  const handleDecide = async (action: "retry" | "fallback" | "local" | "cancel") => {
+    const runId = liteRunId;
+    if (!runId || deciding) return;
+    setDeciding(true);
+    setError(null);
+    try {
+      const res = await koraApi.decideSuggestThemesLite(runId, action);
+      setLiteDecision(null);
+      if (action === "cancel") {
+        liteRunRef.current = null;
+        setLiteStatus("cancelled");
+        setError(friendlyLiteError("annullata"));
+        return;
+      }
+      setLiteProposals([]);
+      setLiteEnvelope(null);
+      setLiteStatus("running");
+      await pollLiteRun(action === "local" ? runId : res.run_id, liteBudgetMs);
+    } catch (e) {
+      setError(friendlyLiteError((e as Error).message));
+    } finally {
+      setDeciding(false);
       liteRunRef.current = null;
       setLoading(false);
     }
@@ -287,6 +340,7 @@ export function HomeHub({
         // anche se il backend non risponde, il polling locale si ferma
       }
     }
+    setLiteDecision(null);
     setLiteStatus("cancelled");
     setError(friendlyLiteError("annullata"));
     setLiteRunId(null);
@@ -405,6 +459,57 @@ export function HomeHub({
             Scegli come iniziare: <strong>Suggerisci un tema → Progetta il nuovo Reel → Realizza Reel</strong>.
           </p>
         </div>
+
+        {/* 3.6.1 — diagnostica visibile: ciò che la Home mostra è ciò che viene usato */}
+        {aiStatus && (
+          <div className="mx-auto mt-6 flex max-w-4xl flex-wrap items-center justify-center gap-2 text-[11px]">
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-[#C5D9C4] bg-[#F1F7EF] px-2.5 py-1 font-medium text-[#2F5D3A]">
+              Motore: {aiStatus.provider} · {aiStatus.model_label || aiStatus.model}
+            </span>
+            <span className="inline-flex items-center gap-1 rounded-full border border-[#DDD4C4] bg-[#FAF7F2] px-2.5 py-1 text-[#4A443C]">
+              Modalità: {aiStatus.mode === "premium" ? "Premium" : "Everyday"}
+            </span>
+            <span className="inline-flex items-center gap-1 rounded-full border border-[#DDD4C4] bg-[#FAF7F2] px-2.5 py-1 text-[#4A443C]">
+              Ultimo test:{" "}
+              {aiStatus.last_test
+                ? `${String(aiStatus.last_test.model || "").split("/").pop()} · ${
+                    aiStatus.last_test.latency_ms ? `${(aiStatus.last_test.latency_ms / 1000).toFixed(1)} s` : "ok"
+                  }`
+                : "nessuno"}
+            </span>
+            <span
+              className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 ${
+                aiStatus.last_inference?.ok
+                  ? "border-[#C5D9C4] bg-[#F1F7EF] text-[#2F5D3A]"
+                  : aiStatus.last_inference
+                    ? "border-red-200 bg-red-50 text-red-800"
+                    : "border-[#DDD4C4] bg-[#FAF7F2] text-[#4A443C]"
+              }`}
+            >
+              Inferenza:{" "}
+              {aiStatus.last_inference
+                ? aiStatus.last_inference.ok
+                  ? `ultima riuscita${
+                      aiStatus.last_inference.latency_ms
+                        ? ` · ${(Number(aiStatus.last_inference.latency_ms) / 1000).toFixed(1)} s`
+                        : ""
+                    }`
+                  : `ultima fallita`
+                : "nessuna"}
+            </span>
+            <span className="inline-flex items-center gap-1 rounded-full border border-[#E4D3B4] bg-[#FBF4E6] px-2.5 py-1 text-[#7A5C2E]">
+              Fallback:{" "}
+              {aiStatus.policy === "ask"
+                ? "chiedi conferma"
+                : `automatico · ${String(aiStatus.fallback_model || "").split("/").pop()}`}
+            </span>
+            {aiStatus.migration?.detail && (
+              <span className="inline-flex items-center gap-1 rounded-full border border-[#E4D3B4] bg-[#FBF4E6] px-2.5 py-1 text-[#7A5C2E]">
+                {aiStatus.migration.detail}
+              </span>
+            )}
+          </div>
+        )}
 
         {/* 3 fasi dichiarate: Suggerisci → Progetta → Realizza */}
         <div className="mt-8 grid grid-cols-1 gap-4 md:grid-cols-3">
@@ -943,13 +1048,51 @@ export function HomeHub({
           </div>
         )}
 
-        {error && (
+        {liteDecision && (
+          <div className="mt-4 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-xs text-amber-900">
+            <div className="flex items-center gap-2 font-medium">
+              <AlertCircle className="h-4 w-4 shrink-0" />
+              <span>Il motore AI non ha completato la richiesta</span>
+            </div>
+            <p className="mt-1 leading-relaxed">{liteDecision.reason}</p>
+            <p className="mt-1 text-[11px] text-amber-800/80">
+              La richiesta è conservata: nessuna proposta locale viene usata senza il tuo consenso.
+              {liteDecision.model ? ` Motore: ${liteDecision.model}.` : ""}
+            </p>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {liteDecision.options.map((option) => (
+                <button
+                  key={option.action}
+                  type="button"
+                  onClick={() => handleDecide(option.action)}
+                  disabled={deciding}
+                  title={option.detail}
+                  className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-[11px] disabled:opacity-50 ${
+                    option.action === "local"
+                      ? "border-amber-300 bg-white text-amber-900"
+                      : option.action === "cancel"
+                        ? "border-amber-300 bg-transparent text-amber-800"
+                        : "border-[#224C66] bg-[#224C66] text-white hover:bg-[#1b3f55]"
+                  }`}
+                >
+                  {deciding ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
+                  {option.label}
+                </button>
+              ))}
+            </div>
+            <div className="mt-1.5 text-[10px] text-amber-800/70">
+              {liteDecision.options.map((o) => `${o.label}: ${o.detail}`).join(" · ")}
+            </div>
+          </div>
+        )}
+
+        {error && !liteDecision && liteStatus !== "needs_decision" && (
           <div className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-xs text-red-800">
             <div className="flex items-center gap-2">
               <AlertCircle className="h-4 w-4 shrink-0" />
               <span>{error}</span>
             </div>
-            <div className="mt-2 flex flex-wrap gap-2">
+            <div className="mt-2 flex flex-wrap items-center gap-2">
               <button
                 type="button"
                 onClick={handleSuggestThemes}
@@ -958,15 +1101,8 @@ export function HomeHub({
               >
                 Riprova la stessa richiesta
               </button>
-              <button
-                type="button"
-                onClick={() => setLiteStatus("idle")}
-                className="rounded-lg border border-red-300 bg-white px-2.5 py-1 text-[11px] text-red-800"
-              >
-                Usa le proposte locali (0 €)
-              </button>
-              <span className="self-center text-[10px] text-red-700/80">
-                Per cambiare modello o alzare il tempo: Impostazioni → Modelli &amp; benchmark.
+              <span className="text-[10px] text-red-700/80">
+                Per cambiare modello, modalità o timeout: Impostazioni → Modelli &amp; benchmark.
               </span>
             </div>
           </div>

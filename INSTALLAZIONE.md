@@ -1,4 +1,4 @@
-# Installazione tecnica — KORA STUDIO LIGHT 3.6
+# Installazione tecnica — KORA STUDIO LIGHT 3.6.1
 
 Documento per chi vuole capire cosa fa il doppio clic, o riparare un guasto.
 Per l'uso normale basta `LEGGIMI.txt`.
@@ -14,6 +14,17 @@ cd "$HOME/Documenti/Kora Studio Light"
 
 Poi apri `http://127.0.0.1:8020`.
 
+## 1b. Aggiornamento dalla 3.6.0
+
+1. backup (Impostazioni › Backup, oppure `curl -X POST http://127.0.0.1:8020/api/backup/create`);
+2. chiudi KORA e sostituisci i file dell'applicazione **senza toccare `kora_data/`**;
+3. `./setup.sh`: riconosce la versione precedente e passa a 3.6.1 con copia di
+   sicurezza del database;
+4. `./diagnostica_ai.sh`: conferma che provider e modello attivi sono quelli del
+   Model Manager (HY4 Flash). Se compare ancora DeepSeek: `./diagnostica_ai.sh --fix`.
+
+Dettagli: `docs/KORA_3.6.1_RIPRISTINO_AI.md`.
+
 ## 2. Cosa fa `setup.sh`
 
 1. controlla Python (3.9+, consigliato 3.11) e crea `.venv`;
@@ -27,7 +38,7 @@ Poi apri `http://127.0.0.1:8020`.
    se manca e c'è Node, prova a compilarla;
 5. esegue `seed` (Brand Brain, Media Vault, Sound Library) e `doctor`.
 
-## 3. Cosa controlla `verifica.sh` (36 controlli)
+## 3. Cosa controlla `verifica.sh` (37 controlli)
 
 Ambiente Python e moduli · FFmpeg/FFprobe realmente eseguibili · filtri `zoompan`,
 `overlay` ed encoder `libx264` · PyAV · interfaccia compilata e suo peso ·
@@ -36,7 +47,7 @@ script di ripristino · master audio a −14 LUFS · costruzione dell'app · CLI
 motore di movimento · logo e font KORA · database e cartelle scrivibili ·
 spazio disco · porta libera · versione 3.6.
 
-Esito atteso: `36 OK · 0 KO · 0 avvisi` con il server fermo
+Esito atteso: `37 OK · 0 KO · 0 avvisi` con il server fermo
 (`35 OK · 1 avviso` se il server è già attivo: la porta risulta occupata,
 non è un guasto).
 
@@ -76,7 +87,7 @@ cancella anche quella solo se vuoi perdere progetti e materiali importati.
 ## 7. Prove eseguite su questa build
 
 - `./setup.sh` in cartella pulita → completato senza errori;
-- `./verifica.sh` → **36 OK · 0 KO · 0 avvisi** (server fermo);
+- `./verifica.sh` → **37 OK · 0 KO · 0 avvisi** (server fermo);
 - `pytest tests/kora_studio` → suite completa verde, incluso il nuovo
   `test_v36_model_manager.py` (19 verifiche) e `test_v36_consolidation.py`;
 - produzione completa di Reel 20 s (500 frame) e 30 s (750 frame), QC reale

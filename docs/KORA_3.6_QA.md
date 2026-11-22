@@ -24,7 +24,7 @@ costruzione».
 
 ```text
 ./verifica.sh
-36 OK · 0 KO · 0 avvisi   (server fermo)
+37 OK · 0 KO · 0 avvisi   (server fermo)
 35 OK · 0 KO · 1 avviso   (server attivo: porta 8020 occupata, non è un guasto)
 ```
 
@@ -85,3 +85,77 @@ generazione C/D/E, vision. Nessuna di queste è presentata come funzionante.
    impostazioni Essential azzera volutamente lo snapshot, quindi il test a volte
    partiva senza motore. Lo snapshot ora viene impostato dopo il bootstrap, come
    avviene nell'uso reale. La causa è documentata, non mascherata.
+
+---
+
+# Aggiornamento 3.6.1 — collaudo della correzione
+
+## 7. Suite automatizzata 3.6.1
+
+Nuovo file `tests/kora_studio/test_v361_ai_pipeline.py`: **11 test** (migrazione
+legacy, preferenze conservate, scelta utente intoccata, Everyday→HY4 /
+Premium→MiMo trasmessi esplicitamente, stesso modello fra Home e copione,
+risposta valida accettata dopo 21 s, politica «Chiedi conferma» senza
+deterministico, «Usa Nemotron», chiave Gemini non attiva, snapshot vecchio senza
+deterministico, end-to-end con CLI doppio di prova).
+
+Esito del file: **11 passed in 254,68 s**.
+
+Suite completa (tutti i file):
+
+```
+.venv/bin/python -m pytest tests/kora_studio -q
+```
+
+Tre giri completi, tutti registrati:
+
+| Giro | Esito | Durata | Note |
+|---|---|---|---|
+| 1 | `1 failed, 218 passed, 3 skipped` | 1283,85 s | fallisce `test_api_bootstrap_and_project_reel` (`calls == 0`): il difetto reale descritto al §8.2 |
+| 2 | `1 failed, 219 passed, 3 skipped` | 977,76 s | fallisce `test_cold_first_request_does_not_scan_every_request` (`auth_calls 3 ≠ 1`): la discovery di avvio in background veniva contata come «probe per richiesta» |
+| 3 | **`220 passed, 3 skipped`** | **977,27 s** | definitivo, nessun fallimento |
+
+Correzioni nate dai giri:
+
+* la seconda valutazione a sonda reale in `creative_entry` è stata limitata ai
+  casi in cui lo snapshot **non conosce** il provider (provider collegato dopo
+  l'ultima verifica). Se il provider è verificato e il modello non compare
+  nell'elenco, non si torna a interrogarlo: si usa il percorso standard;
+* il probe per provider è diventato *single-flight* (un lock per provider):
+  due richieste ravvicinate non si autenticano due volte;
+* il test `test_cold_first_request_does_not_scan_every_request` ora attende la
+  discovery di avvio (che è una sola, in background) e misura che le richieste
+  successive non interroghino il provider: è l'intenzione originale del test,
+  espressa in modo misurabile.
+
+I test aggiornati al comportamento corretto sono `test_v281_creative_fast_mode.py`
+(politica esplicita, discovery di avvio attesa) e
+`test_v31_engine_connect_and_variety.py` (Gemini non cambia il motore).
+
+## 8. Difetti trovati e corretti nella 3.6.1
+
+1. **Modello scelto non trasmesso.** Il piano automatico partiva dal modello
+   legacy (DeepSeek) e ignorava il Model Manager. Ora provider e model ID sono
+   passati esplicitamente (`creative_entry`).
+2. **Deterministico ingiustificato con snapshot vecchio.** Se lo snapshot dei
+   motori era fresco ma non conteneva il provider appena collegato,
+   `creative_entry` non trovava il modello e ripiegava sul percorso generico,
+   che poteva chiudere con zero chiamate. Ora c'è una seconda valutazione con
+   sonda reale (`_model_entry_in_plan`) e un test dedicato.
+3. **Timeout nascosto di 15 s.** Rimosso: il tentativo autorizzato riceve il
+   budget di ideazione intero (45 s). Test: risposta accettata dopo 21 s.
+4. **Gemini attivato dal solo collegamento della chiave.** Ora la chiave viene
+   verificata e salvata, il motore non cambia.
+5. **Temi locali restituiti senza consenso.** Con politica «Chiedi conferma» la
+   risposta è la richiesta di decisione con quattro opzioni.
+6. **Etichetta doppia del modello** (`opencode/opencode/…`): normalizzata in
+   barra laterale, Home e log.
+
+## 9. Prove non eseguite (dichiarate)
+
+* chiamata reale a `opencode/hy4-flash-free`, `mimo-v2.6-flash-free`,
+  `nemotron-3.5-lightning-free`: nell'ambiente di collaudo il CLI non esiste.
+  La filiera è coperta dal doppio di prova e va confermata sul Mac con
+  `./diagnostica_ai.sh`;
+* misura dei tempi reali di ideazione sul Mac (benchmark dell'utente: 20,7 s /
+  28,4 s / 78,4 s): usati come base per il budget di 45 s, non riverificati qui.

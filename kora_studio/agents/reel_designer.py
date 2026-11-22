@@ -118,6 +118,13 @@ class ReelDesigner:
             )
         started = time.perf_counter()
         timings: dict[str, Any] = {}
+        manager = getattr(self.director, "model_manager", None)
+        if manager is not None:
+            try:
+                configured = float(manager.timeout_for("design"))
+                deadline_sec = max(deadline_sec, configured)
+            except Exception:
+                pass
         inventory = self._inventory(req)
         ctx = self._context(req, proposal, inventory)
         timings["context_building"] = round((time.perf_counter() - started) * 1000, 1)
@@ -126,9 +133,16 @@ class ReelDesigner:
         entry = None
         if engine is not None:
             try:
-                entry = engine.fast_entry(AGENT)
+                # 3.6.1 — stesso modello mostrato nella Home (Model Manager)
+                entry = engine.creative_entry(AGENT, purpose="design")
             except Exception:
                 entry = None
+            if entry is None:
+                # difensivo: un adapter registrato non deve mai diventare «nessun motore»
+                try:
+                    entry = engine.fast_entry(AGENT)
+                except Exception:
+                    entry = None
         if entry is None:
             reason = (
                 "Nessun motore creativo attivo/autenticato: progetto deterministico KORA (0 €)."
@@ -139,6 +153,8 @@ class ReelDesigner:
 
         provider = str(entry.get("provider") or "")
         model = str(entry.get("model") or "")
+        # «opencode/opencode/hy4-flash-free» → «opencode/hy4-flash-free»
+        display_model = model.split("/", 1)[1] if provider and model.startswith(provider + "/") else model
         call_started = time.perf_counter()
         try:
             result = engine.call(
@@ -193,8 +209,8 @@ class ReelDesigner:
         validate_started = time.perf_counter()
         try:
             design = self._build_from_payload(
-                payload, req, inventory, engine_label=f"ai_engine:{provider}/{model}",
-                model=model, timings=timings, started=started, calls=1,
+                payload, req, inventory, engine_label=f"ai_engine:{provider}/{display_model}",
+                model=display_model, timings=timings, started=started, calls=1,
             )
             timings["validation"] = round((time.perf_counter() - validate_started) * 1000, 1)
             design.timings_ms = {

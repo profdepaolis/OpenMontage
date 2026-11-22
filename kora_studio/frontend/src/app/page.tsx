@@ -63,6 +63,10 @@ export default function KoraStudioPage() {
     state: string;
     model: string;
     essential: boolean;
+    mode?: string;
+    model_label?: string;
+    migration?: { detail?: string } | null;
+    last_inference?: { ok?: boolean } | null;
   } | null>(null);
   const [banner, setBanner] = useState<string | null>(null);
   const [bootReady, setBootReady] = useState(false);
@@ -290,11 +294,14 @@ export default function KoraStudioPage() {
           <div className="text-[10px] uppercase tracking-wider text-[#9A8052]">Motore creativo</div>
           <div className="mt-1 truncate text-xs font-medium text-[#1D1B18]">
             {engineSummary?.active_provider || "—"}
+            {engineSummary?.mode ? ` · ${engineSummary.mode === "premium" ? "Premium" : "Everyday"}` : ""}
           </div>
-          <div className="mt-0.5 text-[11px] text-[#6C6459]">
-            {engineSummary?.state || "non verificato"}
-            {engineSummary?.model ? ` · ${engineSummary.model}` : ""}
+          <div className="mt-0.5 truncate text-[11px] text-[#6C6459]">
+            {engineSummary?.model_label || engineSummary?.model || engineSummary?.state || "non verificato"}
           </div>
+          {engineSummary?.migration?.detail && (
+            <div className="mt-1 text-[10px] leading-snug text-[#7A5C2E]">{engineSummary.migration.detail}</div>
+          )}
           <div className="mt-2 border-t border-[#EDE6D9] pt-2">
             Archivio: <strong>{vaultSummary.total}</strong> elementi
           </div>

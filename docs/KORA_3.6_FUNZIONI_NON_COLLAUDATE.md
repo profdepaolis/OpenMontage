@@ -1,7 +1,25 @@
-# KORA 3.6 — Funzioni non collaudate
+# KORA 3.6.1 — Funzioni non collaudate
 
 Documento di onestà tecnica. Se una funzione non è qui elencata come collaudata,
 non è stata provata con un provider reale in questa build.
+
+## Aggiornamento 3.6.1
+
+Con il ripristino della pipeline AI le voci «non collaudate» restano tali: i test
+3.6.1 usano un **doppio di prova** del CLI `opencode` (eseguibile finto) che
+percorre lo stesso codice di produzione, ma **non** dimostrano che HY4 Flash, MiMo
+Flash o Nemotron Lightning rispondano davvero. La verifica reale è lo script
+`diagnostica_ai.sh` sul Mac dell'utente.
+
+| Funzione | Stato dopo la 3.6.1 |
+|---|---|
+| Migrazione legacy DeepSeek → HY4 | collaudata (test + prova su DB temporaneo) |
+| Modello trasmesso esplicitamente (Everyday/Premium) | collaudata con doppio di prova |
+| Timeout ideazione 45 s, risposta a 21 s | collaudata con doppio di prova |
+| Politica «Chiedi conferma» con quattro scelte | collaudata (API + interfaccia compilata) |
+| Gemini non attiva il motore | collaudata |
+| Chiamata reale a `opencode/hy4-flash-free` | **non collaudata** (CLI assente) |
+| Latenza reale su EOL/Mac | **non collaudata** (benchmark fornito dall'utente) |
 
 ## Elenco
 

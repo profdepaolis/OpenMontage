@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import threading
 import time
 import uuid
@@ -36,7 +37,9 @@ IDEATION_AGENT = "creative_director"
 DEFAULT_BUDGET_SEC = 25.0
 #: 3.6 — timeout di ideazione dichiarato nelle specifiche, modificabile in Impostazioni
 DEFAULT_IDEATION_TIMEOUT_SEC = 45.0
-DEFAULT_FIRST_ATTEMPT_SEC = 15.0
+#: 3.6.1 — nessun limite nascosto: l'unico tentativo autorizzato usa quasi tutto
+#: il budget di ideazione (restano ~0,9 s per parsing e validazione).
+OVERHEAD_SEC = 0.9
 MAX_BUDGET_SEC = 60.0
 PROPOSALS = 4
 RUN_TTL_SEC = 900.0
@@ -77,6 +80,11 @@ class _Run:
         self.envelope: Optional[dict[str, Any]] = None
         self.error: Optional[str] = None
         self.error_kind: str = ""
+        self.decision: Optional[dict[str, Any]] = None
+        self.req: Any = None
+        self.ctx: Optional[dict[str, Any]] = None
+        self.provider: str = ""
+        self.model: str = ""
         self.cancel = threading.Event()
         self.started = time.perf_counter()
         self.started_ms = int(time.time() * 1000)
@@ -111,6 +119,9 @@ class _Run:
                 "envelope": self.envelope,
                 "error": self.error,
                 "error_kind": self.error_kind,
+                "decision": self.decision,
+                "provider": self.provider,
+                "model": self.model,
                 "cancelled": self.cancel.is_set(),
                 "finished": self.status != "running",
             }
@@ -250,16 +261,22 @@ class ThemeIdeationService:
         provider: Optional[str] = None,
         model: Optional[str] = None,
         avoid_cache: bool = False,
+        policy_override: Optional[str] = None,
     ) -> str:
         run_id = uuid.uuid4().hex[:12]
         budget = self._budget_sec()
         run = _Run(run_id, round(budget * 1000, 1), f"ideation-{run_id}")
+        run.req = req
+        run.provider = str(provider or "")
+        run.model = str(model or "")
         with self._runs_lock:
             self._prune_locked()
             self._runs[run_id] = run
         thread = threading.Thread(
             target=self._execute,
-            args=(run, req, provider, model, avoid_cache),
+            # la politica di fallback fa parte della richiesta: «Chiedi conferma»
+            # non deve mai finire in proposte locali senza il consenso dell'utente
+            args=(run, req, provider, model, avoid_cache, policy_override),
             name=f"kora-ideation-{run_id}",
             daemon=True,
         )
@@ -296,7 +313,7 @@ class ThemeIdeationService:
         if not fast.get("enabled", True) or not fast.get("background_warm"):
             return {"started": False, "reason": "pre-generazione in background disattivata"}
         try:
-            entry = engine.fast_entry(IDEATION_AGENT)
+            entry = engine.creative_entry(IDEATION_AGENT, purpose="ideation")
         except Exception as exc:
             return {"started": False, "reason": f"motori non disponibili ({exc.__class__.__name__})"}
         if not entry:
@@ -330,43 +347,49 @@ class ThemeIdeationService:
         return self._deterministic_envelope(req, snap.get("error") or "timeout locale")
 
     # ----------------------------------------------------------------- helpers
+    def _model_manager(self) -> Any:
+        """Il servizio riceve il CreativeDirector: il Model Manager sta sul direttore."""
+        manager = getattr(self.director, "model_manager", None)
+        if manager is None:
+            engine = getattr(self.director, "ai_engine", None)
+            manager = getattr(engine, "model_manager", None)
+        return manager
+
     def _budget_sec(self) -> float:
-        engine = getattr(self.director, "ai_engine", None)
-        fast = {}
-        if engine is not None and hasattr(engine, "settings"):
-            try:
-                fast = engine.settings().get("fast_creative") or {}
-            except Exception:
-                fast = {}
+        # 3.6.1 — il timeout di ideazione vive nel Model Manager (45 s di default):
+        # una sola fonte, la stessa mostrata in Impostazioni › Modelli.
         try:
-            # 3.6 — se l'utente ha salvato un timeout in Impostazioni › Modelli,
-            # quello vince (45 s di default); altrimenti vale Fast Creative Mode.
-            stored = self.director.db.get_preference("ai_model_config") or {}
-            configured = (stored.get("timeouts") or {}).get("ideation")
-            if configured:
-                value = float(configured)
-            elif fast.get("global_budget_sec"):
-                value = float(fast["global_budget_sec"])
+            manager = self._model_manager()
+            if manager is not None:
+                value = float(manager.timeout_for("ideation"))
             else:
-                # nessuna configurazione salvata: default 3.6 dichiarato (45 s)
                 value = DEFAULT_IDEATION_TIMEOUT_SEC
         except (TypeError, ValueError, AttributeError):
-            value = DEFAULT_BUDGET_SEC
+            value = DEFAULT_IDEATION_TIMEOUT_SEC
         return max(8.0, min(MAX_BUDGET_SEC, value))
 
     def _first_attempt_sec(self) -> float:
-        engine = getattr(self.director, "ai_engine", None)
-        fast = {}
-        if engine is not None and hasattr(engine, "settings"):
-            try:
-                fast = engine.settings().get("fast_creative") or {}
-            except Exception:
-                fast = {}
+        """L'unico tentativo autorizzato usa il budget intero meno l'overhead reale."""
+        budget = self._budget_sec()
+        return max(4.0, budget - OVERHEAD_SEC)
+
+    def _policy(self) -> str:
+        manager = self._model_manager()
+        if manager is None:
+            return "ask"
         try:
-            value = float(fast.get("first_attempt_sec") or DEFAULT_FIRST_ATTEMPT_SEC)
-        except (TypeError, ValueError):
-            value = DEFAULT_FIRST_ATTEMPT_SEC
-        return max(3.0, min(self._budget_sec(), value))
+            return str(manager.config().get("policy") or "ask")
+        except Exception:
+            return "ask"
+
+    def _choice(self) -> dict[str, Any]:
+        manager = self._model_manager()
+        if manager is None:
+            return {}
+        try:
+            return manager.effective_choice()
+        except Exception:
+            return {}
 
     def _cache_ttl(self) -> float:
         engine = getattr(self.director, "ai_engine", None)
@@ -541,7 +564,11 @@ class ThemeIdeationService:
         engine = getattr(self.director, "ai_engine", None)
         if engine is None:
             return None
-        if self._last_entry:
+        choice = self._choice()
+        wanted = str(choice.get("model") or "")
+        if self._last_entry and (
+            not wanted or str(self._last_entry.get("model") or "") == wanted
+        ):
             provider = str(self._last_entry.get("provider") or "")
             snapshot = engine.snapshot() if hasattr(engine, "snapshot") else {}
             info = ((snapshot.get("providers") or {}).get(provider) or {}) if snapshot else {}
@@ -551,7 +578,10 @@ class ThemeIdeationService:
 
         def _work() -> None:
             try:
-                holder["entry"] = engine.fast_entry(IDEATION_AGENT)
+                entry = None
+                if hasattr(engine, "creative_entry"):
+                    entry = engine.creative_entry(IDEATION_AGENT, purpose="ideation")
+                holder["entry"] = entry or engine.fast_entry(IDEATION_AGENT)
             except Exception as exc:  # pragma: no cover
                 holder["error"] = f"{exc.__class__.__name__}: {exc}"
 
@@ -581,13 +611,16 @@ class ThemeIdeationService:
             return None, {}, ""
         provider = str(entry.get("provider") or "")
         model = str(entry.get("model") or "")
+        # «opencode/opencode/hy4-flash-free» → «opencode/hy4-flash-free» (etichetta leggibile)
+        display_model = model.split("/", 1)[1] if provider and model.startswith(provider + "/") else model
+        label = f"{provider}/{display_model}"
         remaining = deadline - time.time()
         if remaining <= 1.0:
             return None, {}, ""
         run.emit(
             "generate", "start",
-            f"tentativo {attempt_label}: {provider}/{model}",
-            engine=f"{provider}/{model}", provider=provider, model=model,
+            f"tentativo {attempt_label}: {label}",
+            engine=label, provider=provider, model=display_model,
         )
         started = time.perf_counter()
         timings: dict[str, Any] = {}
@@ -611,21 +644,21 @@ class ThemeIdeationService:
         except EngineError as exc:
             timings["inference"] = round((time.perf_counter() - started) * 1000, 1)
             timings["error"] = f"{exc.__class__.__name__}: {exc}"[:400]
-            run.emit("generate", "error", timings["error"], engine=f"{provider}/{model}")
-            return None, timings, f"{provider}/{model}"
+            run.emit("generate", "error", timings["error"], engine=label)
+            return None, timings, label
         except Exception as exc:  # pragma: no cover — difensivo
             timings["inference"] = round((time.perf_counter() - started) * 1000, 1)
             timings["error"] = f"{exc.__class__.__name__}: {exc}"[:400]
-            run.emit("generate", "error", timings["error"], engine=f"{provider}/{model}")
-            return None, timings, f"{provider}/{model}"
+            run.emit("generate", "error", timings["error"], engine=label)
+            return None, timings, label
 
         timings.update(result.timings or {})
         timings["inference"] = round((time.perf_counter() - started) * 1000, 1)
         timings["model_latency"] = result.latency_ms
         run.emit(
             "generate", "done",
-            f"risposta {provider}/{model} in {int(timings['inference'])} ms",
-            engine=f"{provider}/{model}",
+            f"risposta {label} in {int(timings['inference'])} ms",
+            engine=label,
         )
         run.emit("validate", "start", "controllo schema, duplicati e ID asset")
         parse_started = time.perf_counter()
@@ -657,7 +690,7 @@ class ThemeIdeationService:
                     "validation": detail[:200],
                     "total": round((time.perf_counter() - started) * 1000, 1),
                 })
-            return None, timings, f"{provider}/{model}"
+            return None, timings, label
         run.emit("validate", "done", f"{len(proposals)} proposte valide")
         annotate = getattr(engine.activity, "annotate_timings", None)
         if annotate and getattr(result, "call_id", ""):
@@ -666,7 +699,7 @@ class ThemeIdeationService:
                 "inference_total": timings["inference"],
                 "total": round((time.perf_counter() - started) * 1000, 1),
             })
-        return proposals, timings, f"{provider}/{model}"
+        return proposals, timings, label
 
     def _execute(
         self,
@@ -675,6 +708,7 @@ class ThemeIdeationService:
         provider_override: Optional[str],
         model_override: Optional[str],
         avoid_cache: bool,
+        policy_override: Optional[str] = None,
     ) -> None:
         timings: dict[str, Any] = {}
         started = time.perf_counter()
@@ -682,16 +716,19 @@ class ThemeIdeationService:
         budget = self._budget_sec()
         deadline_global = wall_started + budget
         first_attempt = self._first_attempt_sec()
+        policy = policy_override or self._policy()
         try:
             run.emit("context", "start", "contesto compatto: profilo, stagione, temi usati, categorie")
             ctx_started = time.perf_counter()
             valid_ids = self._authorised_ids(req)
             ctx = self._compact_context(req, valid_ids)
+            run.ctx = ctx
             timings["context_building"] = round((time.perf_counter() - ctx_started) * 1000, 1)
             run.emit(
                 "context", "done",
                 f"{len(ctx['materiale_disponibile']['categorie'])} categorie, "
-                f"{len(ctx['temi_gia_usati'])} temi usati, {len(ctx['materiale_disponibile']['id_utilizzabili'])} ID",
+                f"{len(ctx['temi_gia_usati'])} temi usati, "
+                f"{len(ctx['materiale_disponibile']['id_utilizzabili'])} ID",
             )
             if run.cancel.is_set():
                 raise IdeationCancelled()
@@ -701,7 +738,7 @@ class ThemeIdeationService:
             target_model = model_override or ""
             entry: Optional[dict[str, Any]] = None
 
-            run.emit("connect", "start", "snapshot motori (nessuna scansione completa per richiesta)")
+            run.emit("connect", "start", "modello attivo dal Model Manager (nessuna scelta automatica)")
             if engine is not None:
                 # snapshot in background: la prima richiesta non paga la discovery completa
                 if hasattr(engine, "snapshot_age_sec") and engine.snapshot_age_sec() is None:
@@ -721,16 +758,37 @@ class ThemeIdeationService:
                     )
                 timings["provider_connection"] = 0.0
             if entry is None:
-                detail = (
-                    "Nessun motore AI configurato/autenticato: uso il motore deterministico KORA (0 €)."
-                    if engine is not None
-                    else "AI Engine Manager non collegato: uso il motore deterministico KORA (0 €)."
+                choice = self._choice()
+                manager = self._model_manager()
+                detail = ""
+                if manager is not None and engine is not None:
+                    try:
+                        status = manager.status(engine)
+                        detail = str(status.get("detail") or "")
+                    except Exception:
+                        detail = ""
+                reason = "Nessun motore AI disponibile"
+                if choice.get("model"):
+                    reason += f" per {choice.get('model')}"
+                if detail:
+                    reason += f": {detail}"
+                if engine is None:
+                    reason = "AI Engine Manager non collegato"
+                run.emit("connect", "error", reason[:300])
+                self._finish_failure(
+                    run, req, ctx, reason, timings, started, policy, tried=[], entry=None
                 )
-                run.emit("connect", "error", detail)
-                self._finish_deterministic(run, req, ctx, detail, timings, started)
                 return
             engine_label = f"{entry.get('provider')}/{entry.get('model')}"
-            run.emit("connect", "done", f"motore selezionato: {engine_label}", engine=engine_label)
+            run.provider = str(entry.get("provider") or "")
+            run.model = str(entry.get("model") or "")
+            source = str(entry.get("source") or "")
+            run.emit(
+                "connect", "done",
+                f"motore selezionato: {engine_label}"
+                + (f" (Model Manager · {entry.get('role')})" if source == "model_manager" else ""),
+                engine=engine_label,
+            )
 
             if not avoid_cache:
                 cached = self._cache_lookup(
@@ -743,7 +801,15 @@ class ThemeIdeationService:
             else:
                 timings["cache"] = 0.0
 
-            attempt_deadline = min(deadline_global - 1.2, wall_started + first_attempt)
+            # 3.6.1 — un solo tentativo con il budget di ideazione intero (45 s):
+            # restano OVERHEAD_SEC per parsing e validazione. Solo se la politica
+            # autorizza già il modello alternativo si riserva il tempo per tentarlo.
+            reserve = 0.0
+            if policy == "fallback":
+                reserve = min(budget * 0.45, max(4.0, budget - 6.0))
+            attempt_deadline = min(
+                deadline_global - 0.4, wall_started + first_attempt - reserve
+            )
             proposals, attempt_timings, engine_label = self._engine_attempt(
                 run, req, ctx, entry, attempt_deadline, set(valid_ids), "1"
             )
@@ -752,15 +818,8 @@ class ThemeIdeationService:
             if proposals is None and not run.cancel.is_set():
                 remaining = deadline_global - time.time() - 1.0
                 fallback_entry = None
-                if remaining > 4.0 and engine is not None:
-                    try:
-                        plan = engine.candidate_plan(IDEATION_AGENT, from_snapshot=True)
-                        for candidate in plan:
-                            if candidate.get("provider") != entry.get("provider"):
-                                fallback_entry = candidate
-                                break
-                    except Exception:
-                        fallback_entry = None
+                if policy == "fallback" and remaining > 4.0:
+                    fallback_entry = self._fallback_entry(entry)
                 if fallback_entry is not None:
                     run.emit(
                         "generate", "fallback",
@@ -770,7 +829,7 @@ class ThemeIdeationService:
                     timings["fallback"] = 1
                     second, second_timings, engine_label = self._engine_attempt(
                         run, req, ctx, fallback_entry,
-                        deadline_global - 0.8, set(valid_ids), "fallback",
+                        deadline_global - 0.6, set(valid_ids), "fallback",
                     )
                     timings.update({k: v for k, v in second_timings.items() if v is not None})
                     proposals = second
@@ -781,17 +840,11 @@ class ThemeIdeationService:
                 raise IdeationCancelled()
 
             if proposals is None:
-                reason = timings.get("error") or timings.get("validation_error") or (
-                    "budget globale esaurito prima di una risposta valida"
-                    if time.time() >= deadline_global
-                    else "nessuna risposta valida dal motore AI"
+                reason = self._failure_reason(timings, budget, deadline_global)
+                self._finish_failure(
+                    run, req, ctx, reason, timings, started, policy,
+                    tried=[engine_label], entry=entry,
                 )
-                if time.time() >= deadline_global:
-                    reason = (
-                        f"timeout globale di {int(budget)} s raggiunto: "
-                        "proposte deterministiche KORA (0 €)"
-                    )
-                self._finish_deterministic(run, req, ctx, str(reason), timings, started)
                 return
 
             provider_name, _, model_name = engine_label.partition("/")
@@ -817,13 +870,16 @@ class ThemeIdeationService:
                 run.status = "cancelled"
                 run.error = "Richiesta annullata dall'utente"
                 run.error_kind = "annullata"
+                run.decision = None
                 run.finished_at = time.perf_counter()
         except Exception as exc:  # pragma: no cover — difensivo
             run.emit("fallback", "start", f"errore inatteso: {exc.__class__.__name__}")
             try:
-                ctx = self._compact_context(req, self._authorised_ids(req))
-                self._finish_deterministic(
-                    run, req, ctx, f"errore inatteso ({exc.__class__.__name__}): {exc}", timings, started
+                ctx = run.ctx or self._compact_context(req, self._authorised_ids(req))
+                self._finish_failure(
+                    run, req, ctx,
+                    f"errore inatteso ({exc.__class__.__name__}): {exc}",
+                    timings, started, policy, tried=[], entry=None,
                 )
             except Exception:
                 with run.lock:
@@ -831,6 +887,229 @@ class ThemeIdeationService:
                     run.error = f"Errore inatteso: {exc.__class__.__name__}: {exc}"
                     run.error_kind = "errore_interno"
                     run.finished_at = time.perf_counter()
+
+    def _failure_reason(
+        self, timings: dict[str, Any], budget: float, deadline_global: float
+    ) -> str:
+        if time.time() >= deadline_global - 0.5:
+            return f"timeout di ideazione: {int(budget)} s esauriti senza una risposta valida"
+        raw = str(timings.get("error") or timings.get("validation_error") or "")
+        text = re.sub(r"^[A-Za-z]+Error: ", "", raw)
+        # «opencode/hy4-flash-free: <causa>» → solo la causa, leggibile all'utente
+        text = re.sub(r"^[\w.\-]+/[\w.\-]+: ", "", text).strip()
+        if text and ("nessuna risposta" in text.lower() or "timeout" in text.lower()):
+            return f"timeout di ideazione a {int(budget)} s: {text}"
+        return text or "nessuna risposta valida dal motore AI"
+
+    def _fallback_entry(self, entry: dict[str, Any]) -> Optional[dict[str, Any]]:
+        """Nemotron (ruolo fallback) dal Model Manager; piano automatico solo se assente."""
+        choice = self._choice()
+        model = str(choice.get("fallback_model") or "")
+        provider = str(entry.get("provider") or "opencode")
+        if model and model != entry.get("model") and model.split("/", 1)[0] == provider:
+            return {
+                "provider": provider,
+                "model": model,
+                "source": "model_manager_fallback",
+                "role": "fallback",
+            }
+        engine = getattr(self.director, "ai_engine", None)
+        if engine is None:
+            return None
+        try:
+            plan = engine.candidate_plan(IDEATION_AGENT, from_snapshot=True)
+        except Exception:
+            return None
+        for candidate in plan:
+            if candidate.get("model") != entry.get("model"):
+                return candidate
+        return None
+
+    def _finish_failure(
+        self,
+        run: _Run,
+        req: CreativeRequestPayload,
+        ctx: dict[str, Any],
+        reason: str,
+        timings: dict[str, Any],
+        started: float,
+        policy: str,
+        *,
+        tried: list[str],
+        entry: Optional[dict[str, Any]],
+    ) -> None:
+        """Esito non riuscito: decide la politica salvata, non il codice."""
+        if run.cancel.is_set():
+            raise IdeationCancelled()
+        run.emit("generate", "error", reason[:300])
+        if policy == "local":
+            self._finish_deterministic(run, req, ctx, reason, timings, started)
+            return
+        if policy == "stop":
+            with run.lock:
+                run.status = "error"
+                run.error = reason
+                run.error_kind = "interrotto"
+                run.finished_at = time.perf_counter()
+            run.emit("done", "error", "interrotto come da politica «Interrompi»")
+            return
+        if policy == "fallback":
+            # il modello alternativo è stato già tentato: ultima risorsa dichiarata
+            self._finish_deterministic(
+                run, req, ctx,
+                f"{reason} · anche il modello alternativo non ha risposto",
+                timings, started,
+            )
+            return
+        self._finish_decision(run, req, ctx, reason, timings, started, tried=tried, entry=entry)
+
+    def _finish_decision(
+        self,
+        run: _Run,
+        req: CreativeRequestPayload,
+        ctx: dict[str, Any],
+        reason: str,
+        timings: dict[str, Any],
+        started: float,
+        *,
+        tried: list[str],
+        entry: Optional[dict[str, Any]],
+    ) -> None:
+        """Politica «Chiedi conferma»: nessuna proposta locale senza consenso."""
+        choice = self._choice()
+        fallback_model = str(choice.get("fallback_model") or "opencode/nemotron-3.5-lightning-free")
+        current = f"{run.provider}/{run.model}" if run.provider and run.model else (tried[0] if tried else "")
+        options = [
+            {
+                "action": "retry",
+                "label": "Riprova",
+                "detail": f"stesso modello{(' · ' + current) if current else ''}",
+            },
+            {
+                "action": "fallback",
+                "label": "Usa Nemotron",
+                "detail": f"modello alternativo autorizzato · {fallback_model}",
+            },
+            {
+                "action": "local",
+                "label": "Usa proposte locali",
+                "detail": "4 proposte deterministiche KORA · 0 € · non generate dall'AI",
+            },
+            {"action": "cancel", "label": "Annulla", "detail": "nessun risultato"},
+        ]
+        run.emit("fallback", "await", reason[:280])
+        self._log_decision(run, timings, reason, current)
+        with run.lock:
+            run.decision = {
+                "reason": reason,
+                "policy": "ask",
+                "tried": tried,
+                "provider": run.provider,
+                "model": run.model,
+                "options": options,
+                "elapsed_ms": round((time.perf_counter() - started) * 1000, 1),
+            }
+            run.status = "needs_decision"
+            run.error = reason
+            run.error_kind = "serve_decisione"
+            run.finished_at = time.perf_counter()
+
+    def _log_decision(
+        self, run: _Run, timings: dict[str, Any], reason: str, model_label: str
+    ) -> None:
+        engine = getattr(self.director, "ai_engine", None)
+        log = getattr(engine, "_log", None) if engine is not None else None
+        if log is None:
+            return
+        provider_name, _, model_name = (model_label or "/").partition("/")
+        try:
+            log(
+                run.production_id,
+                IDEATION_AGENT,
+                {"provider": provider_name, "model": model_name, "billing": "unknown", "execution": "unknown"},
+                run.started_wall,
+                run.started_ms,
+                outcome="error",
+                attempts=1,
+                fallback_used=False,
+                fallback_from=None,
+                cost=None,
+                error_kind="serve_decisione",
+                error_message=reason[:300],
+                timings={**timings, "total": round(time.perf_counter() * 1000 - run.started_ms, 1)},
+            )
+        except Exception:
+            pass
+
+    # ------------------------------------------------------- scelta dell'utente
+    def decide(self, run_id: str, action: str) -> dict[str, Any]:
+        """Applica la scelta esplicita dopo un fallimento («Riprova» / «Usa Nemotron» / proposte locali / «Annulla»)."""
+        run = self._runs.get(run_id)
+        if run is None:
+            return {"ok": False, "detail": "richiesta inesistente o scaduta"}
+        if run.status != "needs_decision":
+            return {"ok": False, "detail": f"nessuna decisione pendente (stato: {run.status})"}
+        action = str(action or "").strip().lower()
+        if action == "cancel":
+            run.cancel.set()
+            with run.lock:
+                run.status = "cancelled"
+                run.error = "Richiesta annullata dall'utente"
+                run.error_kind = "annullata"
+                run.decision = None
+                run.finished_at = time.perf_counter()
+            run.emit("cancelled", "done", "annullata su richiesta dell'utente")
+            return {"ok": True, "action": "cancel", "run_id": run_id}
+        if action == "local":
+            with run.lock:
+                run.status = "running"
+            thread = threading.Thread(
+                target=self._apply_local, args=(run,), name=f"kora-ideation-local-{run_id}", daemon=True
+            )
+            thread.start()
+            return {"ok": True, "action": "local", "run_id": run_id}
+        if action in ("retry", "fallback"):
+            choice = self._choice()
+            provider = run.provider
+            model = run.model
+            if action == "fallback":
+                fallback_model = str(choice.get("fallback_model") or "")
+                if fallback_model:
+                    provider = fallback_model.split("/", 1)[0]
+                    model = fallback_model
+            new_id = self.start(
+                run.req or CreativeRequestPayload(),
+                provider=provider or None,
+                model=model or None,
+                avoid_cache=True,
+                policy_override="ask",
+            )
+            return {"ok": True, "action": action, "run_id": new_id, "previous_run_id": run_id}
+        return {"ok": False, "detail": "azione non riconosciuta"}
+
+    def _apply_local(self, run: _Run) -> None:
+        reason = str((run.decision or {}).get("reason") or "scelta dell'utente")
+        with run.lock:
+            run.decision = None
+        try:
+            ctx = run.ctx or self._compact_context(
+                run.req or CreativeRequestPayload(),
+                self._authorised_ids(run.req or CreativeRequestPayload()),
+            )
+            self._finish_deterministic(
+                run,
+                run.req or CreativeRequestPayload(),
+                ctx,
+                f"proposte locali scelte dall'utente · motivo AI: {reason}",
+                {},
+                run.started,
+            )
+        except Exception as exc:  # pragma: no cover — difensivo
+            with run.lock:
+                run.status = "error"
+                run.error = f"Errore nella generazione locale: {exc.__class__.__name__}: {exc}"
+                run.error_kind = "errore_interno"
+                run.finished_at = time.perf_counter()
 
     # ------------------------------------------------------------- completions
     def _finish_envelope(

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# KORA STUDIO LIGHT 3.6 — verifica dell'installazione.
+# KORA STUDIO LIGHT 3.6.1 — verifica dell'installazione.
 # Ogni controllo è reale: esegue il comando e legge l'esito, non la presenza del file.
 set -uo pipefail
 
@@ -24,7 +24,7 @@ PY=".venv/bin/python"
 [ -x "$PY" ] || PY="python3"
 
 echo "======================================================"
-echo "  KORA STUDIO LIGHT 3.6 · Verifica installazione"
+echo "  KORA STUDIO LIGHT 3.6.1 · Verifica installazione"
 echo "======================================================"
 
 # 1-8 · ambiente Python -------------------------------------------------------
@@ -87,7 +87,8 @@ finally:
     s.close()
 PY
 then pass "Porta $PORT libera"; else note "Porta $PORT già occupata: usa KORA_PORT=8021 ./start.sh"; fi
-check "Versione 3.6 registrata" bash -c 'grep -q "version=\"3.6.0\"" kora_studio/api/app.py'
+check "Versione 3.6 registrata" bash -c 'grep -q "version=\"3.6" kora_studio/api/app.py'
+[ -x "diagnostica_ai.sh" ] && pass "Script diagnostica_ai.sh eseguibile" || fail "Script diagnostica_ai.sh mancante"
 
 # ---------------------------------------------------------------- riepilogo
 printf '\n------------------------------------------------------\n'

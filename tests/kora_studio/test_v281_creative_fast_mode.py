@@ -175,10 +175,16 @@ def install_adapter(manager: AIEngineManager, adapter: AIProviderAdapter) -> Non
     manager._probe_cache.clear()
 
 
-def fast_settings(manager: AIEngineManager, **overrides: Any) -> None:
+def fast_settings(manager: AIEngineManager, policy: str = "local", **overrides: Any) -> None:
+    """Budget FAST + politica locale esplicita.
+
+    3.6.1: il fallback deterministico automatico esiste solo con una politica che
+    lo autorizza («local», «fallback»); «Chiedi conferma» conserva la richiesta.
+    """
     payload = {"global_budget_sec": 8.0, "first_attempt_sec": 3.0, "cache_ttl_sec": 3600}
     payload.update(overrides)
     manager.update_settings({"fast_creative": payload})
+    manager.model_manager.update({"policy": policy}, internal=True)
 
 
 def wait_run(ideation, run_id: str, timeout: float = 15.0) -> dict[str, Any]:
@@ -228,15 +234,22 @@ def test_cold_first_request_does_not_scan_every_request(env):
     adapter = FakeCreativeAdapter(kind="opencode")
     install_adapter(manager, adapter)
     fast_settings(manager)
-    auth_before = adapter.auth_calls
+    auth_before = adapter.auth_calls  # noqa: F841 - documenta il punto di partenza
     started = time.perf_counter()
     snapshot = run_request(env["director"])
     cold_ms = (time.perf_counter() - started) * 1000
     assert snapshot["status"] == "done"
     assert cold_ms < 2000, f"prima richiesta troppo lenta: {cold_ms:.0f} ms"
+    # la PRIMA richiesta può avviare la discovery di avvio (una sola volta, in
+    # background): la si attende, poi si misura che le richieste successive non
+    # tornino a interrogare il provider
+    startup_thread = getattr(manager, "_snapshot_thread", None)
+    if startup_thread is not None:
+        startup_thread.join(20.0)
+    auth_after_first = adapter.auth_calls
     for _ in range(10):
         assert run_request(env["director"])["status"] == "done"
-    assert adapter.auth_calls == auth_before, "nessun probe provider per richiesta"
+    assert adapter.auth_calls == auth_after_first, "nessun probe provider per richiesta"
     assert manager.snapshot_age_sec() is not None
 
 
@@ -307,17 +320,21 @@ def test_no_internet_falls_back_and_reports_reason(env):
 
 
 # --------------------------------------------------------- 7. model timeout
-def test_model_timeout_respects_first_attempt_budget(env):
+def test_single_attempt_uses_the_configured_ideation_timeout(env):
+    """3.6.1 — niente limite nascosto di 15 s: vale il timeout di ideazione."""
     manager: AIEngineManager = env["manager"]
+    manager.model_manager.update({"timeouts": {"ideation": 10}}, internal=True)
     adapter = FakeCreativeAdapter(kind="opencode", delay=30.0)
     install_adapter(manager, adapter)
-    fast_settings(manager, global_budget_sec=8.0, first_attempt_sec=3.0)
+    fast_settings(manager)
     started = time.perf_counter()
-    snapshot = run_request(env["director"], timeout=20)
+    snapshot = run_request(env["director"], timeout=25)
     elapsed = time.perf_counter() - started
     assert snapshot["status"] == "done"
-    assert elapsed < 6.0, f"primo tentativo non chiuso al budget: {elapsed:.1f}s"
+    assert 8.5 < elapsed < 13.0, f"tentativo non chiuso al timeout configurato: {elapsed:.1f}s"
     assert snapshot["envelope"]["generation_engine"] == "deterministic_offline_fallback"
+    # il modello riceve il budget intero meno ~1,3 s di overhead reale
+    assert adapter.calls and adapter.calls[0]["timeout"] >= 8.0
 
 
 # ------------------------------------------------------------ 8. invalid JSON
@@ -383,7 +400,10 @@ def test_global_budget_and_single_authorised_fallback(env):
     manager.update_settings(
         {"essential": {"enabled": True, "active_provider": "opencode", "enabled_providers": ["opencode", "custom_openai"]}}
     )
-    fast_settings(manager, global_budget_sec=8.0, first_attempt_sec=3.0)
+    # 3.6.1 — il budget viene dal Model Manager; la politica «fallback»
+    # autorizza il secondo tentativo e quindi gli riserva una parte del tempo
+    fast_settings(manager, policy="fallback")
+    manager.model_manager.update({"timeouts": {"ideation": 8}}, internal=True)
     manager._snapshot = {
         "captured_at": time.time(),
         "providers": {
@@ -400,7 +420,8 @@ def test_global_budget_and_single_authorised_fallback(env):
     envelope = snapshot["envelope"]
     assert snapshot["status"] == "done"
     assert elapsed < 7.5, f"budget globale non rispettato: {elapsed:.1f}s"
-    assert envelope["generation_engine"].startswith("ai_engine:custom_openai/")
+    # 3.6.1 — il fallback è il modello «alternativo» del Model Manager (Nemotron)
+    assert envelope["generation_engine"] == "ai_engine:opencode/nemotron-3.5-lightning-free"
     assert envelope["timings_ms"].get("fallback") == 1
     assert fast.calls, "il fallback autorizzato è stato realmente usato"
     assert len(slow.calls) <= 1, "un solo tentativo sul primo motore"
@@ -559,6 +580,7 @@ def test_background_prewarm_requires_opt_in_and_zero_cost(env):
 # --------------------------- 20. deterministic fallback is visible in the monitor
 def test_deterministic_fallback_is_logged_with_phases(env):
     director: KoraDirector = env["director"]
+    env["manager"].model_manager.update({"policy": "local"}, internal=True)
     director.creative.suggest_four_themes_lite(CreativeRequestPayload())
     rows = director.ai_engine.activity.list(limit=5)
     row = next((r for r in rows if r["model"] == "kora-deterministic"), None)

@@ -115,7 +115,8 @@ def test_connect_gemini_reports_invalid_key_without_activating(isolated_env, mon
     assert director.ai_engine.essential().get("active_provider") != "gemini_api"
 
 
-def test_connect_gemini_activates_zero_cost_engine(isolated_env, monkeypatch):
+def test_connect_gemini_does_not_switch_the_creative_engine(isolated_env, monkeypatch):
+    """3.6.1 — collegare una chiave non cambia il motore creativo senza consenso."""
     director = _build_director(isolated_env)
     from kora_studio.ai_engine import adapters_http
     from kora_studio.ai_engine.base import BILLING_UNKNOWN, ModelInfo
@@ -146,7 +147,10 @@ def test_connect_gemini_activates_zero_cost_engine(isolated_env, monkeypatch):
     data = res.json()
     assert data["ok"] is True
     assert data["model"] == "gemini-2.0-flash-lite"
-    assert director.ai_engine.essential()["active_provider"] == "gemini_api"
+    # la chiave è salvata e verificata, ma OpenCode resta il motore attivo
+    assert data["activated"] is False
+    assert director.ai_engine.essential()["active_provider"] == "opencode"
+    assert director.ai_engine.provider_enabled("gemini_api") is False
 
     # v3.3: la quota gratuita non è più dichiarata d'ufficio
     assert data["billing"] == "non_verificabile"

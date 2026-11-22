@@ -113,15 +113,61 @@ export interface IdeationStageEvent {
   cache?: boolean;
 }
 
+export interface AIStatus {
+  provider: string;
+  model: string;
+  model_label: string;
+  mode: "everyday" | "premium" | string;
+  role: string;
+  policy: string;
+  policy_label: string;
+  timeouts: Record<string, number>;
+  fallback_model: string;
+  installed: boolean;
+  cli_version?: string | null;
+  detail?: string;
+  provider_enabled?: boolean;
+  last_test?: { model?: string; at?: string; latency_ms?: number; kind?: string } | null;
+  last_inference?: {
+    at?: string;
+    provider?: string;
+    model?: string;
+    ok?: boolean;
+    latency_ms?: number | null;
+    error?: string;
+  } | null;
+  migration?: { detail?: string; from?: string; to?: string; at?: string } | null;
+  user_choice?: boolean;
+}
+
+export interface IdeationDecisionOption {
+  action: "retry" | "fallback" | "local" | "cancel";
+  label: string;
+  detail: string;
+}
+
+export interface IdeationDecision {
+  reason: string;
+  policy: string;
+  tried: string[];
+  provider: string;
+  model: string;
+  options: IdeationDecisionOption[];
+  elapsed_ms: number;
+}
+
 export interface IdeationRun {
   run_id: string;
-  status: "running" | "done" | "cancelled" | "error";
+  status: "running" | "done" | "cancelled" | "error" | "needs_decision";
   events: IdeationStageEvent[];
   elapsed_ms: number;
   budget_ms: number;
   envelope: ThemeProposalsLiteEnvelope | null;
   error: string | null;
   error_kind: string;
+  decision: IdeationDecision | null;
+  provider: string;
+  model: string;
   cancelled: boolean;
   finished: boolean;
 }

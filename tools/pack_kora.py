@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Impacchetta KORA STUDIO LIGHT 3.6 in una cartella pronta al doppio clic.
+"""Impacchetta KORA STUDIO LIGHT 3.6.1 in una cartella pronta al doppio clic.
 
 Regole:
 - l'interfaccia compilata (frontend/out) viaggia dentro: nessuna build sul Mac dell'utente;
@@ -35,6 +35,7 @@ TOP_FILES = [
     "verifica.sh",
     "start.sh",
     "ripristina.sh",
+    "diagnostica_ai.sh",
     "Installa KORA.command",
     "Avvia KORA.command",
     "LEGGIMI.txt",
@@ -90,6 +91,10 @@ def main() -> int:
         if src.exists():
             shutil.copy2(src, dest / name)
 
+    docs_src = ROOT / "docs"
+    if docs_src.is_dir():
+        shutil.copytree(docs_src, dest / "docs", ignore=ignore)
+
     demo_src = ROOT / "demo"
     if demo_src.is_dir():
         shutil.copytree(demo_src, dest / "demo", ignore=ignore)
@@ -100,6 +105,7 @@ def main() -> int:
         "verifica.sh",
         "start.sh",
         "ripristina.sh",
+        "diagnostica_ai.sh",
         "Installa KORA.command",
         "Avvia KORA.command",
     ):

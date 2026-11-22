@@ -1,5 +1,6 @@
 import type {
   AIActivityCall,
+  AIStatus,
   AIActivitySummary,
   AIEngineModel,
   AIEngineSettings,
@@ -165,7 +166,18 @@ export interface ModelTestRecord {
   themes?: number;
 }
 
+export interface ModelMigrationNote {
+  at?: string;
+  from?: string;
+  from_all?: string[];
+  to?: string;
+  retired?: boolean;
+  detail?: string;
+}
+
 export interface ModelManagerConfig {
+  user_choice?: boolean;
+  migration?: ModelMigrationNote | null;
   roles: { everyday: string; premium: string; fallback: string };
   timeouts: { ideation: number; design: number; revision: number; premium: number };
   policy: "ask" | "fallback" | "local" | "stop";
@@ -311,6 +323,15 @@ export const koraApi = {
       `/api/creative/suggest-lite/${runId}/cancel`,
       { method: "POST" }
     ),
+  decideSuggestThemesLite: (
+    runId: string,
+    action: "retry" | "fallback" | "local" | "cancel"
+  ) =>
+    apiFetch<{ ok: boolean; action: string; run_id: string; previous_run_id?: string }>(
+      `/api/creative/suggest-lite/${runId}/decide`,
+      { method: "POST", body: JSON.stringify({ action }) }
+    ),
+  aiModelsStatus: () => apiFetch<AIStatus>("/api/ai-models/status"),
   expandTheme: (
     proposal: ThemeProposalLite,
     durationSec?: number,
@@ -342,7 +363,29 @@ export const koraApi = {
       voices: VoiceOption[];
       recent_projects: ProjectRecord[];
       vault: { total: number; categories: Record<string, number> };
-      engine: { active_provider: string; state: string; model: string; essential: boolean };
+      engine: {
+        active_provider: string;
+        state: string;
+        model: string;
+        essential: boolean;
+        mode?: string;
+        role?: string;
+        model_label?: string;
+        policy?: string;
+        fallback_model?: string;
+        detail?: string;
+        migration?: { detail?: string; from?: string; to?: string } | null;
+        last_test?: { model?: string; at?: string; latency_ms?: number; kind?: string } | null;
+        last_inference?: {
+          at?: string;
+          provider?: string;
+          model?: string;
+          ok?: boolean;
+          latency_ms?: number | null;
+          error?: string;
+        } | null;
+      };
+      ai_status?: Record<string, unknown>;
       cached_proposals: number;
     }>("/api/studio/bootstrap"),
   // Essential: Progetta Reel in UNA sola richiesta creativa strutturata

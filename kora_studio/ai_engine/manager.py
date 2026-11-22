@@ -66,6 +66,7 @@ from kora_studio.ai_engine.models import (
     BILLING_SUBSCRIPTION,
     BILLING_UNKNOWN,
     EXEC_LOCAL,
+    EXEC_REMOTE,
     QUOTA_EXHAUSTED,
     QUOTA_NOT_VERIFIABLE,
     canonical_model_id,
@@ -155,12 +156,18 @@ class AIEngineManager:
         self._adapters: dict[str, AIProviderAdapter] = {}
         self._cancellations: dict[str, threading.Event] = {}
         self.activity = AIActivityLog(self.db)
+        #: 3.6.1 — Model Manager (impostato da KoraDirector): fonte unica del modello creativo
+        self.model_manager: Any = None
         # 2.8.1 — discovery snapshot: avoid a full provider/model scan on every request
         self._snapshot: dict[str, Any] = {}
         self._snapshot_at: float = 0.0
         self._snapshot_lock = threading.Lock()
         self._snapshot_thread: Optional[threading.Thread] = None
         self._snapshot_building = False
+        # 3.6.1 — un solo probe per provider alla volta: due richieste ravvicinate
+        # non devono autenticarsi due volte (né duplicare i thread di risoluzione)
+        self._probe_locks: dict[str, threading.Lock] = {}
+        self._probe_locks_guard = threading.Lock()
 
     # ------------------------------------------------------------------ settings
     def settings(self) -> dict[str, Any]:
@@ -537,6 +544,154 @@ class AIEngineManager:
             return None
         return plan[0] if plan else None
 
+    # ------------------------------------------- 3.6.1 scelta creativa esplicita
+    def _entry_for_model(self, provider_id: str, model: str) -> dict[str, Any]:
+        """Entry esplicita per un modello scelto dall'utente, anche se l'elenco è vecchio."""
+        infos = list(self._models_cached(provider_id))
+        if not infos:
+            snapshot = self._snapshot or {}
+            infos = list(((snapshot.get("providers") or {}).get(provider_id) or {}).get("models") or [])
+        info = next(
+            (m for m in infos if canonical_model_id(m.id) == canonical_model_id(model)),
+            None,
+        )
+        if info is None:
+            free = str(model).lower().endswith("-free")
+            info = ModelInfo(
+                id=model,
+                label=canonical_model_id(model),
+                provider=provider_id,
+                source="cli",
+                text=True,
+                vision=None,
+                vision_verified=False,
+                execution=EXEC_REMOTE,
+                billing=BILLING_FREE_QUOTA if free else BILLING_UNKNOWN,
+                cost_per_1k_eur=0.0 if free else None,
+                quota_status=QUOTA_NOT_VERIFIABLE,
+                notes=(
+                    "modello gratuito dichiarato dal nome (-free)"
+                    if free
+                    else "modello scelto a mano: costo non verificabile"
+                ),
+            )
+        return self._entry(provider_id, info, preferred=True, explicit=True)
+
+    def creative_entry(self, agent_id: str, purpose: str = "ideation") -> Optional[dict[str, Any]]:
+        """Modello creativo secondo il Model Manager, trasmesso esplicitamente al motore.
+
+        Il piano automatico non può più scegliere un modello diverso da quello
+        configurato (era la causa del ritorno silenzioso a DeepSeek).
+        """
+        mm = getattr(self, "model_manager", None)
+        if mm is None:
+            return self._any_engine_entry(agent_id)
+        choice = mm.effective_choice()
+        provider = str(choice.get("provider") or "")
+        model = str(choice.get("model") or "")
+        if not provider or not model:
+            return self._any_engine_entry(agent_id)
+        adapter = self.adapter(provider)
+        if adapter is None:
+            return None
+        if getattr(adapter, "is_cli", False):
+            probe = self.probe(provider)
+            if not probe.get("installed") or not probe.get("authenticated"):
+                return None
+            entry = self._entry_for_model(provider, model)
+            entry.update(
+                {
+                    "source": "model_manager",
+                    "mode": choice.get("mode"),
+                    "role": choice.get("role"),
+                    "purpose": purpose,
+                }
+            )
+            return entry
+        # provider non CLI (adapter di collaudo, API): il modello deve esistere nell'elenco
+        snapshot = self._snapshot or {}
+        info = ((snapshot.get("providers") or {}).get(provider) or {}) if snapshot else {}
+        snapshot_knows_provider = bool(info) and bool(info.get("authenticated"))
+        entry = None
+        if snapshot:
+            entry = self._model_entry_in_plan(agent_id, provider, model, from_snapshot=True)
+        if entry is None and not snapshot_knows_provider:
+            # 3.6.1 — lo snapshot può essere vecchio (provider collegato dopo l'ultima
+            # verifica): una prova reale, una volta sola, evita il falso «nessun motore»
+            # e quindi il deterministico ingiustificato. Se invece il provider è già
+            # verificato e il modello non è nell'elenco, non si torna a interrogare:
+            # si usa il percorso standard.
+            entry = self._model_entry_in_plan(agent_id, provider, model, from_snapshot=False)
+        if entry is not None:
+            entry.update(
+                {
+                    "source": "model_manager",
+                    "mode": choice.get("mode"),
+                    "role": choice.get("role"),
+                    "purpose": purpose,
+                }
+            )
+            return entry
+        return self._any_engine_entry(agent_id)
+
+    def _model_entry_in_plan(
+        self,
+        agent_id: str,
+        provider: str,
+        model: str,
+        *,
+        from_snapshot: bool,
+    ) -> Optional[dict[str, Any]]:
+        """Candidato esatto (stesso provider e stesso modello) dentro il piano."""
+        try:
+            plan = self.candidate_plan(
+                agent_id,
+                provider_override=provider,
+                model_override=model,
+                from_snapshot=from_snapshot,
+            )
+        except (EngineError, ValueError):
+            return None
+        # il piano può contenere altri provider come fallback: qui serve proprio
+        # il modello configurato, altrimenti si torna al percorso standard
+        return next(
+            (
+                candidate
+                for candidate in plan
+                if candidate.get("provider") == provider
+                and canonical_model_id(str(candidate.get("model") or "")) == canonical_model_id(model)
+            ),
+            None,
+        )
+
+    def _any_engine_entry(self, agent_id: str) -> Optional[dict[str, Any]]:
+        """Ultima rete di sicurezza: snapshot, poi probe reale (mai deterministico per errore)."""
+        entry = self.fast_entry(agent_id)
+        if entry is not None:
+            return entry
+        try:
+            return self.resolve(agent_id)
+        except EngineError:
+            return None
+
+    def _record_creative_inference(
+        self, provider: str, model: str, ok: bool, latency_ms: Optional[float], error: str = ""
+    ) -> None:
+        mm = getattr(self, "model_manager", None)
+        if mm is None:
+            return
+        try:
+            mm.record_inference(
+                provider=provider,
+                model=model,
+                ok=ok,
+                latency_ms=latency_ms,
+                error=error,
+                purpose="creative",
+            )
+        except Exception:
+            pass
+
     # ----------------------------------------------------------------- metadata
     def _enrich_model(self, info: ModelInfo, provider_id: Optional[str] = None) -> ModelInfo:
         """Apply user declarations and verified capabilities on top of the raw metadata."""
@@ -692,18 +847,15 @@ class AIEngineManager:
                     break
             chosen = chosen or (models[0] if models else "")
 
-        patch: dict[str, Any] = {
-            "essential": {
-                "enabled": True,
-                "active_provider": "gemini_api",
-                "enabled_providers": ["gemini_api"],
-            },
-            "primary_provider": "gemini_api",
-        }
+        # 3.6.1 — collegare una chiave NON cambia il motore creativo: se OpenCode
+        # è il motore principale, Gemini resta un'estensione inattiva finché
+        # l'utente non la attiva esplicitamente.
+        patch: dict[str, Any] = {}
         if chosen:
             patch["providers"] = {"gemini_api": {"model": chosen}}
         # nessun declared_free_quota automatico: la quota gratuita va dichiarata dall'utente
-        self.update_settings(patch)
+        if patch:
+            self.update_settings(patch)
         self.invalidate("gemini_api")
         self._snapshot = {}
         self._snapshot_at = 0.0
@@ -711,18 +863,21 @@ class AIEngineManager:
         # 3) stato di fatturazione: si dichiara solo ciò che risulta
         declared_free = bool((self.settings().get("declared_free_quota") or {}).get("gemini_api"))
         billing = "free_quota_dichiarata" if declared_free else "non_verificabile"
+        active = self.essential()["active_provider"]
         return {
             "ok": True,
             "provider": "gemini_api",
             "model": chosen,
             "models": models[:20],
             "essential": self.essential(),
+            "activated": active == "gemini_api",
             "billing": billing,
             "cost_verified": False,
             "detail": (
-                "Gemini collegato e motore attivo. Costo non verificabile via API: "
-                "il piano gratuito dipende dal progetto Google. Con budget a 0 € "
-                "KORA blocca comunque le chiamate non autorizzate."
+                "Gemini collegato come estensione: il motore creativo resta "
+                f"{active}. Attivalo dalle Impostazioni solo se lo vuoi usare. "
+                "Costo non verificabile via API: con budget a 0 € KORA blocca "
+                "comunque le chiamate non autorizzate."
                 + (" Quota gratuita dichiarata da te." if declared_free else "")
             ),
         }
@@ -779,7 +934,30 @@ class AIEngineManager:
             "active": False,
         }
 
+    def _probe_lock_for(self, provider_id: str) -> threading.Lock:
+        with self._probe_locks_guard:
+            lock = self._probe_locks.get(provider_id)
+            if lock is None:
+                lock = threading.Lock()
+                self._probe_locks[provider_id] = lock
+            return lock
+
     def probe(self, provider_id: str, refresh: bool = False) -> dict[str, Any]:
+        """Stato del provider, con cache e **un solo** probe in volo per provider.
+
+        Due richieste che arrivano insieme (es. thread di risoluzione duplicato)
+        non devono autenticarsi due volte: la seconda riusa il risultato appena
+        scritto in cache.
+        """
+        if refresh:
+            return self._probe_uncached(provider_id, refresh=True)
+        with self._probe_lock_for(provider_id):
+            cached = self._probe_cache.get(provider_id)
+            if cached and (time.time() - cached[0]) < PROBE_TTL_SEC:
+                return cached[1]
+            return self._probe_uncached(provider_id, refresh=False)
+
+    def _probe_uncached(self, provider_id: str, refresh: bool = False) -> dict[str, Any]:
         # refresh=True = verifica esplicita dell'utente su una singola estensione
         if not self.provider_enabled(provider_id) and not refresh:
             result = self._disabled_probe(provider_id)
@@ -1045,9 +1223,21 @@ class AIEngineManager:
         }
 
     def _selected_role_model(self, provider_id: str) -> Optional[str]:
-        """Modello preferito per il provider secondo la modalità Everyday/Premium."""
+        """Modello preferito per il provider secondo la modalità Everyday/Premium.
+
+        3.6.1 — la fonte è il Model Manager (con i suoi default), non più la
+        chiave grezza: una configurazione vuota non deve far vincere il legacy.
+        """
         if provider_id != "opencode":
             return None
+        mm = getattr(self, "model_manager", None)
+        if mm is not None:
+            try:
+                choice = mm.effective_choice()
+                if choice.get("provider") == provider_id and choice.get("model"):
+                    return str(choice["model"])
+            except Exception:
+                pass
         try:
             stored = self.db.get_preference("ai_model_config") or {}
         except Exception:
@@ -1156,6 +1346,19 @@ class AIEngineManager:
                 or canonical_model_id(e["model"]) == canonical_model_id(explicit_model)
             ]
             plan = filtered
+            # 3.6.1 — modello scelto dall'utente assente da un elenco CLI vecchio:
+            # lo si usa comunque, esplicitamente (il CLI è la fonte reale).
+            if (
+                not plan
+                and explicit_provider
+                and getattr(self.adapter(explicit_provider), "is_cli", False)
+            ):
+                adapter = self.adapter(explicit_provider)
+                probe = self.probe(explicit_provider)
+                if adapter is not None and probe.get("installed") and probe.get("authenticated"):
+                    synthetic = self._entry_for_model(explicit_provider, explicit_model)
+                    synthetic["explicit"] = True
+                    plan = [synthetic]
 
         def _score(entry: dict[str, Any]) -> tuple:
             if strategy == STRATEGY_QUALITY:
@@ -1566,6 +1769,16 @@ class AIEngineManager:
         timings: Optional[dict[str, Any]] = None,
         request_label: str = "",
     ) -> str:
+        # 3.6.1 — l'esito reale dell'inferenza creativa alimenta la diagnostica della Home
+        provider_name = str(entry.get("provider") or "")
+        if provider_name and provider_name != "deterministic":
+            self._record_creative_inference(
+                provider_name,
+                str(entry.get("model") or ""),
+                outcome == "ok",
+                (timings or {}).get("model_latency"),
+                "" if outcome == "ok" else (error_message or error_kind),
+            )
         return self.activity.record(
             production_id=production_id,
             agent=agent_id,

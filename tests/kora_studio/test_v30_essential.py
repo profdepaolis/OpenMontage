@@ -334,7 +334,7 @@ def test_api_bootstrap_and_project_reel(env):
     )
     assert res.status_code == 200, res.text
     payload = res.json()
-    assert payload["design"]["calls"] == 1
+    assert payload["design"]["calls"] == 1, payload["design"]
     assert payload["design"]["concept"]["voiceover_script"]
     assert payload["project"]["total_frames"] == 500
     assert len(adapter.calls) == 1
