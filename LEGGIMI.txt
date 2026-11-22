@@ -1,0 +1,90 @@
+======================================================
+  KORA STUDIO LIGHT 3.6 — The Art of Being
+  Guida per chi non vuole usare il terminale
+======================================================
+
+Cosa hai in mano
+----------------
+Una cartella completa: l'applicazione, i materiali autentici KORA,
+l'interfaccia già compilata e i file di avvio.
+Non devi installare nulla a mano, né scrivere comandi.
+
+COME PARTIRE (3 passi)
+----------------------
+1) Scompatta il file ZIP.
+   Ottieni la cartella «Kora Studio Light».
+
+2) Mettila dove vuoi (consigliato: la cartella Documenti).
+   Non serve spostarla in Applications.
+
+3) Doppio clic su: Installa KORA.command
+
+   - Si apre una finestra nera (Terminale): è normale, sta lavorando.
+   - La prima volta possono volerci 2-3 minuti.
+   - Alla fine il browser si apre da solo su http://127.0.0.1:8020
+
+   Se macOS dice «impossibile aprire perché proviene da sviluppatore
+   non identificato»:
+      tasto destro sul file → Apri → poi di nuovo Apri.
+
+Cosa c'è di nuovo nella 3.6
+---------------------------
+- Tre passi chiari in home: 01 Suggerisci un tema → 02 Progetta Reel →
+  03 Realizza Reel.
+- Sezione «Modelli & benchmark» nelle Impostazioni: scegli il modello
+  Everyday e quello Cinematic Premium, alzi i tempi massimi, lanci un test
+  rapido o creativo. Un modello è «verificato» solo dopo un test reale.
+- Errori spiegati in italiano: modello dismesso, quota esaurita, rete,
+  risposta vuota. Con «Riprova» e l'indicazione di dove cambiare modello.
+- Controllo qualità a quattro stati: Superato, Non superato, Non applicabile,
+  Non verificato (es. senza voiceover la sincronizzazione è «Non applicabile»).
+- Audio: ogni segmento vocale ha un manifest con testo, voce, provider,
+  modello e parametri. Se cambia solo la timeline, la voce non si rigenera.
+- Master audio a −14 LUFS, picco ≤ −1 dBTP, misurato dal QC.
+- Nuovo script di ripristino: ripristina.sh (crea prima un backup di sicurezza).
+
+DALLA SECONDA VOLTA
+-------------------
+Doppio clic su: Avvia KORA.command
+Il browser si apre dopo pochi secondi.
+
+PER FERMARE KORA
+----------------
+Torna nella finestra nera e premi Ctrl+C.
+Puoi anche chiudere la finestra: KORA smette di funzionare.
+
+SE QUALCOSA NON VA
+------------------
+1) Doppio clic su verifica.sh — mostra 31 controlli con OK o KO.
+   (Se il doppio clic non parte: tasto destro → Apri con → Terminale.)
+2) I messaggi KO dicono cosa manca, in italiano.
+3) Se manca FFmpeg: apri Terminale e scrivi
+      brew install ffmpeg
+   poi rilancia Installa KORA.command.
+
+COSA NON SERVE
+--------------
+- Non serve internet per usare KORA (serve solo per i provider AI,
+  se li colleghi).
+- Non serve Node, né npm, né Remotion: l'interfaccia è già compilata.
+- Non serve account: parte in modalità gratuita.
+
+DENTRO LA CARTELLA
+------------------
+Installa KORA.command   → prepara e avvia (prima volta)
+Avvia KORA.command      → avvia soltanto
+verifica.sh             → controlla l'installazione
+setup.sh                → preparazione tecnica (lo usa Installa)
+start.sh                → avvio tecnico (lo usa Avvia)
+ripristina.sh           → ripristina un backup (chiede conferma, è reversibile)
+demo/                   → Reel 20 s e 30 s, copertine, didascalie, anteprima
+KORA_3.6_REPORT.md      → cosa è stato fatto, cosa è collaudato e cosa no
+INSTALLAZIONE.md        → istruzioni tecniche, se ti servono
+kora_studio/            → l'applicazione
+assets/kora/            → foto, video, logo e font originali KORA
+
+Nota sull'audio
+---------------
+Se non hai collegato un servizio di voce (ElevenLabs, OpenAI o la voce
+offline), i Reel escono con musica, effetti e sottotitoli: è dichiarato
+nel report del Reel, non è un errore.

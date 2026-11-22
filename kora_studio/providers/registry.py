@@ -1,0 +1,806 @@
+"""AI Provider Manager — modular registry, diagnostics, secret storage, and strategy selection."""
+
+from __future__ import annotations
+
+import json
+import os
+import time
+from typing import Any, Optional
+
+import requests
+
+from kora_studio.config import SecretVault
+from kora_studio.db.database import Database, utcnow_iso
+from kora_studio.media_tools import check_remotion_runtime, find_ffmpeg, find_ffprobe
+from kora_studio.providers.cost_guard import CostGuard
+
+DEFAULT_PROVIDERS: list[dict[str, Any]] = [
+    {
+        "id": "local_ffmpeg_pillow",
+        "name": "Motore Locale FFmpeg + Pillow + NumPy",
+        "capabilities": [
+            "video_editing",
+            "image_editing",
+            "image_animation",
+            "color_grading",
+            "visual_analysis",
+            "audio_mixing",
+        ],
+        "endpoint": "local://ffmpeg-9",
+        "auth_type": "nessuna (locale)",
+        "models": ["ffmpeg-libx264", "lanczos-kenburns", "pil-color-analyzer"],
+        "declared_costs": {"per_operation_eur": 0.0, "note": "Gratuito su hardware locale"},
+        "quota_status": "Illimitato (locale)",
+        "limits_doc": "Dipende da CPU locale; nessuna chiamata di rete.",
+        "is_free_local": True,
+        "env_var": None,
+    },
+    {
+        "id": "piper_tts_local",
+        "name": "Piper TTS Locale (Offline)",
+        "capabilities": ["text_to_speech"],
+        "endpoint": "local://piper-tts",
+        "auth_type": "nessuna (modello .onnx locale)",
+        "models": ["it_IT-paola-medium", "it_IT-riccardo-x_low"],
+        "declared_costs": {"per_1k_chars_eur": 0.0, "note": "Gratuito offline se modello .onnx presente"},
+        "quota_status": "Illimitato (locale)",
+        "limits_doc": "Richiede file .onnx italiano in kora_data/voices/piper/.",
+        "is_free_local": True,
+        "env_var": None,
+    },
+    {
+        "id": "remotion_local",
+        "name": "Remotion Composer Locale",
+        "capabilities": ["video_editing", "subtitles"],
+        "endpoint": "local://remotion-composer",
+        "auth_type": "nessuna (locale)",
+        "models": ["remotion-4.0"],
+        "declared_costs": {"per_operation_eur": 0.0, "note": "Open source locale; richiede Chromium headless"},
+        "quota_status": "Illimitato (locale)",
+        "limits_doc": "Richiede Node.js + Chromium headless installato.",
+        "is_free_local": True,
+        "env_var": None,
+    },
+    {
+        "id": "gemini_api",
+        "name": "Google Gemini API (Ufficiale)",
+        "capabilities": ["llm", "visual_analysis", "image_generation", "image_editing"],
+        "endpoint": "https://generativelanguage.googleapis.com/v1beta",
+        "auth_type": "API Key (GEMINI_API_KEY)",
+        "models": ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.5-flash-image"],
+        "declared_costs": {"llm_per_call_eur": 0.01, "image_per_gen_eur": 0.04, "free_tier_note": "Quota gratuita soggetta a limiti Google AI Studio"},
+        "quota_status": "Non verificabile",
+        "limits_doc": "Solo API ufficiale; l'abbonamento web Gemini Advanced non include API gratuite.",
+        "is_free_local": False,
+        "env_var": "GEMINI_API_KEY",
+    },
+    {
+        "id": "google_veo_api",
+        "name": "Google Veo / Flow API (Ufficiale)",
+        "capabilities": ["image_to_video", "text_to_video"],
+        "endpoint": "https://generativelanguage.googleapis.com/v1beta/models",
+        "auth_type": "API Key Gemini / Cloud Billing",
+        "models": ["veo-3.1-generate-preview", "veo-3.0-generate-001", "veo-2.0-generate-001"],
+        "declared_costs": {"per_second_eur": 0.35},
+        "quota_status": "Non verificabile",
+        "limits_doc": "Generazione video a pagamento; riutilizza la chiave Gemini API ma richiede Billing attivo su Google AI Studio / Cloud.",
+        "is_free_local": False,
+        "env_var": "GEMINI_API_KEY",
+    },
+    {
+        "id": "elevenlabs_api",
+        "name": "ElevenLabs Voice API (Ufficiale)",
+        "capabilities": ["text_to_speech"],
+        "endpoint": "https://api.elevenlabs.io/v1",
+        "auth_type": "API Key (ELEVENLABS_API_KEY)",
+        "models": ["eleven_multilingual_v2", "eleven_turbo_v2_5"],
+        "declared_costs": {"per_1k_chars_eur": 0.18},
+        "quota_status": "Non verificabile",
+        "limits_doc": "Crediti residui verificabili via /v1/user/subscription solo con chiave configurata.",
+        "is_free_local": False,
+        "env_var": "ELEVENLABS_API_KEY",
+    },
+    {
+        "id": "openai_api",
+        "name": "OpenAI API (Ufficiale)",
+        "capabilities": ["llm", "text_to_speech", "transcription", "visual_analysis", "image_generation"],
+        "endpoint": "https://api.openai.com/v1",
+        "auth_type": "Bearer API Key (OPENAI_API_KEY)",
+        "models": ["gpt-4.1-mini", "gpt-4o-mini-tts", "whisper-1", "gpt-image-1"],
+        "declared_costs": {"llm_per_call_eur": 0.01, "tts_per_1k_chars_eur": 0.015, "image_per_gen_eur": 0.04},
+        "quota_status": "Non verificabile",
+        "limits_doc": "L'abbonamento ChatGPT Plus web non include crediti API; richiede credito prepagato su platform.openai.com.",
+        "is_free_local": False,
+        "env_var": "OPENAI_API_KEY",
+    },
+    {
+        "id": "leonardo_ai",
+        "name": "Leonardo AI API (Ufficiale)",
+        "capabilities": ["image_generation", "image_editing", "image_to_video"],
+        "endpoint": "https://cloud.leonardo.ai/api/rest/v1",
+        "auth_type": "Bearer API Key (LEONARDO_API_KEY)",
+        "models": ["leonardo-phoenix", "motion-2.0"],
+        "declared_costs": {"image_per_gen_eur": 0.03, "video_per_gen_eur": 0.25},
+        "quota_status": "Non verificabile",
+        "limits_doc": "Token residui interrogabili via /me solo con chiave API valida.",
+        "is_free_local": False,
+        "env_var": "LEONARDO_API_KEY",
+    },
+    {
+        "id": "huggingface_api",
+        "name": "Hugging Face Inference API (Ufficiale)",
+        "capabilities": ["image_generation", "image_to_video", "text_to_video", "llm", "transcription"],
+        "endpoint": "https://router.huggingface.co/hf-inference",
+        "auth_type": "Bearer Token (HF_TOKEN)",
+        "models": [
+            "Wan-AI/Wan2.1-T2V-14B",
+            "Wan-AI/Wan2.1-I2V-14B-480P",
+            "THUDM/CogVideoX-5b",
+            "Qwen/Qwen2.5-72B-Instruct",
+            "FLUX.1-schnell",
+            "whisper-large-v3",
+        ],
+        "declared_costs": {"free_tier_eur": 0.0, "pro_rate_note": "Quota gratuita limitata su Inference API / PRO"},
+        "quota_status": "Non verificabile",
+        "limits_doc": "Supporta anche modelli video open (Wan 2.1 di Alibaba/Qwen, CogVideoX) con HF_TOKEN.",
+        "is_free_local": False,
+        "env_var": "HF_TOKEN",
+    },
+    {
+        "id": "fal_ai",
+        "name": "fal.ai Video Hub (Wan 2.1 · Kling · LTX-Video)",
+        "capabilities": ["image_to_video", "text_to_video", "image_generation"],
+        "endpoint": "https://queue.fal.run",
+        "auth_type": "API Key (FAL_KEY)",
+        "models": [
+            "fal-ai/wan-i2v",
+            "fal-ai/wan-t2v",
+            "fal-ai/ltx-video",
+            "fal-ai/kling-video/v1.6/standard/image-to-video",
+            "fal-ai/kling-video/v1.6/standard/text-to-video",
+        ],
+        "declared_costs": {"wan_per_clip_eur": 0.20, "ltx_per_clip_eur": 0.05, "kling_per_clip_eur": 0.30},
+        "quota_status": "Non verificabile",
+        "limits_doc": "Motore multi-modello pay-per-use su fal.ai (include Alibaba Wan 2.1, Kling 1.6, LTX-Video).",
+        "is_free_local": False,
+        "env_var": "FAL_KEY",
+    },
+    {
+        "id": "qwen_wan_api",
+        "name": "Alibaba Qwen & Wan Video (DashScope Ufficiale)",
+        "capabilities": ["image_to_video", "text_to_video", "llm", "visual_analysis"],
+        "endpoint": "https://dashscope-intl.aliyuncs.com/api/v1",
+        "auth_type": "Bearer API Key (DASHSCOPE_API_KEY)",
+        "models": ["wan2.1-i2v-turbo", "wan2.1-t2v-turbo", "qwen-plus", "qwen-vl-max"],
+        "declared_costs": {"video_per_clip_eur": 0.22, "llm_per_call_eur": 0.005},
+        "quota_status": "Non verificabile",
+        "limits_doc": "API ufficiale Alibaba Cloud Model Studio (Qwen per testi/analisi + Wan 2.1 per clip video I2V/T2V).",
+        "is_free_local": False,
+        "env_var": "DASHSCOPE_API_KEY",
+    },
+    {
+        "id": "deepseek_api",
+        "name": "DeepSeek API (Solo Testo / Copy / Regia)",
+        "capabilities": ["llm"],
+        "endpoint": "https://api.deepseek.com/v1",
+        "auth_type": "Bearer API Key (DEEPSEEK_API_KEY)",
+        "models": ["deepseek-chat", "deepseek-reasoner"],
+        "declared_costs": {"llm_per_call_eur": 0.002},
+        "quota_status": "Non verificabile",
+        "limits_doc": "Modello testuale (copy, script e storyboard); non genera file video MP4.",
+        "is_free_local": False,
+        "env_var": "DEEPSEEK_API_KEY",
+    },
+    {
+        "id": "claude_api",
+        "name": "Anthropic Claude API (Solo Testo / Copy / Regia)",
+        "capabilities": ["llm"],
+        "endpoint": "https://api.anthropic.com/v1/messages",
+        "auth_type": "API Key (ANTHROPIC_API_KEY)",
+        "models": ["claude-sonnet-4-5", "claude-haiku-4-5"],
+        "declared_costs": {"llm_per_call_eur": 0.01},
+        "quota_status": "Non verificabile",
+        "limits_doc": "Solo API ufficiale console.anthropic.com (l'abbonamento web Claude Pro è separato). Ottimo per copywriting italiano e regia.",
+        "is_free_local": False,
+        "env_var": "ANTHROPIC_API_KEY",
+    },
+    {
+        "id": "openrouter",
+        "name": "OpenRouter (gateway multi-modello, anche modelli gratuiti)",
+        "capabilities": ["llm", "llm_vision"],
+        "endpoint": "https://openrouter.ai/api/v1",
+        "auth_type": "Bearer API Key (OPENROUTER_API_KEY)",
+        "models": [],
+        "declared_costs": {},
+        "quota_status": "Non verificabile",
+        "limits_doc": "Gateway unico verso molti modelli; l'elenco modelli e i costi reali sono letti dall'API al momento della verifica.",
+        "is_free_local": False,
+        "env_var": "OPENROUTER_API_KEY",
+    },
+    {
+        "id": "custom_openai",
+        "name": "Endpoint OpenAI-compatibile personalizzato (LM Studio, llama.cpp, vLLM, ...)",
+        "capabilities": ["llm", "llm_vision"],
+        "endpoint": "http://127.0.0.1:1234/v1",
+        "auth_type": "Bearer token opzionale",
+        "models": [],
+        "declared_costs": {},
+        "quota_status": "Non verificabile",
+        "limits_doc": "Qualsiasi server locale che espone /v1/models e /v1/chat/completions. L'indirizzo si configura in Impostazioni → AI Engine Manager.",
+        "is_free_local": True,
+        "env_var": "CUSTOM_OPENAI_API_KEY",
+    },
+]
+
+
+class ProviderManager:
+    """Central registry, health tester, secret manager, and strategy selector."""
+
+    def __init__(self, db: Database, vault: Optional[SecretVault] = None) -> None:
+        self.db = db
+        self.vault = vault or SecretVault()
+        self.cost_guard = CostGuard(db)
+        self.ensure_seeded()
+
+    def ensure_seeded(self) -> None:
+        now = utcnow_iso()
+        with self.db.session() as conn:
+            for p in DEFAULT_PROVIDERS:
+                row = conn.execute("SELECT id FROM providers WHERE id = ?", (p["id"],)).fetchone()
+                if not row:
+                    conn.execute(
+                        """
+                        INSERT INTO providers (
+                            id, name, capabilities_json, endpoint, auth_type, models_json,
+                            declared_costs_json, quota_status, limits_doc, last_check,
+                            operational_status, avg_latency_ms, recent_errors_json,
+                            encrypted_secret, enabled, is_free_local, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'non_verificato', NULL, '[]', '', 1, ?, ?)
+                        """,
+                        (
+                            p["id"],
+                            p["name"],
+                            json.dumps(p["capabilities"]),
+                            p["endpoint"],
+                            p["auth_type"],
+                            json.dumps(p["models"]),
+                            json.dumps(p["declared_costs"], ensure_ascii=False),
+                            p["quota_status"],
+                            p["limits_doc"],
+                            1 if p["is_free_local"] else 0,
+                            now,
+                        ),
+                    )
+                else:
+                    conn.execute(
+                        """
+                        UPDATE providers
+                        SET name = ?, capabilities_json = ?, endpoint = ?, auth_type = ?,
+                            models_json = ?, declared_costs_json = ?, limits_doc = ?
+                        WHERE id = ?
+                        """,
+                        (
+                            p["name"],
+                            json.dumps(p["capabilities"]),
+                            p["endpoint"],
+                            p["auth_type"],
+                            json.dumps(p["models"]),
+                            json.dumps(p["declared_costs"], ensure_ascii=False),
+                            p["limits_doc"],
+                            p["id"],
+                        ),
+                    )
+        self.refresh_local_statuses()
+
+    def _get_env_var_name(self, provider_id: str) -> Optional[str]:
+        for p in DEFAULT_PROVIDERS:
+            if p["id"] == provider_id:
+                return p.get("env_var")
+        return None
+
+    def set_api_key(self, provider_id: str, api_key: str) -> dict[str, Any]:
+        encrypted = self.vault.encrypt(api_key.strip()) if api_key.strip() else ""
+        with self.db.session() as conn:
+            row = conn.execute("SELECT id FROM providers WHERE id = ?", (provider_id,)).fetchone()
+            if not row:
+                raise KeyError(f"Provider sconosciuto: {provider_id}")
+            conn.execute(
+                "UPDATE providers SET encrypted_secret = ?, updated_at = ? WHERE id = ?",
+                (encrypted, utcnow_iso(), provider_id),
+            )
+        return self.check_provider(provider_id)
+
+    def get_decrypted_key(self, provider_id: str) -> Optional[str]:
+        with self.db.session() as conn:
+            row = conn.execute(
+                "SELECT encrypted_secret FROM providers WHERE id = ?", (provider_id,)
+            ).fetchone()
+            if row and row["encrypted_secret"]:
+                try:
+                    val = self.vault.decrypt(row["encrypted_secret"])
+                    if val:
+                        return val
+                except Exception:
+                    return None
+        env_var = self._get_env_var_name(provider_id)
+        if env_var and os.environ.get(env_var):
+            return os.environ.get(env_var)
+        if provider_id == "google_veo_api":
+            return self.get_decrypted_key("gemini_api")
+        return None
+
+    def refresh_local_statuses(self) -> None:
+        now = utcnow_iso()
+        with self.db.session() as conn:
+            # 1. local_ffmpeg_pillow
+            ff = find_ffmpeg()
+            fp = find_ffprobe()
+            ff_ok = bool(ff and fp)
+            conn.execute(
+                "UPDATE providers SET operational_status = ?, last_check = ?, avg_latency_ms = ? WHERE id = 'local_ffmpeg_pillow'",
+                ("operativo" if ff_ok else "non_disponibile", now, 12.0 if ff_ok else None),
+            )
+            # 2. piper_tts_local
+            from kora_studio.config import VOICES_PIPER_DIR
+
+            has_onnx = VOICES_PIPER_DIR.is_dir() and any(VOICES_PIPER_DIR.glob("*.onnx"))
+            try:
+                import piper  # noqa: F401
+
+                piper_pkg = True
+            except Exception:
+                piper_pkg = False
+            piper_status = "operativo" if (piper_pkg and has_onnx) else (
+                "modello_mancante" if piper_pkg else "non_disponibile"
+            )
+            conn.execute(
+                "UPDATE providers SET operational_status = ?, last_check = ? WHERE id = 'piper_tts_local'",
+                (piper_status, now),
+            )
+            # 3. remotion_local
+            rem = check_remotion_runtime()
+            conn.execute(
+                "UPDATE providers SET operational_status = ?, last_check = ? WHERE id = 'remotion_local'",
+                ("operativo" if rem["available"] else "non_disponibile", now),
+            )
+            # 4. External APIs: check key presence without inventing credits
+            for p in DEFAULT_PROVIDERS:
+                if p["is_free_local"]:
+                    continue
+                key = self.get_decrypted_key(p["id"])
+                status = "configurato" if key else "non_configurato"
+                conn.execute(
+                    """
+                    UPDATE providers
+                    SET operational_status = CASE WHEN operational_status IN ('operativo','errore','limitato') AND ? != '' THEN operational_status ELSE ? END,
+                        quota_status = CASE WHEN ? = '' THEN 'Non verificabile' ELSE quota_status END,
+                        last_check = COALESCE(last_check, ?)
+                    WHERE id = ?
+                    """,
+                    (key or "", status, key or "", now, p["id"]),
+                )
+
+    def check_provider(self, provider_id: str) -> dict[str, Any]:
+        """Run a real operational/health probe for the given provider."""
+        self.refresh_local_statuses()
+        p = self.get_provider(provider_id)
+        if not p:
+            raise KeyError(f"Provider non trovato: {provider_id}")
+        if p["is_free_local"]:
+            return p
+
+        key = self.get_decrypted_key(provider_id)
+        now = utcnow_iso()
+        if not key:
+            with self.db.session() as conn:
+                conn.execute(
+                    "UPDATE providers SET operational_status = 'non_configurato', quota_status = 'Non verificabile', last_check = ? WHERE id = ?",
+                    (now, provider_id),
+                )
+            return self.get_provider(provider_id)  # type: ignore
+
+        t0 = time.monotonic()
+        errors: list[str] = []
+        status = "operativo"
+        quota = "Non verificabile"
+        try:
+            if provider_id == "elevenlabs_api":
+                r = requests.get(
+                    "https://api.elevenlabs.io/v1/user/subscription",
+                    headers={"xi-api-key": key},
+                    timeout=8,
+                )
+                if r.status_code == 200:
+                    d = r.json()
+                    rem = int(d.get("character_limit", 0)) - int(d.get("character_count", 0))
+                    tier = str(d.get("tier") or "").strip().lower()
+                    is_free = tier in ("free", "trial") or (
+                        not d.get("can_extend_character_limit") and tier == ""
+                    )
+                    quota = f"{max(0, rem)} caratteri residui"
+                    if is_free:
+                        # Il piano Free accetta la chiave ma rifiuta le voci di libreria via API (HTTP 402).
+                        status = "limitato"
+                        quota = f"{max(0, rem)} caratteri residui · piano Free"
+                        errors.append(
+                            "Piano ElevenLabs Free: le voci della libreria non sono utilizzabili via API "
+                            "(errore 402). Usa un Voice ID di una voce 'premade' del tuo account o passa a un "
+                            "piano a pagamento; in alternativa KORA usa automaticamente Piper TTS locale."
+                        )
+                elif r.status_code in (401, 403):
+                    status = "errore"
+                    errors.append("API key ElevenLabs non valida (401/403)")
+                else:
+                    status = "errore"
+                    errors.append(f"HTTP {r.status_code}")
+            elif provider_id == "leonardo_ai":
+                r = requests.get(
+                    "https://cloud.leonardo.ai/api/rest/v1/me",
+                    headers={"Authorization": f"Bearer {key}"},
+                    timeout=8,
+                )
+                if r.status_code == 200:
+                    details = (r.json().get("user_details") or [{}])[0]
+                    tok = details.get("apiPaidTokens") or details.get("subscriptionTokens")
+                    quota = f"{tok} token" if tok is not None else "Non verificabile"
+                else:
+                    status = "errore"
+                    errors.append(f"HTTP {r.status_code}")
+            elif provider_id == "openai_api":
+                r = requests.get(
+                    "https://api.openai.com/v1/models",
+                    headers={"Authorization": f"Bearer {key}"},
+                    timeout=8,
+                )
+                if r.status_code != 200:
+                    status = "errore"
+                    errors.append(f"HTTP {r.status_code}")
+            elif provider_id in ("gemini_api", "google_veo_api"):
+                r = requests.get(
+                    "https://generativelanguage.googleapis.com/v1beta/models?pageSize=200",
+                    headers={"x-goog-api-key": key},
+                    timeout=10,
+                )
+                if r.status_code in (401, 403):
+                    status = "errore"
+                    errors.append("API key Google Gemini non valida o senza permessi (401/403)")
+                elif r.status_code != 200:
+                    status = "errore"
+                    errors.append(f"HTTP {r.status_code}")
+                elif provider_id == "google_veo_api":
+                    veo_models = [
+                        str(m.get("name", "")).split("/")[-1]
+                        for m in r.json().get("models", [])
+                        if "veo" in str(m.get("name", "")).lower()
+                        and "predictLongRunning" in (m.get("supportedGenerationMethods") or [])
+                    ]
+                    if veo_models:
+                        quota = f"Attivi: {', '.join(veo_models[:4])}"
+                    else:
+                        status = "errore"
+                        quota = "Nessun modello Veo abilitato"
+                        errors.append(
+                            "Chiave Gemini valida, ma nessun modello Veo supportato su questo progetto (Google Veo API richiede Billing attivo su Google AI Studio / Google Cloud)."
+                        )
+            elif provider_id == "huggingface_api":
+                r = requests.get(
+                    "https://huggingface.co/api/whoami-v2",
+                    headers={"Authorization": f"Bearer {key}"},
+                    timeout=8,
+                )
+                if r.status_code in (401, 403):
+                    status = "errore"
+                    errors.append("Token Hugging Face non valido (401/403)")
+                elif r.status_code != 200:
+                    status = "errore"
+                    errors.append(f"HTTP {r.status_code}")
+            elif provider_id == "fal_ai":
+                # Probe a lightweight status/models check on fal.ai queue API
+                r = requests.get(
+                    "https://rest.alpha.fal.ai/tokens/current",
+                    headers={"Authorization": f"Key {key}"},
+                    timeout=8,
+                )
+                if r.status_code in (401, 403):
+                    status = "errore"
+                    errors.append("FAL_KEY non valida (401/403)")
+                elif r.status_code in (200, 404):
+                    status = "operativo"
+                    quota = "Attivo (pay-per-use)"
+                else:
+                    status = "errore"
+                    errors.append(f"HTTP {r.status_code}")
+            elif provider_id == "qwen_wan_api":
+                r = requests.get(
+                    "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models",
+                    headers={"Authorization": f"Bearer {key}"},
+                    timeout=8,
+                )
+                if r.status_code in (401, 403):
+                    status = "errore"
+                    errors.append("DASHSCOPE_API_KEY non valida (401/403)")
+                elif r.status_code != 200:
+                    status = "errore"
+                    errors.append(f"HTTP {r.status_code}")
+            elif provider_id == "deepseek_api":
+                r = requests.get(
+                    "https://api.deepseek.com/v1/user/balance",
+                    headers={"Authorization": f"Bearer {key}"},
+                    timeout=8,
+                )
+                if r.status_code == 200:
+                    b = r.json().get("balance_infos", [])
+                    if b:
+                        quota = f"{b[0].get('total_balance', '?')} {b[0].get('currency', '')}".strip()
+                elif r.status_code in (401, 403):
+                    status = "errore"
+                    errors.append("DEEPSEEK_API_KEY non valida (401/403)")
+                elif r.status_code != 200:
+                    status = "errore"
+                    errors.append(f"HTTP {r.status_code}")
+            elif provider_id == "claude_api":
+                r = requests.get(
+                    "https://api.anthropic.com/v1/models",
+                    headers={
+                        "x-api-key": key,
+                        "anthropic-version": "2023-06-01",
+                    },
+                    timeout=8,
+                )
+                if r.status_code in (401, 403):
+                    status = "errore"
+                    errors.append("ANTHROPIC_API_KEY non valida (401/403)")
+                elif r.status_code == 200:
+                    quota = "Attivo (pay-per-use)"
+                else:
+                    status = "errore"
+                    errors.append(f"HTTP {r.status_code}")
+        except Exception as exc:
+            status = "errore"
+            raw_err = str(exc)
+            if key:
+                raw_err = raw_err.replace(key, "***")
+            if any(
+                k in raw_err
+                for k in (
+                    "SSLZeroReturnError",
+                    "SSLError",
+                    "ConnectionError",
+                    "NameResolutionError",
+                    "Max retries exceeded",
+                    "ConnectTimeout",
+                )
+            ):
+                errors.append(
+                    "Connessione esterna bloccata da rete/firewall o sandbox (chiave salvata e cifrata; verifica in locale sul tuo PC)."
+                )
+            else:
+                errors.append(raw_err[:180])
+
+        latency = round((time.monotonic() - t0) * 1000, 1)
+        with self.db.session() as conn:
+            conn.execute(
+                """
+                UPDATE providers
+                SET operational_status = ?, quota_status = ?, last_check = ?,
+                    avg_latency_ms = ?, recent_errors_json = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (status, quota, now, latency, json.dumps(errors, ensure_ascii=False), now, provider_id),
+            )
+        return self.get_provider(provider_id)  # type: ignore
+
+    def setup_remotion(self) -> dict[str, Any]:
+        """Attempt to install/verify Remotion dependencies and headless Chromium."""
+        import shutil
+        import subprocess
+        from kora_studio.config import REPO_ROOT
+
+        composer_dir = REPO_ROOT / "remotion-composer"
+        logs: list[str] = []
+        rem = check_remotion_runtime()
+
+        npm_bin = shutil.which("npm")
+        if not rem["remotion_bin"] and npm_bin and composer_dir.is_dir():
+            proc = subprocess.run(
+                [npm_bin, "install", "--no-audit", "--no-fund"],
+                cwd=composer_dir,
+                capture_output=True,
+                text=True,
+                timeout=180,
+            )
+            logs.append(f"npm install -> exit {proc.returncode}")
+            if proc.returncode != 0:
+                logs.append((proc.stderr or proc.stdout)[-240:])
+
+        rem = check_remotion_runtime()
+        if rem["remotion_bin"] and not rem["chromium"]:
+            proc = subprocess.run(
+                [rem["remotion_bin"], "browser", "ensure"],
+                cwd=composer_dir,
+                capture_output=True,
+                text=True,
+                timeout=180,
+            )
+            logs.append(f"remotion browser ensure -> exit {proc.returncode}")
+            if proc.returncode != 0:
+                logs.append(
+                    "Impossibile scaricare Chrome Headless Shell in questo ambiente (rete esterna bloccata o firewall). "
+                    "In locale sul tuo PC esegui: cd remotion-composer && npx remotion browser ensure (oppure installa Google Chrome)."
+                )
+
+        self.refresh_local_statuses()
+        final_rem = check_remotion_runtime()
+        prov = self.get_provider("remotion_local")
+        return {"remotion": final_rem, "provider": prov, "logs": logs}
+
+    def install_piper_italian_voice(self) -> dict[str, Any]:
+        """Download free offline Italian Piper TTS voice model (it_IT-paola-medium) into kora_data/voices/piper/."""
+        from kora_studio.config import VOICES_PIPER_DIR
+
+        VOICES_PIPER_DIR.mkdir(parents=True, exist_ok=True)
+        base_url = "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/it/it_IT/paola/medium"
+        files = {
+            "it_IT-paola-medium.onnx": f"{base_url}/it_IT-paola-medium.onnx",
+            "it_IT-paola-medium.onnx.json": f"{base_url}/it_IT-paola-medium.onnx.json",
+        }
+        downloaded: list[str] = []
+        for fname, url in files.items():
+            dest = VOICES_PIPER_DIR / fname
+            if dest.is_file() and dest.stat().st_size > 100:
+                downloaded.append(fname)
+                continue
+            r = requests.get(url, timeout=120, stream=True)
+            if r.status_code != 200:
+                raise RuntimeError(f"Download fallito ({r.status_code}) per {fname}")
+            with open(dest, "wb") as fh:
+                for chunk in r.iter_content(chunk_size=65536):
+                    if chunk:
+                        fh.write(chunk)
+            downloaded.append(fname)
+
+        self.refresh_local_statuses()
+        return {
+            "ok": True,
+            "files": downloaded,
+            "directory": str(VOICES_PIPER_DIR),
+            "provider": self.get_provider("piper_tts_local"),
+        }
+
+    def fetch_elevenlabs_voices(self) -> list[dict[str, Any]]:
+        """Fetch real voice list from user's configured ElevenLabs account."""
+        key = self.get_decrypted_key("elevenlabs_api")
+        if not key:
+            raise ValueError("Inserisci e salva prima la tua API key ElevenLabs.")
+        r = requests.get(
+            "https://api.elevenlabs.io/v1/voices",
+            headers={"xi-api-key": key},
+            timeout=15,
+        )
+        if r.status_code != 200:
+            raise RuntimeError(f"Errore ElevenLabs ({r.status_code}): impossibile leggere le voci.")
+        data = r.json()
+        out: list[dict[str, Any]] = []
+        for v in data.get("voices", []):
+            if not v.get("voice_id"):
+                continue
+            category = str(v.get("category") or "")
+            out.append(
+                {
+                    "voice_id": v.get("voice_id", ""),
+                    "name": v.get("name", ""),
+                    "category": category,
+                    "preview_url": v.get("preview_url", ""),
+                    "labels": v.get("labels", {}),
+                    # Le voci di libreria comunitaria non sono usabili via API sui piani gratuiti (HTTP 402).
+                    "usable_on_free_plan": category in ("premade", "cloned", "professional"),
+                    "library_voice": category == "library",
+                }
+            )
+        return out
+
+    def _row_to_dict(self, row: Any) -> dict[str, Any]:
+        has_key = False
+        masked = ""
+        if not row["is_free_local"]:
+            key = self.get_decrypted_key(row["id"])
+            if key:
+                has_key = True
+                masked = self.vault.mask(key)
+        return {
+            "id": row["id"],
+            "name": row["name"],
+            "capabilities": json.loads(row["capabilities_json"]),
+            "endpoint": row["endpoint"],
+            "auth_type": row["auth_type"],
+            "models": json.loads(row["models_json"]),
+            "declared_costs": json.loads(row["declared_costs_json"]),
+            "quota_status": row["quota_status"],
+            "limits_doc": row["limits_doc"],
+            "last_check": row["last_check"],
+            "operational_status": row["operational_status"],
+            "avg_latency_ms": row["avg_latency_ms"],
+            "recent_errors": json.loads(row["recent_errors_json"]),
+            "has_api_key": has_key,
+            "masked_api_key": masked,
+            "enabled": bool(row["enabled"]),
+            "is_free_local": bool(row["is_free_local"]),
+            "updated_at": row["updated_at"],
+        }
+
+    def list_providers(self) -> list[dict[str, Any]]:
+        self.refresh_local_statuses()
+        with self.db.session() as conn:
+            rows = conn.execute(
+                "SELECT * FROM providers ORDER BY is_free_local DESC, name ASC"
+            ).fetchall()
+            return [self._row_to_dict(r) for r in rows]
+
+    def get_provider(self, provider_id: str) -> Optional[dict[str, Any]]:
+        with self.db.session() as conn:
+            row = conn.execute("SELECT * FROM providers WHERE id = ?", (provider_id,)).fetchone()
+            return self._row_to_dict(row) if row else None
+
+    def update_provider_models(self, provider_id: str, models: list[str]) -> None:
+        """Memorizza i modelli realmente disponibili (es. scoperti via ListModels) per riuso immediato."""
+        cleaned = [str(m).strip() for m in models if str(m).strip()]
+        if not cleaned:
+            return
+        with self.db.session() as conn:
+            conn.execute(
+                "UPDATE providers SET models_json = ?, updated_at = ? WHERE id = ?",
+                (json.dumps(cleaned, ensure_ascii=False), utcnow_iso(), provider_id),
+            )
+
+    def select_provider_for(
+        self,
+        capability: str,
+        estimated_eur: float = 0.0,
+        explicit_user_authorization: bool = False,
+    ) -> dict[str, Any]:
+        """Follow Section 8 automatic strategy:
+        1. Prefer free local solution first.
+        2. Then free-tier configured providers.
+        3. Then cheapest authorized paid provider (only if budget & authorization allow).
+        """
+        providers = [
+            p
+            for p in self.list_providers()
+            if p["enabled"] and capability in p["capabilities"]
+        ]
+        # 1. Local free operational providers
+        for p in providers:
+            if p["is_free_local"] and p["operational_status"] == "operativo":
+                return {"selected": p, "cost_eur": 0.0, "authorized": True, "strategy": "local_free"}
+
+        # 2. Configured external providers
+        configured = [
+            p
+            for p in providers
+            if not p["is_free_local"] and p["operational_status"] in ("operativo", "configurato")
+        ]
+        for p in configured:
+            auth = self.cost_guard.check_authorization(estimated_eur, explicit_user_authorization)
+            if auth["authorized"]:
+                return {
+                    "selected": p,
+                    "cost_eur": estimated_eur,
+                    "authorized": True,
+                    "strategy": "external_authorized",
+                }
+            return {
+                "selected": None,
+                "candidate": p,
+                "cost_eur": estimated_eur,
+                "authorized": False,
+                "reason": auth["reason"],
+                "strategy": "blocked_by_budget",
+            }
+
+        return {
+            "selected": None,
+            "cost_eur": 0.0,
+            "authorized": False,
+            "reason": f"Nessun provider operativo disponibile per '{capability}'.",
+            "strategy": "unavailable",
+        }

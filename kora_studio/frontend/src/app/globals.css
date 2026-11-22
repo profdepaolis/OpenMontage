@@ -1,0 +1,23 @@
+@import "tailwindcss";
+
+:root {
+  --kora-ivory: #FAF7F2;
+  --kora-sand: #EFE8DB;
+  --kora-stone: #DDD4C4;
+  --kora-ink: #1D1B18;
+  --kora-muted: #6C6459;
+  --kora-gold: #9A8052;
+  --kora-blue: #224C66;
+}
+
+body {
+  background-color: var(--kora-ivory);
+  color: var(--kora-ink);
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+.font-editorial {
+  font-family: Georgia, "Times New Roman", serif;
+  letter-spacing: -0.015em;
+}

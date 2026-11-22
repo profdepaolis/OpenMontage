@@ -98,6 +98,24 @@ venv/
 # Backlot local cache (thumbnails)
 .backlot/
 
+# KORA STUDIO runtime database, vault working copies, renders, backups, secret key
+kora_data/
+.kora_master.key
+kora_studio/frontend/.next/
+kora_studio/frontend/node_modules/
+kora_studio/frontend/tsconfig.tsbuildinfo
+
+
+# Demo renderings (shipped inside the installer and via Drive, not source)
+demo/*.mp4
+demo/*.png
+
+# Installer/patch artifacts (distributed via Drive, not source)
+KORA_Studio_Light_*_installer.zip
+KORA_Studio_Light_*_completo.zip
+kora_patch_*.zip
+KORA_*.zip
+
 # Workspace-local third-party runtimes (for example the portable Blender LTS
 # used by blender_world). These are checksum-verified but never committed.
 .runtime/
