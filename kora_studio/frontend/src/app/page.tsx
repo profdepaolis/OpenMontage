@@ -1,7 +1,21 @@
 "use client";
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { Home, Images, FolderKanban, SlidersHorizontal, AlertCircle, ArrowLeft } from "lucide-react";
+import dynamic from "next/dynamic";
+import {
+  AlertCircle,
+  Clapperboard,
+  Download,
+  Film,
+  FolderKanban,
+  Home,
+  Images,
+  LayoutGrid,
+  Palette,
+  PlaySquare,
+  Server,
+  Sparkles,
+} from "lucide-react";
 import type {
   BudgetSettings,
   CreativeConcept,
@@ -14,38 +28,115 @@ import type {
   VoiceOption,
 } from "@/lib/types";
 import { koraApi } from "@/lib/api";
-import { HomeHub } from "@/components/HomeHub";
-import { ProjectsView } from "@/components/ProjectsView";
-import { MediaVaultView } from "@/components/MediaVaultView";
-import { CreativeStudioView } from "@/components/CreativeStudioView";
-import { ProductionView } from "@/components/ProductionView";
-import { PreviewView } from "@/components/PreviewView";
-import { CreativeEngineModels } from "@/components/CreativeEngineModels";
-import { ProvidersView } from "@/components/ProvidersView";
-import { AIEngineView } from "@/components/AIEngineView";
-import { EngineConnect } from "@/components/EngineConnect";
-import { SceneEditor } from "@/components/SceneEditor";
-import { BrandProfileView } from "@/components/BrandProfileView";
-import { ExportView } from "@/components/ExportView";
 
-/** Essential: quattro sezioni visibili. Le schermate interne restano raggiungibili dal flusso. */
-type NavId = "studio" | "vault" | "projects" | "settings";
-type StudioPanel = "home" | "preview" | "export" | "production" | "creative" | "scenes";
-type SettingsTab = "engine" | "models" | "providers" | "brand";
+/**
+ * Sezioni caricate su richiesta: il bundle iniziale resta leggero e ogni
+ * schermata porta con sé solo i propri dati (nessuna scansione all'avvio).
+ */
+const SectionSkeleton = ({ label }: { label: string }) => (
+  <div className="animate-pulse rounded-2xl border border-[#EDE6D9] bg-white p-6 text-sm text-[#6C6459]">
+    Caricamento {label}…
+  </div>
+);
 
-const NAV_ITEMS: Array<{ id: NavId; label: string; icon: React.ComponentType<{ className?: string }> }> = [
-  { id: "studio", label: "Studio", icon: Home },
-  { id: "vault", label: "Archivio", icon: Images },
-  { id: "projects", label: "Progetti", icon: FolderKanban },
-  { id: "settings", label: "Impostazioni", icon: SlidersHorizontal },
+const HomeHub = dynamic(() => import("@/components/HomeHub").then((m) => m.HomeHub), {
+  loading: () => <SectionSkeleton label="Home" />,
+});
+const ProjectsView = dynamic(() => import("@/components/ProjectsView").then((m) => m.ProjectsView), {
+  loading: () => <SectionSkeleton label="Progetti" />,
+});
+const MediaVaultView = dynamic(() => import("@/components/MediaVaultView").then((m) => m.MediaVaultView), {
+  loading: () => <SectionSkeleton label="Media Vault" />,
+});
+const CreativeStudioView = dynamic(
+  () => import("@/components/CreativeStudioView").then((m) => m.CreativeStudioView),
+  { loading: () => <SectionSkeleton label="Creative Studio" /> }
+);
+const ProductionView = dynamic(() => import("@/components/ProductionView").then((m) => m.ProductionView), {
+  loading: () => <SectionSkeleton label="Produzione" />,
+});
+const PreviewView = dynamic(() => import("@/components/PreviewView").then((m) => m.PreviewView), {
+  loading: () => <SectionSkeleton label="Anteprima" />,
+});
+const SceneEditor = dynamic(() => import("@/components/SceneEditor").then((m) => m.SceneEditor), {
+  loading: () => <SectionSkeleton label="Storyboard" />,
+});
+const ProvidersView = dynamic(() => import("@/components/ProvidersView").then((m) => m.ProvidersView), {
+  loading: () => <SectionSkeleton label="Provider" />,
+});
+const AIEngineView = dynamic(() => import("@/components/AIEngineView").then((m) => m.AIEngineView), {
+  loading: () => <SectionSkeleton label="Motore AI" />,
+});
+const CreativeEngineModels = dynamic(
+  () => import("@/components/CreativeEngineModels").then((m) => m.CreativeEngineModels),
+  { loading: () => <SectionSkeleton label="Modelli" /> }
+);
+const EngineConnect = dynamic(() => import("@/components/EngineConnect").then((m) => m.EngineConnect), {
+  loading: () => null,
+});
+const EnginesInventory = dynamic(
+  () => import("@/components/EnginesInventory").then((m) => m.EnginesInventory),
+  { loading: () => <SectionSkeleton label="motori locali" /> }
+);
+const BrandProfileView = dynamic(
+  () => import("@/components/BrandProfileView").then((m) => m.BrandProfileView),
+  { loading: () => <SectionSkeleton label="Brand Profile" /> }
+);
+const ExportView = dynamic(() => import("@/components/ExportView").then((m) => m.ExportView), {
+  loading: () => <SectionSkeleton label="Export" />,
+});
+
+/** Le dieci sezioni della Home professionale; i dati si caricano una volta sola. */
+type NavId =
+  | "home"
+  | "projects"
+  | "vault"
+  | "creative"
+  | "production"
+  | "preview"
+  | "storyboard"
+  | "providers"
+  | "brand"
+  | "export";
+
+type ProviderTab = "engines" | "ai" | "models" | "budget";
+
+const NAV_GROUPS: Array<{
+  title: string;
+  items: Array<{ id: NavId; label: string; icon: React.ComponentType<{ className?: string }> }>;
+}> = [
+  {
+    title: "Studio",
+    items: [
+      { id: "home", label: "Home", icon: Home },
+      { id: "projects", label: "Progetti", icon: FolderKanban },
+      { id: "vault", label: "Media Vault", icon: Images },
+      { id: "creative", label: "Creative Studio", icon: Sparkles },
+    ],
+  },
+  {
+    title: "Lavorazione",
+    items: [
+      { id: "production", label: "Production", icon: Clapperboard },
+      { id: "preview", label: "Preview", icon: PlaySquare },
+      { id: "storyboard", label: "Storyboard", icon: LayoutGrid },
+      { id: "export", label: "Export", icon: Download },
+    ],
+  },
+  {
+    title: "Sistema",
+    items: [
+      { id: "providers", label: "AI Providers", icon: Server },
+      { id: "brand", label: "Brand Profile", icon: Palette },
+    ],
+  },
 ];
 
 const TERMINAL_JOB_STATES = ["Completato", "Errore", "Richiede intervento"];
 
 export default function KoraStudioPage() {
-  const [nav, setNav] = useState<NavId>("studio");
-  const [studioPanel, setStudioPanel] = useState<StudioPanel>("home");
-  const [settingsTab, setSettingsTab] = useState<SettingsTab>("engine");
+  const [nav, setNav] = useState<NavId>("home");
+  const [providerTab, setProviderTab] = useState<ProviderTab>("engines");
 
   // Cache per sezione: nessun caricamento indiscriminato all'avvio.
   const [assets, setAssets] = useState<MediaAsset[]>([]);
@@ -114,17 +205,23 @@ export default function KoraStudioPage() {
     loaded.current.settings = true;
   }, []);
 
-  // Solo i dati della sezione corrente (Essential)
+  // Solo i dati della sezione corrente: niente refresh globale.
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        if (nav === "studio") await loadStudio();
-        if (nav === "vault") await loadVault();
+        if (nav === "home") await loadStudio();
         if (nav === "projects") await loadProjects();
-        if (nav === "settings") {
+        if (nav === "vault") await loadVault();
+        if (nav === "creative") {
+          await Promise.all([loadProjects(), loadVault()]);
+        }
+        if (nav === "production" || nav === "preview" || nav === "storyboard" || nav === "export") {
+          await loadProjects();
+        }
+        if (nav === "providers") {
           await loadSettingsData();
-          if (settingsTab === "providers") await loadSettingsData();
+          if (providerTab === "budget" || providerTab === "ai") await loadSettingsData();
         }
       } catch (err) {
         if (!cancelled) setBanner((err as Error).message);
@@ -135,7 +232,7 @@ export default function KoraStudioPage() {
     return () => {
       cancelled = true;
     };
-  }, [nav, settingsTab, loadStudio, loadVault, loadProjects, loadSettingsData]);
+  }, [nav, providerTab, loadStudio, loadVault, loadProjects, loadSettingsData]);
 
   const activeProject = projects.find((p) => p.id === activeProjectId) || projects[0] || null;
   const activeJob = jobs.find((j) => j.id === activeJobId) || null;
@@ -158,7 +255,6 @@ export default function KoraStudioPage() {
             clearInterval(jobTimer.current);
             jobTimer.current = null;
           }
-          // a fine job aggiorno solo i progetti (non provider, budget, voci o archivio)
           const list = await koraApi.listProjects();
           if (!stopped) setProjects(list);
         }
@@ -188,17 +284,25 @@ export default function KoraStudioPage() {
     hyperframes?: Partial<HyperframesConfig>,
     customizeFirst?: boolean,
     assetIds?: string[],
-    destinationDir?: string | null
+    destinationDir?: string | null,
+    media?: { mode: string; assetIds: string[]; priority?: string; note?: string }
   ) => {
     const effectiveMode: ProductionMode = customizeFirst ? "GUIDATA" : prodMode;
+    const mediaMode = media?.mode || "vault_auto";
+    const chosenIds =
+      media && media.assetIds.length > 0
+        ? media.assetIds
+        : assetIds && assetIds.length > 0
+          ? assetIds
+          : concept.available_asset_ids.slice(0, 3);
     const request: Partial<CreativeConcept["creative_request"]> = {
       ...(concept.creative_request || {}),
       theme: theme || concept.title,
       objective: concept.objective || "",
       duration_sec: concept.duration_sec,
       voice_id: voiceId,
-      asset_ids: assetIds && assetIds.length > 0 ? assetIds : concept.available_asset_ids.slice(0, 3),
-      media_selection: "vault_auto",
+      asset_ids: chosenIds,
+      media_selection: mediaMode,
       generation_policy: "authentic_first",
     };
     const proposal = (concept.creative_request as Record<string, unknown> | undefined)?.lite_proposal;
@@ -217,10 +321,22 @@ export default function KoraStudioPage() {
       if (res.project) {
         setActiveProjectId(res.project.id);
         setProjects((prev) => [res.project as ProjectRecord, ...prev.filter((p) => p.id !== res.project?.id)]);
+        if (media) {
+          // La scelta resta scritta nel progetto: nessun ritorno a vault_auto.
+          try {
+            await koraApi.setMediaSelection(res.project.id, {
+              mode: media.mode,
+              asset_ids: media.assetIds,
+              priority: media.priority,
+              note: media.note,
+            });
+          } catch (err) {
+            setBanner(`Scelta materiali non salvata: ${(err as Error).message}`);
+          }
+        }
       }
       if (res.design.fallback_reason) setBanner(res.design.fallback_reason);
-      setNav("studio");
-      setStudioPanel("preview");
+      setNav("preview");
     } catch (err) {
       setBanner(`Progettazione non riuscita: ${(err as Error).message}`);
       throw err;
@@ -231,17 +347,15 @@ export default function KoraStudioPage() {
     const res = await koraApi.produceProject(projectId);
     setActiveProjectId(projectId);
     setActiveJobId(res.job.id);
-    setStudioPanel("production");
-    setNav("studio");
+    setNav("production");
   };
 
   const goProjectTab = (id: string, tab?: "creative" | "production" | "preview" | "export") => {
     setActiveProjectId(id);
-    setNav("studio");
-    if (tab === "preview" || tab === "export") setStudioPanel(tab);
-    else if (tab === "production") {
-      setStudioPanel("production");
-    } else setStudioPanel("creative");
+    if (tab === "export") setNav("export");
+    else if (tab === "production") setNav("production");
+    else if (tab === "creative") setNav("creative");
+    else setNav("preview");
   };
 
   // ---------------------------------------------------------------- render
@@ -254,7 +368,7 @@ export default function KoraStudioPage() {
           <div>
             <div className="font-editorial text-xl tracking-wide text-[#1D1B18]">KORA STUDIO</div>
             <div className="text-[10px] uppercase tracking-[0.2em] text-[#9A8052]">
-              Essential · The Art of Being · Policoro
+              The Art of Being · Policoro
             </div>
           </div>
           {sidebarBadge && (
@@ -266,28 +380,32 @@ export default function KoraStudioPage() {
         </div>
 
         <nav className="mt-4 flex gap-1.5 overflow-x-auto pb-1 lg:mt-8 lg:flex-col lg:overflow-visible">
-          {NAV_ITEMS.map((item) => {
-            const Icon = item.icon;
-            const active = nav === item.id;
-            return (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => {
-                  setNav(item.id);
-                  if (item.id === "studio") setStudioPanel("home");
-                }}
-                className={`flex shrink-0 items-center gap-2.5 rounded-xl px-3.5 py-2.5 text-xs font-medium transition ${
-                  active
-                    ? "bg-[#1D1B18] text-[#FAF7F2]"
-                    : "text-[#4A443C] hover:bg-[#EFE8DB]/70 hover:text-[#1D1B18]"
-                }`}
-              >
-                <Icon className="h-4 w-4 shrink-0" />
-                <span>{item.label}</span>
-              </button>
-            );
-          })}
+          {NAV_GROUPS.map((group) => (
+            <div key={group.title} className="contents lg:block">
+              <div className="hidden px-2 pb-1 pt-3 text-[9px] uppercase tracking-[0.2em] text-[#9A8052] lg:block">
+                {group.title}
+              </div>
+              {group.items.map((item) => {
+                const Icon = item.icon;
+                const active = nav === item.id;
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => setNav(item.id)}
+                    className={`flex shrink-0 items-center gap-2.5 rounded-xl px-3.5 py-2.5 text-xs font-medium transition ${
+                      active
+                        ? "bg-[#1D1B18] text-[#FAF7F2]"
+                        : "text-[#4A443C] hover:bg-[#EFE8DB]/70 hover:text-[#1D1B18]"
+                    }`}
+                  >
+                    <Icon className="h-4 w-4 shrink-0" />
+                    <span>{item.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          ))}
         </nav>
 
         <div className="mt-6 hidden rounded-2xl border border-[#EDE6D9] bg-[#FAF7F2] p-3.5 text-[11px] text-[#6C6459] lg:block">
@@ -312,7 +430,7 @@ export default function KoraStudioPage() {
           )}
         </div>
 
-        {activeProject && nav !== "studio" && (
+        {activeProject && (
           <div className="mt-3 hidden rounded-2xl border border-[#EDE6D9] bg-white p-3.5 lg:block">
             <div className="text-[10px] uppercase tracking-wider text-[#9A8052]">Progetto attivo</div>
             <div className="mt-1 truncate text-xs font-medium text-[#1D1B18]">{activeProject.title}</div>
@@ -340,25 +458,10 @@ export default function KoraStudioPage() {
           </div>
         )}
 
-        {!bootReady && nav === "studio" && (
-          <div className="rounded-2xl border border-[#EDE6D9] bg-white p-6 text-sm text-[#6C6459]">
-            Caricamento Studio…
-          </div>
-        )}
-
-        {nav === "studio" && bootReady && (
+        {nav === "home" && (
           <div className="space-y-4">
-            {studioPanel !== "home" && (
-              <button
-                type="button"
-                onClick={() => setStudioPanel("home")}
-                className="inline-flex items-center gap-1.5 text-xs font-medium text-[#224C66] hover:underline"
-              >
-                <ArrowLeft className="h-3.5 w-3.5" /> Torna a Studio
-              </button>
-            )}
-            {studioPanel === "home" && <EngineConnect variant="compact" />}
-            {studioPanel === "home" && (
+            <EngineConnect variant="compact" />
+            {bootReady ? (
               <HomeHub
                 voices={voices}
                 recentProjects={projects}
@@ -367,84 +470,18 @@ export default function KoraStudioPage() {
                 onOpenProject={(id) => {
                   setActiveProjectId(id);
                   const pr = projects.find((x) => x.id === id);
-                  setStudioPanel(pr?.output_video_path ? "preview" : "creative");
+                  setNav(pr?.output_video_path ? "preview" : "creative");
                 }}
                 onVaultUpdated={() => {
                   loaded.current.vault = false;
                   setBanner(null);
                 }}
               />
-            )}
-            {studioPanel === "creative" && (
-              <CreativeStudioView
-                project={activeProject}
-                assets={assets.length ? assets : []}
-                voices={voices}
-                onUpdated={async () => {
-                  const list = await koraApi.listProjects();
-                  setProjects(list);
-                }}
-                onProduce={handleProduceExisting}
-              />
-            )}
-            {studioPanel === "preview" && (
-              <PreviewView
-                project={activeProject}
-                onRevisionStarted={(jobId) => {
-                  setActiveJobId(jobId);
-                  setStudioPanel("production");
-                }}
-                onRestored={async () => {
-                  const list = await koraApi.listProjects();
-                  setProjects(list);
-                }}
-                onGoExport={() => setStudioPanel("export")}
-                onOpenScenes={(pid) => {
-                  setActiveProjectId(pid);
-                  setStudioPanel("scenes");
-                }}
-                onProduce={(projectId) => void handleProduceExisting(projectId)}
-              />
-            )}
-            {studioPanel === "scenes" && activeProject && (
-              <SceneEditor
-                projectId={activeProject.id}
-                projectTitle={activeProject.title}
-                onPreview={() => setStudioPanel("preview")}
-              />
-            )}
-            {studioPanel === "scenes" && !activeProject && (
-              <p className="rounded-2xl border border-[#EDE6D9] bg-white p-6 text-sm text-[#6C6459]">
-                Apri un progetto dalla Home per lavorare sulle scene.
-              </p>
-            )}
-            {studioPanel === "production" && (
-              <ProductionView
-                jobs={jobs}
-                activeJob={activeJob}
-                onRefresh={async () => {
-                  const jobList = await koraApi.listJobs();
-                  setJobs(jobList);
-                }}
-                onOpenPreview={(pid) => {
-                  setActiveProjectId(pid);
-                  setStudioPanel("preview");
-                }}
-              />
-            )}
-            {studioPanel === "export" && (
-              <ExportView
-                project={activeProject}
-                onRefresh={async () => {
-                  const list = await koraApi.listProjects();
-                  setProjects(list);
-                }}
-              />
+            ) : (
+              <SectionSkeleton label="Home" />
             )}
           </div>
         )}
-
-        {nav === "vault" && <MediaVaultView assets={assets} onRefresh={() => loadVault(true)} />}
 
         {nav === "projects" && (
           <ProjectsView
@@ -455,23 +492,106 @@ export default function KoraStudioPage() {
           />
         )}
 
-        {nav === "settings" && (
+        {nav === "vault" && <MediaVaultView assets={assets} onRefresh={() => loadVault(true)} />}
+
+        {nav === "creative" && (
+          <CreativeStudioView
+            project={activeProject}
+            assets={assets}
+            voices={voices}
+            onUpdated={async () => {
+              const list = await koraApi.listProjects();
+              setProjects(list);
+            }}
+            onProduce={handleProduceExisting}
+          />
+        )}
+
+        {nav === "production" && (
+          <ProductionView
+            jobs={jobs}
+            activeJob={activeJob}
+            onRefresh={async () => {
+              const jobList = await koraApi.listJobs();
+              setJobs(jobList);
+            }}
+            onOpenPreview={(pid) => {
+              setActiveProjectId(pid);
+              setNav("preview");
+            }}
+          />
+        )}
+
+        {nav === "preview" && (
+          <PreviewView
+            project={activeProject}
+            onRevisionStarted={(jobId) => {
+              setActiveJobId(jobId);
+              setNav("production");
+            }}
+            onRestored={async () => {
+              const list = await koraApi.listProjects();
+              setProjects(list);
+            }}
+            onGoExport={() => setNav("export")}
+            onOpenScenes={(pid) => {
+              setActiveProjectId(pid);
+              setNav("storyboard");
+            }}
+            onProduce={(projectId) => void handleProduceExisting(projectId)}
+          />
+        )}
+
+        {nav === "storyboard" && (
+          <div className="space-y-4">
+            {projects.length > 1 && (
+              <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-[#EDE6D9] bg-white px-4 py-3">
+                <Film className="h-4 w-4 text-[#9A8052]" />
+                <span className="text-[11px] text-[#6C6459]">Progetto</span>
+                <select
+                  value={activeProject?.id || ""}
+                  onChange={(e) => setActiveProjectId(e.target.value)}
+                  className="rounded-lg border border-[#DDD4C4] bg-white px-2.5 py-1.5 text-xs"
+                >
+                  {projects.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.title}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+            {activeProject ? (
+              <SceneEditor
+                projectId={activeProject.id}
+                projectTitle={activeProject.title}
+                onPreview={() => setNav("preview")}
+              />
+            ) : (
+              <p className="rounded-2xl border border-[#EDE6D9] bg-white p-6 text-sm text-[#6C6459]">
+                Apri un progetto dalla Home o da Progetti per lavorare sulle scene.
+              </p>
+            )}
+          </div>
+        )}
+
+        {nav === "providers" && (
           <div className="space-y-5">
             <div className="flex flex-wrap gap-2">
               {(
                 [
-                  ["engine", "Motore AI"],
+                  ["engines", "Motori locali"],
+                  ["ai", "Motore AI"],
                   ["models", "Modelli & benchmark"],
-                  ["providers", "Provider & budget"],
-                  ["brand", "Profilo KORA"],
-                ] as [SettingsTab, string][]
+                  ["budget", "Provider & budget"],
+                ] as [ProviderTab, string][]
               ).map(([id, label]) => (
                 <button
                   key={id}
                   type="button"
-                  onClick={() => setSettingsTab(id)}
+                  onClick={() => setProviderTab(id)}
                   className={`rounded-xl px-3.5 py-2 text-xs font-medium transition ${
-                    settingsTab === id
+                    providerTab === id
                       ? "bg-[#1D1B18] text-[#FAF7F2]"
                       : "border border-[#DDD4C4] bg-white text-[#4A443C] hover:border-[#9A8052]"
                   }`}
@@ -480,14 +600,15 @@ export default function KoraStudioPage() {
                 </button>
               ))}
             </div>
-            {settingsTab === "engine" && (
+            {providerTab === "engines" && (
               <div className="space-y-4">
+                <EnginesInventory />
                 <EngineConnect variant="full" />
-                <AIEngineView />
               </div>
             )}
-            {settingsTab === "models" && <CreativeEngineModels />}
-            {settingsTab === "providers" && (
+            {providerTab === "ai" && <AIEngineView />}
+            {providerTab === "models" && <CreativeEngineModels />}
+            {providerTab === "budget" && (
               <ProvidersView
                 providers={providers}
                 budget={budget}
@@ -495,8 +616,19 @@ export default function KoraStudioPage() {
                 onRefresh={() => loadSettingsData(true)}
               />
             )}
-            {settingsTab === "brand" && <BrandProfileView />}
           </div>
+        )}
+
+        {nav === "brand" && <BrandProfileView />}
+
+        {nav === "export" && (
+          <ExportView
+            project={activeProject}
+            onRefresh={async () => {
+              const list = await koraApi.listProjects();
+              setProjects(list);
+            }}
+          />
         )}
       </main>
     </div>

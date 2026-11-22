@@ -1,4 +1,4 @@
-# KORA 3.6.1 — Funzioni non collaudate
+# KORA 3.6.2 — Funzioni non collaudate
 
 Documento di onestà tecnica. Se una funzione non è qui elencata come collaudata,
 non è stata provata con un provider reale in questa build.
@@ -20,6 +20,30 @@ Flash o Nemotron Lightning rispondano davvero. La verifica reale è lo script
 | Gemini non attiva il motore | collaudata |
 | Chiamata reale a `opencode/hy4-flash-free` | **non collaudata** (CLI assente) |
 | Latenza reale su EOL/Mac | **non collaudata** (benchmark fornito dall'utente) |
+
+## Aggiornamento 3.6.2
+
+Il restauro audiovisivo aggiunge un inventario dei motori realmente presenti sulla
+macchina: ciò che non è installato **non** viene presentato come disponibile, e la
+stessa informazione compare nell'interfaccia (AI Providers → Motori locali) e nel
+terminale (`./diagnostica_motori.sh`).
+
+| Funzione | Stato dopo la 3.6.2 | Perché |
+|---|---|---|
+| Render FFmpeg completo 1080×1920 con QC | collaudato (12,00 s · 300 frame · 17 QC superati) | esecuzione reale |
+| Preset HyperFrames interni (caption + vignetta) | collaudato nel render nativo | `kora_native` + `serif_minimal` |
+| Sostituzione materiale di una scena | collaudato | PATCH reale, altre scene invariate |
+| Caricamento materiale inline dalla scena | collaudato | import nel Vault + assegnazione |
+| Alternative autentiche per scena | collaudato | elenco reale dall'archivio, per tipo |
+| Scelta A/B/C della provenienza materiali | collaudato | persistita, rispettata, mai azzerata |
+| Inventario di 12 motori con test separati | collaudato (stato reale dell'host) | test locali, senza rete |
+| Voiceover con un motore TTS reale | **non collaudato** | nessun TTS installato in ambiente |
+| Trascrizione Whisper di un voiceover | **non collaudato** | whisper/faster-whisper assenti |
+| Composizione Remotion renderizzata | **non collaudato** | dipendenze npm del Composer assenti |
+| HyperFrames come servizio esterno | **non collaudato** | nessun endpoint configurato: i preset locali non lo dimostrano |
+| Chatterbox TTS | **non collaudato** | pacchetto assente; compatibilità hardware/versione Python non verificata |
+| Qwen3-TTS | **non collaudato** | modello e runtime assenti |
+| Brando/Tiziana con voce sintetica sostitutiva | **mai** | solo registrazione autentica o voce ElevenLabs autorizzata |
 
 ## Elenco
 

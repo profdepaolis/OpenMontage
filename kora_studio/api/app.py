@@ -62,6 +62,7 @@ def _recent_errors(limit: int = 5) -> list[str]:
 from kora_studio.db.database import Database, utcnow_iso
 from kora_studio.db.models import CreativeConcept, CreativeRequestPayload, StoryboardScene
 from kora_studio.media_tools import check_remotion_runtime, find_ffmpeg, find_ffprobe
+from kora_studio.media.engines import engines_inventory, test_engine
 
 FRONTEND_OUT_DIR = REPO_ROOT / "kora_studio" / "frontend" / "out"
 MAX_UPLOAD_BYTES = 150 * 1024 * 1024
@@ -204,6 +205,15 @@ class SceneUpdateRequest(BaseModel):
     crop_focus: Optional[dict[str, float]] = None
     caption_style: Optional[str] = None
     caption_overrides: Optional[dict[str, Any]] = None
+
+
+class MediaSelectionRequest(BaseModel):
+    """3.6.2 — provenienza dei materiali scelta dall'utente."""
+
+    mode: str = "vault_auto"
+    asset_ids: list[str] = []
+    priority: Optional[str] = None
+    note: Optional[str] = None
 
 
 class SceneLocksRequest(BaseModel):
@@ -447,7 +457,7 @@ def create_app(db_path: Optional[Path] = None, auto_seed: bool = True) -> FastAP
         except Exception as exc:  # pragma: no cover
             _log_error(exc, "refresh_palette_from_vault")
 
-    app = FastAPI(title="KORA STUDIO", version="3.6.1")
+    app = FastAPI(title="KORA STUDIO", version="3.6.2")
 
     def _v35(fn: Any) -> Any:
         """Errori v3.5 tradotti in risposte parlanti: 404 scena, 400 richiesta, 409 blocco."""
@@ -583,6 +593,51 @@ def create_app(db_path: Optional[Path] = None, auto_seed: bool = True) -> FastAP
             )
             suggested_concepts = [c.model_dump() for c in concepts]
         return {"uploaded": ingested, "errors": errors, "suggested_concepts": suggested_concepts}
+
+    # ------------------------------------------------- 3.6.2 inventario motori
+    @app.get("/api/media/engines")
+    def media_engines(refresh: bool = False) -> dict[str, Any]:
+        """Inventario REALE dei motori audiovisivi installati su questa macchina."""
+        return engines_inventory(director.providers, refresh=bool(refresh))
+
+    @app.post("/api/media/engines/{engine_id}/test", dependencies=[Depends(_require_local_trust)])
+    def media_engine_test(engine_id: str) -> dict[str, Any]:
+        """Test operativo esplicito: nessuna installazione, nessuna spesa."""
+        return test_engine(engine_id, director.providers)
+
+    @app.get("/api/media/voices")
+    def media_voices() -> dict[str, Any]:
+        """Voci dichiarate dal Voice Studio + motori TTS realmente disponibili.
+
+        Brando e Tiziana restano «operativi» solo se esiste una registrazione nel
+        Vault o una voce ElevenLabs autorizzata: nessuna voce sintetica sostitutiva
+        viene spacciata per loro.
+        """
+        try:
+            voices = director.voice_director.list_voices()
+        except Exception as exc:
+            return {"ok": False, "detail": f"{exc.__class__.__name__}: {exc}", "voices": []}
+        inventory = engines_inventory(director.providers)
+        tts = [
+            {
+                "id": e["id"],
+                "label": e["label"],
+                "installed": e["installed"],
+                "configured": e.get("configured", False),
+                "available": e["available"],
+                "detail": e.get("test_detail") or "",
+                "requirements": e.get("requirements", ""),
+            }
+            for e in inventory["engines"]
+            if e["kind"] == "tts"
+        ]
+        return {
+            "ok": True,
+            "voices": voices,
+            "tts_engines": tts,
+            "import_voiceover": True,
+            "no_voiceover": True,
+        }
 
     @app.get("/api/vault/{asset_id}/file")
     def get_vault_file(asset_id: str) -> FileResponse:
@@ -749,6 +804,13 @@ def create_app(db_path: Optional[Path] = None, auto_seed: bool = True) -> FastAP
             request = CreativeRequestPayload(**raw_request)
         except Exception as exc:
             raise HTTPException(status_code=400, detail=f"Richiesta non valida: {exc}")
+        from kora_studio.agents.director import normalize_media_selection
+
+        if normalize_media_selection(request.media_selection) == "upload_only" and not request.asset_ids:
+            raise HTTPException(
+                status_code=400,
+                detail="Hai scelto solo materiali nuovi: carica almeno un file prima di progettare il Reel.",
+            )
         proposal = None
         if payload.get("proposal"):
             try:
@@ -759,6 +821,8 @@ def create_app(db_path: Optional[Path] = None, auto_seed: bool = True) -> FastAP
             design = director.design_reel(
                 request, proposal, deadline_sec=float(payload.get("deadline_sec") or 45.0)
             )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         except Exception as exc:
             raise HTTPException(status_code=502, detail=f"Progettazione non riuscita: {exc}")
         if design.generation_engine == "deterministic_offline_fallback":
@@ -1452,6 +1516,114 @@ def create_app(db_path: Optional[Path] = None, auto_seed: bool = True) -> FastAP
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/projects/{project_id}/media-selection", dependencies=[Depends(_require_local_trust)])
+    def project_media_selection(project_id: str) -> dict[str, Any]:
+        try:
+            return director.media_selection(project_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.patch("/api/projects/{project_id}/media-selection", dependencies=[Depends(_require_local_trust)])
+    def project_set_media_selection(project_id: str, req: MediaSelectionRequest) -> dict[str, Any]:
+        try:
+            return director.set_media_selection(
+                project_id, req.mode, req.asset_ids, priority=req.priority, note=req.note
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/projects/{project_id}/scenes/{scene_number}/alternatives")
+    def project_scene_alternatives(project_id: str, scene_number: int, limit: int = 8) -> dict[str, Any]:
+        """Alternative autentiche per una scena: stesso tipo di materiale, escluso quello in uso."""
+        scenes = director.scene_editor.list_scenes(project_id).get("scenes") or []
+        scene = next((s for s in scenes if int(s.get("scene_number") or 0) == scene_number), None)
+        if scene is None:
+            raise HTTPException(status_code=404, detail=f"Scena {scene_number} non trovata")
+        current = str(scene.get("selected_asset_id") or "")
+        current_asset = director.vault.get_asset(current) if current else None
+        media_type = (current_asset or {}).get("media_type") or "image"
+        items = [
+            a
+            for a in director.vault.list_assets()
+            if a.get("media_type") == media_type and a.get("category") != "Logo" and a.get("id") != current
+        ][: max(1, min(limit, 24))]
+        alternatives = [
+            {
+                **a,
+                "asset_id": a.get("id"),
+                "thumb_url": f"/api/vault/{a.get('id')}/thumb",
+                "is_current": False,
+                "score": float(a.get("quality_score") or 0.0),
+                "reason": f"{a.get('category') or 'archivio'} · {a.get('filename') or a.get('id')}",
+            }
+            for a in items
+        ]
+        return {
+            "ok": True,
+            "scene_number": scene_number,
+            "media_type": media_type,
+            "current_asset_id": current,
+            "current": scene,
+            "alternatives": alternatives,
+        }
+
+    @app.post("/api/projects/{project_id}/scenes/{scene_number}/media", dependencies=[Depends(_require_local_trust)])
+    async def project_scene_media_upload(
+        project_id: str,
+        scene_number: int,
+        file: UploadFile = File(...),
+        category: Optional[str] = Form(default=None),
+    ) -> dict[str, Any]:
+        """Carica un nuovo materiale e lo assegna SUBITO alla scena, senza rigenerare altro."""
+        filename = Path(file.filename or "scene.bin").name
+        try:
+            content = await file.read()
+        except Exception as exc:  # pragma: no cover - I/O difensivo
+            raise HTTPException(status_code=400, detail=f"Lettura del file non riuscita: {exc}") from exc
+        if len(content) > MAX_UPLOAD_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"File troppo grande (> {MAX_UPLOAD_BYTES // (1024 * 1024)} MB)",
+            )
+        with tempfile.TemporaryDirectory(prefix="kora_scene_") as tmp:
+            dest = Path(tmp) / filename
+            dest.write_bytes(content)
+            try:
+                asset = director.vault.ingest_file(
+                    dest,
+                    origin="upload_utente",
+                    category=category or "Materiale scena",
+                    original_filename=filename,
+                )
+            except Exception as exc:
+                raise HTTPException(status_code=400, detail=f"Import non riuscito: {exc}") from exc
+        if asset.get("media_type") not in ("image", "video"):
+            raise HTTPException(status_code=400, detail="Servono una fotografia o un video")
+        try:
+            result = director.scene_editor.update_scene(project_id, scene_number, {"asset_id": asset["id"]})
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if result.get("blocked"):
+            return {
+                "ok": False,
+                "blocked": True,
+                "reason": result.get("reason"),
+                "asset": asset,
+                "scene": result,
+                "scenes": result.get("scenes") or [],
+            }
+        return {
+            "ok": True,
+            "asset": asset,
+            "scene": result,
+            "scenes": result.get("scenes") or [],
+            "note": "Materiale sostituito solo in questa scena: voce, copione e altre scene restano intatti.",
+        }
 
     @app.post("/api/projects/{project_id}/scenes", dependencies=[Depends(_require_local_trust)])
     def project_scene_add(project_id: str, req: SceneCreateRequest) -> dict[str, Any]:

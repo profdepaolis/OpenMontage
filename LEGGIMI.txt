@@ -1,5 +1,5 @@
 ======================================================
-  KORA STUDIO LIGHT 3.6.1 — The Art of Being
+  KORA STUDIO LIGHT 3.6.2 — The Art of Being
   Guida per chi non vuole usare il terminale
 ======================================================
 
@@ -27,7 +27,29 @@ COME PARTIRE (3 passi)
    non identificato»:
       tasto destro sul file → Apri → poi di nuovo Apri.
 
-Cosa c'è di nuovo nella 3.6.1 (correzione della 3.6)
+Cosa c'è di nuovo nella 3.6.2 (restauro funzionale e audiovisivo)
+-----------------------------------------------------------------
+- Barra laterale con dieci sezioni sempre raggiungibili: Home, Progetti,
+  Media Vault, Creative Studio, Production, Preview, Storyboard,
+  AI Providers, Brand Profile, Export.
+- Prima di progettare un Reel KORA ti chiede subito:
+  «Da dove prendiamo i materiali?» — A solo archivio, B solo file nuovi,
+  C archivio + nuovi. La scelta resta scritta nel progetto e non cambia
+  da sola.
+- Ogni scena dello Storyboard ha ora i suoi materiali: sostituisci la foto
+  o il video, caricane uno nuovo direttamente dalla scena, cerca alternative
+  autentiche, sposta il punto focale, cambia il movimento di camera, guarda
+  l'anteprima, blocca l'asset approvato. Le altre scene e la voce non si
+  rigenerano.
+- Sezione AI Providers → «Motori locali»: elenco vero di FFmpeg, FFprobe,
+  Remotion, HyperFrames interno ed esterno, Whisper, faster-whisper,
+  Chatterbox, ElevenLabs, Piper, Edge TTS, Qwen3-TTS, ciascuno con stato
+  installato/non installato, configurato, disponibile e motivo. Un nome nel
+  codice non basta: se manca, te lo dice.
+- Nuovo script di diagnosi: ./diagnostica_motori.sh (aggiungi --test per
+  provare i motori locali). Non installa nulla e non spende nulla.
+
+Cosa c'è nella 3.6.1 (correzione della 3.6)
 ---------------------------
 - Tre passi chiari in home: 01 Suggerisci un tema → 02 Progetta Reel →
   03 Realizza Reel.
@@ -96,16 +118,22 @@ o va in timeout), esegui:
     ./diagnostica_ai.sh
 
 Lo script mostra provider e modello realmente attivi, esegue un test reale e
-indica cosa correggere. Dettagli: docs/KORA_3.6.1_RIPRISTINO_AI.md
+indica cosa correggere. Dettagli: docs/KORA_3.6.1_RIPRISTINO_AI.md e docs/KORA_3.6.2_RESTAURO_AUDIOVISIVO.md
 
 AGGIORNAMENTO IN UN COMANDO (terminale)
 ---------------------------------------
 Apri Terminale e incolla:
 
-  curl -fsSL "https://drive.google.com/uc?export=download&id=1kqYDia24U0Xf1iZDjrIsaJizfpWKChVx" -o /tmp/aggiorna_kora.sh && bash /tmp/aggiorna_kora.sh
+  curl -fsSL "https://drive.google.com/uc?export=download&id=1rC7_h2xNKf6n-1aHeRgzFHYF-8bqOIIq" -o /tmp/aggiorna_kora.sh && bash /tmp/aggiorna_kora.sh
+
+Se hai già scaricato il pacchetto a mano, aggiungi --da-zip:
+
+  curl -fsSL "https://drive.google.com/uc?export=download&id=1rC7_h2xNKf6n-1aHeRgzFHYF-8bqOIIq" -o /tmp/aggiorna_kora.sh \
+    && bash /tmp/aggiorna_kora.sh --da-zip ~/Downloads/KORA_Studio_Light_3.6.2_installer.zip
 
 Fa backup, ferma il server, aggiorna solo l'applicazione (kora_data non viene
 toccata), esegue setup e verifica, riavvia KORA e lancia la diagnostica AI.
+Aggiorna alla 3.6.2 (restauro funzionale e audiovisivo).
 Se il download dal browser non parte: scarica aggiorna_kora.sh e lancia
   bash ~/Downloads/aggiorna_kora.sh
 Opzioni: --cartella DIR · --da-zip FILE · --porta 8021 · --no-avvio · --solo-verifica

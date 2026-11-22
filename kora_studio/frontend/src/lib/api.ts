@@ -1035,6 +1035,126 @@ export const koraApi = {
       { method: "POST" }
     ),
 
+  // ---------------------------------------------------------------- v3.6.2
+  /** Inventario reale dei motori (ffmpeg, remotion, whisper, TTS...). */
+  mediaEngines: (refresh = false) =>
+    apiFetch<{
+      generated_at: string;
+      engines: Array<{
+        id: string;
+        label: string;
+        kind: string;
+        installed: boolean;
+        configured: boolean;
+        available: boolean;
+        test_state: "superato" | "fallito" | "non eseguito";
+        test_detail: string;
+        missing: string[];
+        requirements: string;
+        details: Record<string, unknown>;
+      }>;
+      summary: {
+        total: number;
+        installed: number;
+        available: number;
+        with_problems: string[];
+        render_ready: boolean;
+      };
+    }>(`/api/media/engines${refresh ? "?refresh=true" : ""}`),
+  mediaEngineTest: (engineId: string) =>
+    apiFetch<{
+      engine: string;
+      ok: boolean;
+      detail: string;
+      latency_ms: number;
+      engine_state: Record<string, unknown> | null;
+    }>(`/api/media/engines/${encodeURIComponent(engineId)}/test`, { method: "POST" }),
+  mediaVoices: () =>
+    apiFetch<{
+      ok: boolean;
+      detail?: string;
+      voices: VoiceOption[];
+      tts_engines: Array<{
+        id: string;
+        label: string;
+        installed: boolean;
+        configured: boolean;
+        available: boolean;
+        detail: string;
+        requirements: string;
+      }>;
+    }>("/api/media/voices"),
+  mediaSelection: (projectId: string) =>
+    apiFetch<{
+      ok: boolean;
+      media_selection: string;
+      label: string;
+      media_selection_label?: string;
+      selected_asset_ids: string[];
+      priority: string;
+      media_priority?: string | null;
+      note: string;
+      effective_assets: number;
+      updated_at?: string | null;
+    }>(`/api/projects/${projectId}/media-selection`),
+  setMediaSelection: (
+    projectId: string,
+    payload: { mode: string; asset_ids?: string[]; priority?: string; note?: string }
+  ) =>
+    apiFetch<{
+      ok: boolean;
+      blocked?: boolean;
+      reason?: string;
+      media_selection: string;
+      label: string;
+      media_selection_label?: string;
+      selected_asset_ids: string[];
+      ignored?: string[];
+      priority?: string;
+      effective_assets: number;
+      regenerated: boolean;
+    }>(`/api/projects/${projectId}/media-selection`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+  sceneAlternatives: (projectId: string, sceneNumber: number, limit = 8) =>
+    apiFetch<{
+      ok: boolean;
+      scene_number: number;
+      current?: SceneRow | null;
+      alternatives: Array<{
+        asset_id: string;
+        filename: string;
+        media_type: string;
+        category: string;
+        score: number;
+        reason: string;
+        is_current: boolean;
+        thumb_url: string;
+      }>;
+    }>(`/api/projects/${projectId}/scenes/${sceneNumber}/alternatives?limit=${limit}`),
+  sceneUploadMedia: async (
+    projectId: string,
+    sceneNumber: number,
+    file: File,
+    category?: string
+  ) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    if (category) fd.append("category", category);
+    return apiFetch<{
+      ok: boolean;
+      blocked?: boolean;
+      reason?: string;
+      asset?: MediaAsset;
+      scenes?: SceneRow[];
+      note?: string;
+    }>(`/api/projects/${projectId}/scenes/${sceneNumber}/media`, {
+      method: "POST",
+      body: fd,
+    });
+  },
+
   // Backup
   checkIntegrity: () => apiFetch<Record<string, unknown>>("/api/backup/integrity"),
   createBackup: () => apiFetch<Record<string, unknown>>("/api/backup/create", { method: "POST" }),

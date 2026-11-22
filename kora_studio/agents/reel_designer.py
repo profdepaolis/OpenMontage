@@ -236,12 +236,29 @@ class ReelDesigner:
         ]
 
     def _inventory(self, req: CreativeRequestPayload) -> list[dict[str, Any]]:
+        """Materiali ammessi dal progetto, nel rispetto della provenienza scelta.
+
+        Con una scelta vincolante (`vault_only`, `upload_only`, `mixed`) non si
+        torna mai a «tutto l'archivio»: se gli asset richiesti non esistono la
+        richiesta viene rifiutata, non allargata di nascosto.
+        """
+        from kora_studio.agents.director import normalize_media_selection
+
         assets = self._visual_assets()
-        allowed = {str(a.get("id")) for a in assets}
-        if req.asset_ids:
-            selected = [a for a in assets if str(a.get("id")) in {str(i) for i in req.asset_ids}]
-            return selected or assets
-        return assets
+        mode = normalize_media_selection(getattr(req, "media_selection", None))
+        strict = mode in ("vault_only", "upload_only", "mixed")
+        ids = {str(i) for i in (req.asset_ids or []) if str(i).strip()}
+        if ids:
+            selected = [a for a in assets if str(a.get("id")) in ids]
+            if selected:
+                return selected
+            if strict:
+                raise ValueError(
+                    "I materiali scelti per questo Reel non sono presenti in archivio. "
+                    "Riapri la scelta dei materiali e seleziona almeno un asset valido."
+                )
+            return assets
+        return [] if strict else assets
 
     def _context(
         self,
@@ -760,6 +777,9 @@ class ReelDesigner:
                 generation_engine="deterministic_offline_fallback",
                 creative_request=req.model_dump(),
             )
+        # La richiesta effettiva resta agganciata al concept: provenienza dei
+        # materiali e asset scelti devono sopravvivere fino al progetto.
+        concept.creative_request = req.model_dump()
         # Direzione derivata dal tema reale (nessun reel identico per temi diversi)
         direction = self._apply_theme_direction(concept, req, inventory)
         try:

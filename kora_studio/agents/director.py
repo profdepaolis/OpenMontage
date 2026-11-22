@@ -50,6 +50,31 @@ def director_for_db(db: "Database") -> "KoraDirector":
     return KoraDirector(db=db)
 
 
+MEDIA_SELECTION_MODES = {
+    "vault_only": "Solo Media Vault",
+    "upload_only": "Solo nuovi materiali",
+    "mixed": "Archivio + nuovi materiali",
+    "vault_auto": "Scelta automatica dall'archivio",
+}
+MEDIA_SELECTION_LEGACY = {
+    "auto": "vault_auto",
+    "vault": "vault_only",
+    "selected_only": "vault_only",
+    "allow_crops": "vault_auto",
+    "allow_controlled_gen": "vault_auto",
+    "uploads": "upload_only",
+    "combined": "mixed",
+}
+
+
+def normalize_media_selection(value: Optional[str]) -> str:
+    """3.6.2 — un'unica nomenclatura per la provenienza dei materiali."""
+    raw = str(value or "").strip().lower()
+    if raw in MEDIA_SELECTION_MODES:
+        return raw
+    return MEDIA_SELECTION_LEGACY.get(raw, "vault_auto")
+
+
 class KoraDirector:
     """Central coordinator synchronizing the 9 internal agents over persisted project state."""
 
@@ -227,7 +252,12 @@ class KoraDirector:
         hyperframes: Optional[dict[str, Any]] = None,
         caption_style: Optional[str] = None,
     ) -> dict[str, Any]:
+        request_payload = dict(getattr(design.concept, "creative_request", None) or {})
+        media_selection = normalize_media_selection(request_payload.get("media_selection"))
+        selected_assets = [str(a) for a in (request_payload.get("asset_ids") or []) if str(a).strip()]
         preferences: dict[str, Any] = {
+            "media_selection": media_selection,
+            "selected_asset_ids": selected_assets,
             "reel_design": {
                 "caption": design.caption,
                 "cover": design.cover,
@@ -425,6 +455,95 @@ class KoraDirector:
                 (restored, json.dumps(prefs, ensure_ascii=False), utcnow_iso(), project_id),
             )
         return self.get_project(project_id)  # type: ignore
+
+    # ------------------------------------------------------- 3.6.2 materiali
+    def set_media_selection(
+        self,
+        project_id: str,
+        mode: str,
+        asset_ids: Optional[list[str]] = None,
+        *,
+        priority: Optional[str] = None,
+        note: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Memorizza la provenienza dei materiali scelta dall'utente.
+
+        Non viene mai riportata a «vault_auto» da sola: se l'utente ha scelto
+        archivio, caricamenti o misto, quella scelta resta nel progetto e viene
+        rispettata dal motore creativo e dal renderer.
+        """
+        proj = self.get_project(project_id)
+        if not proj:
+            raise KeyError(f"Progetto {project_id} non trovato")
+        normalized = normalize_media_selection(mode)
+        wanted = [str(a).strip() for a in (asset_ids or []) if str(a).strip()]
+        valid: list[str] = []
+        ignored: list[str] = []
+        for asset_id in dict.fromkeys(wanted):
+            asset = self.vault.get_asset(asset_id)
+            if (
+                asset
+                and asset.get("media_type") in ("image", "video")
+                and asset.get("category") != "Logo"
+            ):
+                valid.append(asset_id)
+            else:
+                ignored.append(asset_id)
+        if normalized in ("vault_only", "upload_only", "mixed") and not valid:
+            raise ValueError(
+                "Seleziona almeno un materiale del Media Vault: la modalità scelta non può restare vuota."
+            )
+        prefs = dict(proj.get("preferences") or {})
+        prefs["media_selection"] = normalized
+        prefs["selected_asset_ids"] = valid
+        prefs["media_selection_updated_at"] = utcnow_iso()
+        priority_alias = {"archive_first": "vault_first", "uploads_first": "uploads_first"}.get(
+            str(priority or "").strip().lower(), str(priority or "").strip().lower()
+        )
+        if priority_alias in ("vault_first", "uploads_first"):
+            prefs["media_priority"] = priority_alias
+        if note:
+            prefs["media_selection_note"] = str(note)[:240]
+        with self.db.session() as conn:
+            conn.execute(
+                "UPDATE projects SET preferences_json = ?, updated_at = ? WHERE id = ?",
+                (json.dumps(prefs, ensure_ascii=False), utcnow_iso(), project_id),
+            )
+        self.invalidate_preview(project_id)
+        return {
+            "ok": True,
+            "media_selection": normalized,
+            "media_selection_label": MEDIA_SELECTION_MODES[normalized],
+            "label": MEDIA_SELECTION_MODES[normalized],
+            "selected_asset_ids": valid,
+            "ignored": ignored,
+            "media_priority": prefs.get("media_priority"),
+            "priority": prefs.get("media_priority") or "vault_first",
+            "note": prefs.get("media_selection_note", ""),
+            "effective_assets": len(valid),
+            "regenerated": False,
+            "project": self.get_project(project_id),
+        }
+
+    def media_selection(self, project_id: str) -> dict[str, Any]:
+        proj = self.get_project(project_id)
+        if not proj:
+            raise KeyError(f"Progetto {project_id} non trovato")
+        prefs = proj.get("preferences") or {}
+        mode = normalize_media_selection(prefs.get("media_selection"))
+        selected = [str(a) for a in (prefs.get("selected_asset_ids") or [])]
+        return {
+            "ok": True,
+            "media_selection": mode,
+            "media_selection_label": MEDIA_SELECTION_MODES[mode],
+            "label": MEDIA_SELECTION_MODES[mode],
+            "selected_asset_ids": selected,
+            "media_priority": prefs.get("media_priority"),
+            "priority": prefs.get("media_priority") or "vault_first",
+            "note": prefs.get("media_selection_note", ""),
+            "effective_assets": len(selected),
+            "updated_at": prefs.get("media_selection_updated_at"),
+        }
 
     def delete_project(self, project_id: str) -> dict[str, Any]:
         """Elimina definitivamente progetto, versioni, job collegati e file generati."""
@@ -797,13 +916,16 @@ class KoraDirector:
             # La selezione manuale vincola l'inventario, non la sequenza: nessuna
             # assegnazione ciclica. Le scene fuori inventario vengono ricollocate.
             if selected_pref:
+                # 3.6.2 — la provenienza scelta dall'utente vincola davvero il montaggio:
+                # con vault_only / upload_only / mixed nessuna scena esce dalla selezione.
+                media_mode = normalize_media_selection((proj.get("preferences") or {}).get("media_selection"))
                 self.creative.enforce_authorized_inventory(scenes, selected_pref)
                 self.log_job(
                     job_id,
                     "INFO",
                     "MediaCurator",
-                    f"Inventario autorizzato ({len(selected_pref)} asset): il Cinematic Story Director sceglie "
-                    "l'immagine migliore per ogni scena.",
+                    f"Inventario autorizzato ({len(selected_pref)} asset · {MEDIA_SELECTION_MODES[media_mode]}): "
+                    "il Cinematic Story Director sceglie l'immagine migliore per ogni scena.",
                 )
             else:
                 self.creative.apply_shot_plans(scenes)

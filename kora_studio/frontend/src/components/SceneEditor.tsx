@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { koraApi, type SceneRow, type VaultOption } from "@/lib/api";
 import { CreativeDirectionPanel } from "./CreativeDirectionPanel";
+import { SceneMaterialsPanel } from "./SceneMaterialsPanel";
 
 interface Props {
   projectId: string;
@@ -463,6 +464,16 @@ export function SceneEditor({ projectId, projectTitle, onPreview }: Props) {
                   />
                 </label>
               </div>
+
+              <SceneMaterialsPanel
+                projectId={projectId}
+                scene={scene}
+                onScenes={(rows) => {
+                  setScenes(rows);
+                  hydrateDrafts(rows);
+                }}
+                onNotify={(kind, text) => setMsg({ kind, text })}
+              />
             </div>
           );
         })}

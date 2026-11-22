@@ -36,6 +36,7 @@ import type {
   VoiceOption,
 } from "@/lib/types";
 import { koraApi } from "@/lib/api";
+import { MediaSourceWizard, type MediaChoice } from "./MediaSourceWizard";
 
 const IDEATION_ENGINE_LABELS: Record<string, string> = {
   ollama_local: "Ollama locale · 0 €",
@@ -123,7 +124,8 @@ interface HomeHubProps {
     hyperframes?: Partial<HyperframesConfig>,
     customizeFirst?: boolean,
     assetIds?: string[],
-    destinationDir?: string | null
+    destinationDir?: string | null,
+    media?: MediaChoice
   ) => Promise<void>;
   onOpenProject: (projectId: string) => void;
   onVaultUpdated: () => void;
@@ -155,6 +157,8 @@ export function HomeHub({
   const [prodMode, setProdMode] = useState<ProductionMode>("AUTO");
   const [presetOverride, setPresetOverride] = useState("AUTO_CONCEPT");
   const [mediaSelection, setMediaSelection] = useState("vault_auto");
+  // Scelta esplicita della provenienza materiali: apre il wizard A/B/C prima di progettare.
+  const [wizardFor, setWizardFor] = useState<{ concept: CreativeConcept; customize: boolean } | null>(null);
   const [generationPolicy, setGenerationPolicy] = useState("authentic_first");
   const [budgetEur, setBudgetEur] = useState(0);
   const [customInstructions, setCustomInstructions] = useState("");
@@ -715,10 +719,7 @@ export function HomeHub({
                   <span className="text-[11px] text-[#6C6459]">Politica generazione media</span>
                   <select
                     value={generationPolicy}
-                    onChange={(e) => {
-                      setGenerationPolicy(e.target.value);
-                      setMediaSelection(e.target.value === "conservative_only" ? "allow_crops" : "vault_auto");
-                    }}
+                    onChange={(e) => setGenerationPolicy(e.target.value)}
                     className="w-full rounded-lg border border-[#DDD4C4] bg-white px-2.5 py-1.5 text-xs"
                   >
                     <option value="authentic_first">Solo autentici → crop → I2V</option>
@@ -1414,27 +1415,13 @@ export function HomeHub({
                     <button
                       type="button"
                       disabled={loading}
-                      onClick={async (e) => {
+                      onClick={(e) => {
                         e.stopPropagation();
-                        setLoading(true);
-                        try {
-                          await onStartProduction(
-                            presetOverride === "AUTO_CONCEPT"
-                              ? c
-                              : { ...c, preset: presetOverride },
-                            themeText.trim() || c.central_idea,
-                            activeAction || "theme",
-                            c.recommended_voice_id || voiceId,
-                            prodMode,
-                            hyperframes.caption_style,
-                            hyperframes,
-                            true,
-                            selectedAssetIds,
-                            destinationDir.trim() || null
-                          );
-                        } finally {
-                          setLoading(false);
-                        }
+                        setWizardFor({
+                          concept:
+                            presetOverride === "AUTO_CONCEPT" ? c : { ...c, preset: presetOverride },
+                          customize: true,
+                        });
                       }}
                       className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-[#224C66] bg-[#FAF7F2] px-3 py-2 text-xs font-medium text-[#224C66] transition hover:bg-[#224C66] hover:text-white"
                     >
@@ -1443,27 +1430,13 @@ export function HomeHub({
                     <button
                       type="button"
                       disabled={loading}
-                      onClick={async (e) => {
+                      onClick={(e) => {
                         e.stopPropagation();
-                        setLoading(true);
-                        try {
-                          await onStartProduction(
-                            presetOverride === "AUTO_CONCEPT"
-                              ? c
-                              : { ...c, preset: presetOverride },
-                            themeText.trim() || c.central_idea,
-                            activeAction || "theme",
-                            c.recommended_voice_id || voiceId,
-                            prodMode,
-                            hyperframes.caption_style,
-                            hyperframes,
-                            false,
-                            selectedAssetIds,
-                            destinationDir.trim() || null
-                          );
-                        } finally {
-                          setLoading(false);
-                        }
+                        setWizardFor({
+                          concept:
+                            presetOverride === "AUTO_CONCEPT" ? c : { ...c, preset: presetOverride },
+                          customize: false,
+                        });
                       }}
                       className="flex w-full items-center justify-center gap-1.5 rounded-xl bg-[#1D1B18] px-3 py-2 text-xs font-medium text-[#FAF7F2] transition hover:bg-[#224C66]"
                     >
@@ -1475,6 +1448,42 @@ export function HomeHub({
             })}
           </div>
         </section>
+      )}
+
+      {wizardFor && (
+        <MediaSourceWizard
+          open
+          initialMode={mediaSelection}
+          initialAssetIds={selectedAssetIds}
+          onCancel={() => setWizardFor(null)}
+          onVaultUpdated={onVaultUpdated}
+          onConfirm={(choice) => {
+            const target = wizardFor;
+            setWizardFor(null);
+            setMediaSelection(choice.mode);
+            setSelectedAssetIds(choice.assetIds);
+            setLoading(true);
+            void (async () => {
+              try {
+                await onStartProduction(
+                  target.concept,
+                  themeText.trim() || target.concept.central_idea,
+                  activeAction || "theme",
+                  target.concept.recommended_voice_id || voiceId,
+                  prodMode,
+                  hyperframes.caption_style,
+                  hyperframes,
+                  target.customize,
+                  choice.assetIds,
+                  destinationDir.trim() || null,
+                  choice
+                );
+              } finally {
+                setLoading(false);
+              }
+            })();
+          }}
+        />
       )}
     </div>
   );

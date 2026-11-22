@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Impacchetta KORA STUDIO LIGHT 3.6.1 in una cartella pronta al doppio clic.
+"""Impacchetta KORA STUDIO LIGHT 3.6.2 in una cartella pronta al doppio clic.
 
 Regole:
 - l'interfaccia compilata (frontend/out) viaggia dentro: nessuna build sul Mac dell'utente;
@@ -36,6 +36,7 @@ TOP_FILES = [
     "start.sh",
     "ripristina.sh",
     "diagnostica_ai.sh",
+    "diagnostica_motori.sh",
     "Installa KORA.command",
     "Avvia KORA.command",
     "LEGGIMI.txt",
@@ -52,6 +53,7 @@ REQUIRED = [
     "kora_studio/agents/art_director.py",
     "kora_studio/agents/scene_generator.py",
     "kora_studio/ai_engine/model_manager.py",
+    "kora_studio/media/engines.py",
     "kora_studio/frontend/out/index.html",
     "kora_studio/frontend/out/404.html",
     "kora_studio/requirements_kora.txt",
@@ -106,6 +108,7 @@ def main() -> int:
         "start.sh",
         "ripristina.sh",
         "diagnostica_ai.sh",
+        "diagnostica_motori.sh",
         "Installa KORA.command",
         "Avvia KORA.command",
     ):

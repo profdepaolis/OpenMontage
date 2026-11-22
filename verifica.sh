@@ -90,6 +90,23 @@ then pass "Porta $PORT libera"; else note "Porta $PORT già occupata: usa KORA_P
 check "Versione 3.6 registrata" bash -c 'grep -q "version=\"3.6" kora_studio/api/app.py'
 [ -x "diagnostica_ai.sh" ] && pass "Script diagnostica_ai.sh eseguibile" || fail "Script diagnostica_ai.sh mancante"
 
+# 3.6.2 · inventario motori audiovisivi (solo verifica, nessuna installazione)
+if [ -x "diagnostica_motori.sh" ]; then
+  pass "Script diagnostica_motori.sh eseguibile"
+  if "$PY" -c 'from kora_studio.media.engines import engines_inventory; inv = engines_inventory(None, refresh=True); assert inv["summary"]["render_ready"]' >/dev/null 2>&1; then
+    pass "Motori censiti e render FFmpeg pronto"
+  else
+    fail "Inventario motori: render FFmpeg non pronto"
+  fi
+  if "$PY" -c 'from kora_studio.media.engines import engines_inventory; ids = {e["id"] for e in engines_inventory(None)["engines"]}; assert len(ids) == 12' >/dev/null 2>&1; then
+    pass "12 motori dichiarati separatamente"
+  else
+    fail "Inventario motori incompleto"
+  fi
+else
+  fail "Script diagnostica_motori.sh mancante"
+fi
+
 # ---------------------------------------------------------------- riepilogo
 printf '\n------------------------------------------------------\n'
 printf "%b" "$REPORT"
