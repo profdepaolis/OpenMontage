@@ -262,3 +262,39 @@ open "http://127.0.0.1:8020"        # Home: Motore / Modalità / Ultimo test
 
 Ripristino di emergenza: `./ripristina.sh` (usa `KORA_PORT` se il server è su
 un'altra porta).
+
+### Aggiornamento in un solo comando (terminale)
+
+```bash
+curl -fsSL "https://drive.google.com/uc?export=download&id=1kqYDia24U0Xf1iZDjrIsaJizfpWKChVx" \
+  -o /tmp/aggiorna_kora.sh && bash /tmp/aggiorna_kora.sh
+```
+
+Lo script `aggiorna_kora.sh` fa tutto, in ordine, e non cancella nulla:
+
+1. trova l'installazione (`~/Documenti/Kora Studio Light`, `~/Documents/…`, Desktop,
+   `/Applications`, oppure `--cartella`); se non esiste la crea;
+2. backup: copia del database in `kora_data/backups/pre_3.6.1_<data>.db` + archivio
+   del codice attuale in `~/KORA_backup_app_<data>.tar.gz`;
+3. ferma il server sulla porta 8020 (o `KORA_PORT`), senza lasciare processi orfani;
+4. scarica il pacchetto 3.6.1 (`id=1t0HRcoBl4SnQ0uajqtkfVBW9au_l3KCR`) e ne verifica
+   l'integrità; in alternativa `--da-zip <file>` o `KORA_ZIP_URL=<url>`;
+5. sostituisce **solo** applicazione, asset, docs e demo: `kora_data/` (foto, progetti,
+   database, voiceover, loghi, Reel) non viene mai toccata né cancellata;
+6. esegue `setup.sh`, `verifica.sh`, avvia il server e lancia `diagnostica_ai.sh`;
+7. se la versione non risulta 3.6.1 o il setup fallisce, **rimette il codice
+   precedente** dall'archivio del punto 2 (i dati restano intatti).
+
+Opzioni: `--cartella DIR`, `--da-zip FILE`, `--porta 8021`, `--no-avvio`,
+`--solo-verifica` (nessuna modifica), `KORA_ZIP_URL=<url>`.
+
+Esito: codice 0 solo se verifica e diagnostica AI sono entrambe a posto. Su un Mac
+senza OpenCode la diagnostica chiude con «CLI opencode non trovata nel PATH»
+(codice 1): è il comportamento corretto, non un guasto dell'aggiornamento.
+
+Prove eseguite su questo script (sandbox, installazione 3.6.0 simulata con foto e
+progetto dell'utente): backup creato, 41 file del Vault intatti, progetto intatto,
+versione 3.6.1, `verifica.sh` 36 OK · 0 KO · 1 avviso, server avviato e rispondente,
+diagnostica con esito onesto, stop del server via `pgrep` quando `lsof` non c'è,
+download fallito gestito con messaggio e rimedio, `--solo-verifica` senza modifiche.
+

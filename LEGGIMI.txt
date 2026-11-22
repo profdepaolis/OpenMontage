@@ -97,3 +97,15 @@ o va in timeout), esegui:
 
 Lo script mostra provider e modello realmente attivi, esegue un test reale e
 indica cosa correggere. Dettagli: docs/KORA_3.6.1_RIPRISTINO_AI.md
+
+AGGIORNAMENTO IN UN COMANDO (terminale)
+---------------------------------------
+Apri Terminale e incolla:
+
+  curl -fsSL "https://drive.google.com/uc?export=download&id=1kqYDia24U0Xf1iZDjrIsaJizfpWKChVx" -o /tmp/aggiorna_kora.sh && bash /tmp/aggiorna_kora.sh
+
+Fa backup, ferma il server, aggiorna solo l'applicazione (kora_data non viene
+toccata), esegue setup e verifica, riavvia KORA e lancia la diagnostica AI.
+Se il download dal browser non parte: scarica aggiorna_kora.sh e lancia
+  bash ~/Downloads/aggiorna_kora.sh
+Opzioni: --cartella DIR · --da-zip FILE · --porta 8021 · --no-avvio · --solo-verifica

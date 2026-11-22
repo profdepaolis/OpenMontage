@@ -159,3 +159,26 @@ I test aggiornati al comportamento corretto sono `test_v281_creative_fast_mode.p
   `./diagnostica_ai.sh`;
 * misura dei tempi reali di ideazione sul Mac (benchmark dell'utente: 20,7 s /
   28,4 s / 78,4 s): usati come base per il budget di 45 s, non riverificati qui.
+
+## 10. Strumento di aggiornamento da terminale (`aggiorna_kora.sh`)
+
+Provato su un'installazione 3.6.0 simulata (contenuto reale del commit `cfb6b6f`),
+con una foto dell'utente nel Vault e un progetto esistente.
+
+| Prova | Esito |
+|---|---|
+| backup preventivo | `kora_data/backups/pre_3.6.1_<data>.db` + `KORA_backup_app_<data>.tar.gz` |
+| dati dell'utente | 41 file del Vault e progetto presenti dopo l'aggiornamento, contenuto invariato |
+| aggiornamento | `api/app.py` da 3.6.0 a 3.6.1, `installed_version.txt` = 3.6.1 |
+| setup + verifica | `verifica.sh` → 36 OK · 0 KO · 1 avviso |
+| avvio | server su porta di prova raggiungibile, `/api/health` e `/api/ai-models/status` corretti |
+| diagnostica AI | «CLI opencode non trovata nel PATH»: esito onesto, codice 1 |
+| stop del server | con `lsof` e, in sua assenza, con `pgrep` sulla porta corretta |
+| download fallito | messaggio con rimedio (`--da-zip`) e nessuna modifica ai file |
+| `--solo-verifica` | nessun file toccato |
+| rollback | versione non 3.6.1 → codice precedente ripristinato, `kora_data` intatta |
+
+Prova negativa voluta: un pacchetto con `api/app.py` non aggiornato ha fatto scattare
+il ripristino automatico del codice (è il primo test che ha scoperto un bug nello
+script: la funzione che estraeva il pacchetto scriveva un messaggio sullo stesso
+canale del percorso, corrompendolo — corretto con `>&2`).
