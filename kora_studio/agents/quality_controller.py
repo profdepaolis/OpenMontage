@@ -612,6 +612,112 @@ class QualityController:
                     detail="Voiceover e sottotitoli allineati su tutte le scene",
                 )
             )
+        # 7. 3.6.6 — Sincronizzazione reale: la timeline canonica è l'unica prova ammessa.
+        # La somiglianza lessicale NON dimostra che una frase sia stata pronunciata
+        # nell'intervallo in cui appare: qui si leggono i tempi, non le parole.
+        timeline = None
+        if work_dir is not None:
+            try:
+                from kora_studio.agents.audio_timeline import TIMELINE_FILENAME, AudioTimelineManager
+
+                timeline_path = Path(work_dir) / TIMELINE_FILENAME
+                if timeline_path.is_file():
+                    timeline = json.loads(timeline_path.read_text(encoding="utf-8"))
+                    mgr = AudioTimelineManager(fps=int(timeline.get("fps") or 25))
+                    timeline_issues = mgr.validate(timeline, total_duration_sec=expected_duration_sec)
+                else:
+                    timeline_issues = [
+                        {
+                            "code": "timeline_assente",
+                            "severity": "warning",
+                            "message": "Nessuna timeline canonica per questo progetto: allineamento non verificato.",
+                        }
+                    ]
+            except Exception as exc:  # un file illeggibile non deve diventare un falso OK
+                timeline = None
+                timeline_issues = [
+                    {"code": "timeline_illeggibile", "severity": "warning", "message": f"Timeline non leggibile: {exc}"}
+                ]
+        else:
+            timeline_issues = [
+                {
+                    "code": "timeline_non_valutata",
+                    "severity": "warning",
+                    "message": "QC eseguito senza cartella progetto: sincronizzazione non valutata.",
+                }
+            ]
+
+        if timeline:
+            audio = timeline.get("audio") or {}
+            transcript = timeline.get("transcript") or {}
+            alignment = str(transcript.get("alignment") or "none")
+            words = len(transcript.get("words") or [])
+            cues = len(timeline.get("caption_cues") or [])
+            errors = [i for i in timeline_issues if i.get("severity") == "error"]
+            warnings = [i for i in timeline_issues if i.get("severity") == "warning"]
+            checks.append(
+                QualityCheckItem(
+                    category="technical",
+                    name="Voce non tagliata (inizio e fine conservati)",
+                    passed=not any(i["code"] == "voce_tagliata" for i in timeline_issues),
+                    severity="error",
+                    detail=(
+                        f"Voce {float(audio.get('start_offset_sec') or 0.0):.2f}s → "
+                        f"{float(audio.get('end_sec') or 0.0):.2f}s su {expected_duration_sec:.2f}s di Reel"
+                        if not any(i["code"] == "voce_tagliata" for i in timeline_issues)
+                        else next(i["message"] for i in timeline_issues if i["code"] == "voce_tagliata")
+                    ),
+                )
+            )
+            checks.append(
+                QualityCheckItem(
+                    category="narrative",
+                    name="Sincronizzazione audio, scene e sottotitoli",
+                    passed=not errors,
+                    severity="error" if errors else ("warning" if warnings else "info"),
+                    requires_human_review=bool(warnings),
+                    detail=(
+                        f"Timeline: {words} parole, {cues} cue, allineamento «{alignment}». "
+                        + ("; ".join(i["message"] for i in errors + warnings) if (errors or warnings) else "Nessun conflitto.")
+                    ),
+                )
+            )
+            if warnings:
+                human_reasons.append(
+                    "Sincronizzazione non verificata: "
+                    + " ".join(i["message"] for i in warnings)
+                )
+            checks.append(
+                QualityCheckItem(
+                    category="narrative",
+                    name="Trascrizione verificata sulle parole pronunciate",
+                    passed=alignment == "asr" and bool(transcript.get("verified")),
+                    severity="warning",
+                    status="superato" if (alignment == "asr" and transcript.get("verified")) else "non_verificato",
+                    requires_human_review=alignment != "asr",
+                    detail=(
+                        "Trascrizione ASR con timestamp delle parole."
+                        if alignment == "asr"
+                        else (
+                            "Tempi stimati dentro le pause misurate (nessun motore ASR): "
+                            "i sottotitoli sono coerenti con il testo, non trascritti dalla voce."
+                        )
+                    ),
+                )
+            )
+        else:
+            checks.append(
+                QualityCheckItem(
+                    category="narrative",
+                    name="Sincronizzazione audio, scene e sottotitoli",
+                    passed=True,
+                    severity="warning",
+                    status="non_verificato",
+                    requires_human_review=True,
+                    detail="; ".join(i["message"] for i in timeline_issues) or "Timeline non disponibile.",
+                )
+            )
+
         # Temporal validity of promo/date mentions
         cur_year = datetime.now(timezone.utc).year
         past_years = [str(y) for y in range(2020, cur_year) if str(y) in all_text]

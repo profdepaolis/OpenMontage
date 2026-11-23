@@ -457,7 +457,7 @@ def create_app(db_path: Optional[Path] = None, auto_seed: bool = True) -> FastAP
         except Exception as exc:  # pragma: no cover
             _log_error(exc, "refresh_palette_from_vault")
 
-    app = FastAPI(title="KORA STUDIO", version="3.6.5")
+    app = FastAPI(title="KORA STUDIO", version="3.6.6")
 
     def _v35(fn: Any) -> Any:
         """Errori v3.5 tradotti in risposte parlanti: 404 scena, 400 richiesta, 409 blocco."""
@@ -1181,7 +1181,12 @@ def create_app(db_path: Optional[Path] = None, auto_seed: bool = True) -> FastAP
         "/api/projects/{project_id}/voiceover/upload",
         dependencies=[Depends(_require_local_trust)],
     )
-    def upload_voiceover(project_id: str, file: UploadFile = File(...)) -> dict[str, Any]:
+    def upload_voiceover(
+        project_id: str,
+        file: UploadFile = File(...),
+        script: Optional[str] = Form(None),
+        use_asr: bool = Form(True),
+    ) -> dict[str, Any]:
         """Importa un voiceover già pronto (MP3/WAV/M4A) e riallinea lo storyboard alla sua durata."""
         proj = director.get_project(project_id)
         if not proj:
@@ -1208,7 +1213,13 @@ def create_app(db_path: Optional[Path] = None, auto_seed: bool = True) -> FastAP
                     raise HTTPException(status_code=413, detail="File audio troppo grande (max 150 MB).")
                 out.write(chunk)
         try:
-            updated = director.apply_uploaded_voiceover(project_id, dest, file.filename or dest.name)
+            updated = director.apply_uploaded_voiceover(
+                project_id,
+                dest,
+                file.filename or dest.name,
+                script_text=(script or "").strip() or None,
+                use_asr=bool(use_asr),
+            )
         except Exception as exc:
             dest.unlink(missing_ok=True)
             raise HTTPException(status_code=400, detail=str(exc))
@@ -1220,6 +1231,7 @@ def create_app(db_path: Optional[Path] = None, auto_seed: bool = True) -> FastAP
                 "size_bytes": written,
                 "duration_sec": updated.get("target_duration_sec"),
                 "total_frames": updated.get("total_frames"),
+                "timeline_note": updated.get("timeline_note"),
             },
         }
 
@@ -1642,6 +1654,147 @@ def create_app(db_path: Optional[Path] = None, auto_seed: bool = True) -> FastAP
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/asr/status")
+    def asr_status() -> dict[str, Any]:
+        from kora_studio.agents import asr as asr_mod
+
+        return asr_mod.status()
+
+    @app.get("/api/projects/{project_id}/timeline")
+    def get_project_timeline(project_id: str) -> dict[str, Any]:
+        from kora_studio.agents.audio_timeline import AudioTimelineManager
+
+        proj = director.get_project(project_id)
+        if not proj:
+            raise HTTPException(status_code=404, detail="Progetto non trovato")
+        manager = AudioTimelineManager(
+            fps=int(proj.get("fps") or 25), project_dir=director.project_dir_for(project_id)
+        )
+        timeline = manager.load()
+        if not timeline:
+            return {
+                "project_id": project_id,
+                "timeline": None,
+                "issues": [],
+                "message": "Timeline non ancora costruita.",
+            }
+        total_sec = sum(int(s.get("duration_frames") or 0) for s in proj["storyboard"]) / float(
+            proj.get("fps") or 25
+        )
+        return {
+            "project_id": project_id,
+            "timeline": timeline,
+            "issues": manager.validate(timeline, total_duration_sec=total_sec),
+        }
+
+    @app.post(
+        "/api/projects/{project_id}/timeline/rebuild",
+        dependencies=[Depends(_require_local_trust)],
+    )
+    def rebuild_project_timeline(project_id: str, req: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+        body = req or {}
+        try:
+            return director.rebuild_audio_timeline(
+                project_id,
+                script_text=(body.get("script_text") or "").strip() or None,
+                use_asr=bool(body.get("use_asr", False)),
+                asr_level=str(body.get("asr_level") or "bilanciato"),
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+    @app.patch(
+        "/api/projects/{project_id}/transcript",
+        dependencies=[Depends(_require_local_trust)],
+    )
+    def patch_project_transcript(project_id: str, req: dict[str, Any]) -> dict[str, Any]:
+        from kora_studio.agents.audio_timeline import (
+            AudioTimelineManager,
+            rebuild_words_from_segments,
+        )
+
+        proj = director.get_project(project_id)
+        if not proj:
+            raise HTTPException(status_code=404, detail="Progetto non trovato")
+        project_dir = director.project_dir_for(project_id)
+        manager = AudioTimelineManager(fps=int(proj.get("fps") or 25), project_dir=project_dir)
+        timeline = manager.load()
+        if not timeline:
+            raise HTTPException(
+                status_code=409,
+                detail="Nessuna timeline: ricalcolala prima di correggere il testo.",
+            )
+        segments = list((timeline.get("transcript") or {}).get("segments") or [])
+        edits = {
+            str(e.get("segment_uid")): e for e in (req.get("segments") or []) if e.get("segment_uid")
+        }
+        if not edits:
+            raise HTTPException(status_code=400, detail="Nessuna correzione indicata (segment_uid mancante).")
+        for seg in segments:
+            edit = edits.get(str(seg.get("segment_uid")))
+            if not edit:
+                continue
+            if edit.get("text") is not None:
+                seg["text"] = str(edit["text"]).strip()
+            if edit.get("locked") is not None:
+                seg["locked"] = bool(edit["locked"])
+            seg["review_status"] = str(edit.get("review_status") or "edited")
+        timeline = rebuild_words_from_segments(timeline, segments=segments)
+        manager.save(timeline, project_dir)
+        total_sec = sum(int(s.get("duration_frames") or 0) for s in proj["storyboard"]) / float(
+            proj.get("fps") or 25
+        )
+        return {
+            "project_id": project_id,
+            "transcript": timeline.get("transcript"),
+            "caption_cues": timeline.get("caption_cues"),
+            "issues": manager.validate(timeline, total_duration_sec=total_sec),
+        }
+
+    @app.get("/api/projects/{project_id}/sync/verify")
+    @app.post("/api/projects/{project_id}/sync/verify")
+    def verify_sync(project_id: str) -> dict[str, Any]:
+        """Conflitti reali tra voce, scene e sottotitoli. Nessuna stima spacciata per prova."""
+        from kora_studio.agents.audio_timeline import AudioTimelineManager
+
+        proj = director.get_project(project_id)
+        if not proj:
+            raise HTTPException(status_code=404, detail="Progetto non trovato")
+        manager = AudioTimelineManager(
+            fps=int(proj.get("fps") or 25), project_dir=director.project_dir_for(project_id)
+        )
+        timeline = manager.load()
+        if not timeline:
+            return {
+                "project_id": project_id,
+                "ok": False,
+                "verified": False,
+                "issues": [
+                    {
+                        "code": "timeline_assente",
+                        "severity": "warning",
+                        "message": "Timeline assente: ricostruiscila prima di esportare.",
+                    }
+                ],
+            }
+        total_sec = sum(int(s.get("duration_frames") or 0) for s in proj["storyboard"]) / float(
+            proj.get("fps") or 25
+        )
+        issues = manager.validate(timeline, total_duration_sec=total_sec)
+        transcript = timeline.get("transcript") or {}
+        return {
+            "project_id": project_id,
+            "ok": not any(i["severity"] == "error" for i in issues),
+            "verified": transcript.get("alignment") == "asr" and bool(transcript.get("verified")),
+            "alignment": transcript.get("alignment"),
+            "words": len(transcript.get("words") or []),
+            "cues": len(timeline.get("caption_cues") or []),
+            "audio": timeline.get("audio"),
+            "issues": issues,
+        }
 
     @app.post("/api/projects/{project_id}/captions/align", dependencies=[Depends(_require_local_trust)])
     def project_align_captions(project_id: str, payload: Optional[dict[str, Any]] = None) -> dict[str, Any]:

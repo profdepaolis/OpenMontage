@@ -61,6 +61,9 @@ const PreviewView = dynamic(() => import("@/components/PreviewView").then((m) =>
 const SceneEditor = dynamic(() => import("@/components/SceneEditor").then((m) => m.SceneEditor), {
   loading: () => <SectionSkeleton label="Storyboard" />,
 });
+const SyncPanel = dynamic(() => import("@/components/SyncPanel"), {
+  loading: () => <SectionSkeleton label="Sincronizzazione" />,
+});
 const ProvidersView = dynamic(() => import("@/components/ProvidersView").then((m) => m.ProvidersView), {
   loading: () => <SectionSkeleton label="Provider" />,
 });
@@ -562,11 +565,14 @@ export default function KoraStudioPage() {
               </div>
             )}
             {activeProject ? (
-              <SceneEditor
-                projectId={activeProject.id}
-                projectTitle={activeProject.title}
-                onPreview={() => setNav("preview")}
-              />
+              <div className="space-y-5">
+                <SceneEditor
+                  projectId={activeProject.id}
+                  projectTitle={activeProject.title}
+                  onPreview={() => setNav("preview")}
+                />
+                <SyncPanel key={activeProject.id} projectId={activeProject.id} />
+              </div>
             ) : (
               <p className="rounded-2xl border border-[#EDE6D9] bg-white p-6 text-sm text-[#6C6459]">
                 Apri un progetto dalla Home o da Progetti per lavorare sulle scene.

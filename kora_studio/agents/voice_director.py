@@ -129,6 +129,17 @@ VOICE_CATALOG: dict[str, dict[str, Any]] = {
 }
 
 
+def _scene_fps(scenes: list[StoryboardScene]) -> float:
+    """Frame rate dedotto dalle scene (nessun valore inventato)."""
+    for scene in scenes:
+        try:
+            if scene.duration_sec > 0 and scene.duration_frames:
+                return round(scene.duration_frames / scene.duration_sec, 3) or 25.0
+        except Exception:
+            continue
+    return 25.0
+
+
 class VoiceDirector:
     """Produces, normalizes, and verifies scene-aligned voiceovers."""
 
@@ -973,7 +984,23 @@ class VoiceDirector:
                 "consentito raccordo naturale verso il finale senza accelerare la voce."
             )
 
+        # 3.6.6 — manifest audio esplicito: da qui in poi nessuno stadio indovina
+        # offset o allineamento leggendo il nome del file.
+        voice_manifest = {
+            "audio_path": str(norm_out),
+            "source": source_used,
+            "is_scene_aligned": bool(aligned_cues),
+            "start_offset_sec": 0.0,
+            "end_padding_sec": 0.0,
+            "source_duration_sec": round(float(actual_dur), 3),
+            "effective_duration_sec": round(float(actual_dur), 3),
+            "timeline_duration_sec": round(
+                sum(s.duration_frames for s in scenes) / _scene_fps(scenes), 3
+            ),
+            "declared": True,
+        }
         return {
+            "voice_manifest": voice_manifest,
             "voice_id": voice_id,
             "voice_label": VOICE_CATALOG[voice_id]["label"],
             "source_used": source_used,

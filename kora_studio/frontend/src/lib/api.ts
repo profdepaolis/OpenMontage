@@ -24,6 +24,72 @@ import type {
 } from "./types";
 
 /** Riga di scena restituita dall'editor di produzione. */
+
+export type SyncIssue = {
+  code: string;
+  severity: "error" | "warning" | string;
+  message: string;
+};
+
+export type TimelineWord = {
+  word_id?: string;
+  word: string;
+  start_sec: number;
+  end_sec: number;
+  start_frame?: number;
+  end_frame?: number;
+  timing_source?: string;
+  confidence?: number | null;
+};
+
+export type TimelineSegment = {
+  segment_uid: string;
+  text: string;
+  start_sec: number;
+  end_sec: number;
+  scene_uid?: string | null;
+  scene_number?: number | null;
+  review_status?: string;
+  word_ids?: string[];
+};
+
+export type TimelineCue = {
+  cue_uid: string;
+  text: string;
+  start_sec: number;
+  end_sec: number;
+  scene_number?: number | null;
+  timing_source?: string;
+};
+
+export type TimelineRecord = {
+  fps: number;
+  duration_sec: number;
+  total_frames: number;
+  audio: {
+    path: string;
+    source: string;
+    duration_sec: number;
+    start_offset_sec: number;
+    end_sec: number;
+    end_padding_sec: number;
+    effective_duration_sec: number;
+    is_scene_aligned: boolean;
+    speech_regions: Array<{ start_sec: number; end_sec: number }>;
+  };
+  transcript: {
+    alignment: string;
+    verified: boolean;
+    engine?: string | null;
+    model?: string | null;
+    language?: string;
+    text: string;
+    words: TimelineWord[];
+    segments: TimelineSegment[];
+  };
+  caption_cues: TimelineCue[];
+};
+
 export type SceneRow = {
   scene_number: number;
   start_sec: number;
@@ -1165,6 +1231,60 @@ export const koraApi = {
       body: fd,
     });
   },
+
+  // 3.6.6 — timeline canonica, trascrizione, verifica sincronizzazione
+  getTimeline: (projectId: string) =>
+    apiFetch<{
+      project_id: string;
+      timeline: TimelineRecord | null;
+      issues: SyncIssue[];
+      message?: string;
+    }>(`/api/projects/${projectId}/timeline`),
+  rebuildTimeline: (
+    projectId: string,
+    body: { script_text?: string; use_asr?: boolean; asr_level?: string } = {}
+  ) =>
+    apiFetch<{
+      project_id: string;
+      timeline: TimelineRecord;
+      issues: SyncIssue[];
+      asr_note: string;
+      timeline_path: string;
+    }>(`/api/projects/${projectId}/timeline/rebuild`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  patchTranscript: (
+    projectId: string,
+    segments: Array<{ segment_uid: string; text?: string; locked?: boolean }>
+  ) =>
+    apiFetch<{
+      project_id: string;
+      transcript: TimelineRecord["transcript"];
+      caption_cues: TimelineRecord["caption_cues"];
+      issues: SyncIssue[];
+    }>(`/api/projects/${projectId}/transcript`, {
+      method: "PATCH",
+      body: JSON.stringify({ segments }),
+    }),
+  verifySync: (projectId: string) =>
+    apiFetch<{
+      project_id: string;
+      ok: boolean;
+      verified: boolean;
+      alignment?: string;
+      words?: number;
+      cues?: number;
+      issues: SyncIssue[];
+    }>(`/api/projects/${projectId}/sync/verify`, { method: "POST" }),
+  asrStatus: () =>
+    apiFetch<{
+      available: boolean;
+      engines: string[];
+      preferred: string | null;
+      message: string;
+      install_hint: string;
+    }>("/api/asr/status"),
 
   // Backup
   checkIntegrity: () => apiFetch<Record<string, unknown>>("/api/backup/integrity"),

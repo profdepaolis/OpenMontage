@@ -301,6 +301,43 @@ class ExportManager:
             encoding="utf-8",
         )
 
+        # 5b. 3.6.6 — artefatti di sincronizzazione: cue, SRT, VTT, ASS, transcript, timeline
+        sync_files: dict[str, Any] = {}
+        timeline_path = project_dir / "project_timeline.json"
+        if timeline_path.is_file():
+            try:
+                from kora_studio.agents.audio_timeline import cues_to_ass, cues_to_srt, cues_to_vtt
+
+                timeline = json.loads(timeline_path.read_text(encoding="utf-8"))
+                cues = timeline.get("caption_cues") or []
+                cues_json = export_dir / f"{project_id}_cues.json"
+                cues_json.write_text(json.dumps(cues, ensure_ascii=False, indent=2), encoding="utf-8")
+                srt_path = export_dir / f"{project_id}_sottotitoli.srt"
+                srt_path.write_text(cues_to_srt(cues), encoding="utf-8")
+                vtt_path = export_dir / f"{project_id}_sottotitoli.vtt"
+                vtt_path.write_text(cues_to_vtt(cues), encoding="utf-8")
+                ass_path = export_dir / f"{project_id}_sottotitoli.ass"
+                ass_path.write_text(cues_to_ass(cues), encoding="utf-8")
+                timeline_out = export_dir / f"{project_id}_timeline.json"
+                timeline_out.write_text(
+                    json.dumps(timeline, ensure_ascii=False, indent=2), encoding="utf-8"
+                )
+                transcript_out = export_dir / f"{project_id}_transcript.json"
+                transcript_out.write_text(
+                    json.dumps(timeline.get("transcript") or {}, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+                sync_files = {
+                    "cues_json": str(cues_json),
+                    "srt": str(srt_path),
+                    "vtt": str(vtt_path),
+                    "ass": str(ass_path),
+                    "timeline_json": str(timeline_out),
+                    "transcript_json": str(transcript_out),
+                }
+            except Exception as exc:  # l'export del reel non dipende dagli artefatti accessori
+                sync_files = {"error": f"artefatti di sincronizzazione non scritti: {exc}"}
+
         # 6. Technical report JSON & Markdown
         report_data = {
             "project_id": project_id,
@@ -325,6 +362,7 @@ class ExportManager:
                 "no_subtitles_mp4": str(no_sub_mp4) if no_sub_mp4 else None,
                 "no_music_mp4": str(no_music_mp4) if no_music_mp4 else None,
                 "editable_project_json": str(editable_json),
+                **sync_files,
             },
         }
         report_json = export_dir / f"{project_id}_report_tecnico.json"
@@ -367,4 +405,5 @@ class ExportManager:
             "report_json": str(report_json),
             "report_md": str(report_md),
             "qc": qc_report.model_dump(),
+            "subtitles": sync_files,
         }

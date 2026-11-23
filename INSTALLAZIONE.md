@@ -1,4 +1,4 @@
-# Installazione tecnica — KORA STUDIO LIGHT 3.6.5
+# Installazione tecnica — KORA STUDIO LIGHT 3.6.6
 
 Documento per chi vuole capire cosa fa il doppio clic, o riparare un guasto.
 Per l'uso normale basta `LEGGIMI.txt`.
@@ -60,6 +60,23 @@ versione 3.6.1, `verifica.sh` 36 OK · 0 KO · 1 avviso, server avviato e rispon
 diagnostica con esito onesto, stop del server via `pgrep` quando `lsof` non c'è,
 download fallito gestito con messaggio e rimedio, `--solo-verifica` senza modifiche.
 
+
+## 1b. Sincronizzazione voce/scene/sottotitoli (3.6.6)
+
+La timeline canonica sta in `kora_data/projects/<id>/project_timeline.json`.
+Diagnostica rapida:
+
+    ./diagnostica_sync.sh              # tutti i progetti
+    ./diagnostica_sync.sh prj_xxxx     # un progetto
+
+Ricalcolo e verifica:
+
+    curl -s -X POST http://127.0.0.1:8020/api/projects/ID/timeline/rebuild -H 'Content-Type: application/json' -d '{}'
+    curl -s -X POST http://127.0.0.1:8020/api/projects/ID/sync/verify
+
+Se compare «voce_tagliata», la voce finirebbe oltre la fine del Reel: allunga
+il Reel, accorcia il copione o riduci le pause eliminabili (KORA non tronca).
+Dettagli: `docs/KORA_3.6.6_SINCRONIZZAZIONE.md`.
 
 ## 1b-bis. Esportazione bloccata da «Coerenza tra voiceover e sottotitoli» (3.6.4 → 3.6.5)
 

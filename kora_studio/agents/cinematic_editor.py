@@ -483,6 +483,7 @@ class CinematicEditor:
         caption_style: Optional[str] = None,
         hyperframes: Optional[dict[str, Any]] = None,
         caption_overrides: Optional[dict[str, Any]] = None,
+        caption_timings: Optional[dict[Any, list[dict[str, Any]]]] = None,
     ) -> dict[str, Any]:
         """Assemble full 1080x1920 25fps H.264/AAC Rec.709 MP4 with transitions & captions (KORA / Hyperframes)."""
         if not scenes:
@@ -584,6 +585,8 @@ class CinematicEditor:
                     caption_style=scene_style,
                     sub_dir=sub_dir,
                     overrides={**(caption_overrides or {}), **(sc.caption_overrides or {})} or None,
+                    word_timings=(caption_timings or {}).get(sc.scene_number)
+                    or (caption_timings or {}).get(str(sc.scene_number)),
                 )
                 for seg in segs:
                     st = float(seg["start_sec"])

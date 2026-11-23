@@ -11,6 +11,10 @@ from typing import Any, Optional
 from kora_studio.agents.ai_media_lab import AIMediaLab, MediaCurator
 from kora_studio.agents.copywriter import Copywriter
 from kora_studio.agents.brand_guardian import BrandGuardian
+from kora_studio.agents.audio_timeline import (
+    AudioTimelineManager,
+    VoiceTruncationError,
+)
 from kora_studio.agents.cinematic_editor import CinematicEditor, CinematicPreviewRenderer
 from kora_studio.agents.colorist import Colorist
 from kora_studio.agents.creative_director import CreativeDirector
@@ -619,8 +623,208 @@ class KoraDirector:
             cursor_sec = sc.end_sec
         return scenes
 
+    def _cut_storyboard_on_speech(
+        self,
+        scenes: list[StoryboardScene],
+        audio_path: Path,
+        total_frames: int,
+        fps: int,
+    ) -> list[StoryboardScene]:
+        """3.6.6 — i tagli cadono sulle pause misurate, non in proporzione cieca."""
+        from kora_studio.agents.audio_timeline import plan_scene_boundaries, speech_regions
+
+        regions = speech_regions(audio_path, duration_sec=total_frames / fps)
+        boundaries = plan_scene_boundaries(regions, len(scenes), total_frames / fps, fps)
+        if not boundaries:
+            return scenes
+        if len(boundaries) != len(scenes) - 1:
+            # nessun taglio approssimativo: se i confini non sono esatti si torna
+            # alla distribuzione proporzionale già applicata
+            return scenes
+        edges = [0, *boundaries, total_frames]
+        cursor_sec = 0.0
+        for index, scene in enumerate(scenes):
+            start_frame = edges[index]
+            end_frame = edges[index + 1]
+            if end_frame <= start_frame:
+                continue
+            scene.start_frame = start_frame
+            scene.end_frame = end_frame
+            scene.duration_frames = end_frame - start_frame
+            scene.duration_sec = round(scene.duration_frames / fps, 3)
+            scene.start_sec = round(start_frame / fps, 3)
+            scene.end_sec = round(end_frame / fps, 3)
+            cursor_sec = scene.end_sec
+        return scenes
+
+    # ------------------------------------------------------------------ #
+    # 3.6.6 — timeline canonica (AudioTimelineManager)
+    # ------------------------------------------------------------------ #
+    @staticmethod
+    def project_dir_for(project_id: str) -> Path:
+        return PROJECTS_DIR / project_id
+
+    def _build_timeline_for(
+        self,
+        *,
+        project_dir: Path,
+        voice_path: Path,
+        voice_res: dict[str, Any],
+        scenes: list[StoryboardScene],
+        fps: int,
+        text: Optional[str] = None,
+        asr_result: Optional[dict[str, Any]] = None,
+        source: str = "",
+    ) -> dict[str, Any]:
+        """Costruisce e salva la timeline canonica; unica fonte per mix, caption e QC."""
+        manifest = voice_res.get("voice_manifest") or {}
+        spoken = (text or "").strip() or " ".join(
+            (sc.spoken_text or "").strip() for sc in scenes if not sc.is_outro and (sc.spoken_text or "").strip()
+        )
+        manager = AudioTimelineManager(fps=fps, project_dir=project_dir)
+        timeline = manager.build(
+            audio_path=voice_path,
+            text=spoken or None,
+            source=source or str(manifest.get("source") or voice_res.get("source_used") or "tts"),
+            is_scene_aligned=bool(manifest.get("is_scene_aligned")),
+            start_offset_sec=float(manifest.get("start_offset_sec") or 0.0),
+            end_padding_sec=float(manifest.get("end_padding_sec") or 0.0),
+            scenes=scenes,
+            asr_result=asr_result,
+            audio_duration_sec=float(manifest.get("source_duration_sec") or 0.0) or None,
+        )
+        manager.save(timeline, project_dir)
+        return timeline
+
+    @staticmethod
+    def _caption_timings(
+        timeline: Optional[dict[str, Any]],
+        scenes: list[StoryboardScene],
+        fps: int,
+    ) -> Optional[dict[int, list[dict[str, Any]]]]:
+        """Tempi per l'evidenziazione parola per parola, presi dalla timeline canonica."""
+        if not timeline:
+            return None
+        words = list((timeline.get("transcript") or {}).get("words") or [])
+        if not words:
+            return None
+        timings: dict[int, list[dict[str, Any]]] = {}
+        for scene in scenes:
+            caption_words = [w for w in (scene.subtitle_text or "").split() if w]
+            if not caption_words or scene.is_outro:
+                continue
+            in_scene = [
+                w
+                for w in words
+                if float(scene.start_sec) - 0.05
+                <= (float(w["start_sec"]) + float(w["end_sec"])) / 2
+                < float(scene.end_sec) + 0.05
+            ]
+            if not in_scene:
+                continue
+            total_caption = len(caption_words)
+            total_words = len(in_scene)
+            planned: list[dict[str, Any]] = []
+            for index in range(total_caption):
+                mapped = (
+                    index if total_words == total_caption
+                    else int(round(index * (total_words - 1) / max(1, total_caption - 1)))
+                )
+                mapped = max(0, min(total_words - 1, mapped))
+                word = in_scene[mapped]
+                planned.append(
+                    {
+                        "start_sec": float(word["start_sec"]),
+                        "end_sec": float(word["end_sec"]),
+                        "word_index": index,
+                        "timing_source": word.get("timing_source", "estimated"),
+                    }
+                )
+            timings[scene.scene_number] = planned
+        return timings or None
+
+    def rebuild_audio_timeline(
+        self,
+        project_id: str,
+        *,
+        script_text: Optional[str] = None,
+        use_asr: bool = False,
+        asr_level: str = "bilanciato",
+    ) -> dict[str, Any]:
+        """Ricalcola la timeline del progetto dalla voce realmente presente su disco."""
+        from kora_studio.agents import audio_timeline as tl_mod
+        from kora_studio.agents import asr as asr_mod
+
+        proj = self.get_project(project_id)
+        if not proj:
+            raise KeyError(f"Progetto {project_id} non trovato.")
+        project_dir = self.project_dir_for(project_id)
+        scenes = [StoryboardScene(**s) for s in proj["storyboard"]]
+        fps = max(1, int(proj.get("fps") or DEFAULT_FPS))
+
+        uploaded = self.voice_director._project_voiceover_override(project_id)
+        if uploaded:
+            voice_path = Path(str(uploaded["path"]))
+            voice_res: dict[str, Any] = {
+                "source_used": "voce_importata_manuale",
+                "voice_manifest": {
+                    "source": "upload",
+                    "is_scene_aligned": False,
+                    "start_offset_sec": 0.0,
+                    "end_padding_sec": 0.0,
+                    "source_duration_sec": float(uploaded.get("duration_sec") or 0.0),
+                },
+            }
+        else:
+            voice_path = project_dir / f"voice_{proj.get('voice_id')}_norm.wav"
+            if not voice_path.is_file():
+                raise ValueError(
+                    "Nessuna voce disponibile per il progetto: genera il voiceover o importa un file audio."
+                )
+            voice_res = {"source_used": "tts", "voice_manifest": {}}
+
+        asr_result: Optional[dict[str, Any]] = None
+        asr_note = ""
+        text = (script_text or "").strip()
+        if use_asr:
+            try:
+                result = asr_mod.transcribe(voice_path, language="it", level=asr_level)
+                asr_result = result.to_dict()
+                asr_note = f"trascrizione ASR ({result.engine}/{result.model})"
+            except asr_mod.AsrUnavailable as exc:
+                asr_note = f"ASR non disponibile: {exc}"
+        elif not text:
+            asr_note = "testo dallo storyboard (stima dentro le pause misurate, non trascrizione)"
+
+        timeline = self._build_timeline_for(
+            project_dir=project_dir,
+            voice_path=voice_path,
+            voice_res=voice_res,
+            scenes=scenes,
+            fps=fps,
+            text=text or None,
+            asr_result=asr_result,
+        )
+        total_sec = sum(s.duration_frames for s in scenes) / fps
+        manager = AudioTimelineManager(fps=fps, project_dir=project_dir)
+        issues = manager.validate(timeline, total_duration_sec=total_sec)
+        return {
+            "project_id": project_id,
+            "timeline": timeline,
+            "issues": issues,
+            "asr_note": asr_note,
+            "audio_sha256": (timeline.get("audio") or {}).get("sha256"),
+            "audio_path": str(voice_path),
+            "timeline_path": str(project_dir / tl_mod.TIMELINE_FILENAME),
+        }
+
     def apply_uploaded_voiceover(
-        self, project_id: str, audio_path: Path, original_filename: str = ""
+        self,
+        project_id: str,
+        audio_path: Path,
+        original_filename: str = "",
+        script_text: Optional[str] = None,
+        use_asr: bool = True,
     ) -> dict[str, Any]:
         """Usa un MP3/WAV prodotto dall'utente (es. sul sito ElevenLabs) e riallinea lo storyboard alla sua durata."""
         from kora_studio.media_tools import probe_media
@@ -637,6 +841,15 @@ class KoraDirector:
         scenes = [StoryboardScene(**s) for s in proj["storyboard"]]
         total_frames = int(round(duration * fps))
         self._scale_storyboard_frames(scenes, total_frames, fps)
+        try:
+            # la voce importata è il riferimento temporale: i tagli seguono le pause
+            cut_scenes = self._cut_storyboard_on_speech(
+                [sc.model_copy(deep=True) for sc in scenes], audio_path, total_frames, fps
+            )
+            if sum(sc.duration_frames for sc in cut_scenes) == total_frames:
+                scenes = cut_scenes
+        except Exception:
+            pass
         scaled_total = sum(sc.duration_frames for sc in scenes)
 
         with self.db.session() as conn:
@@ -663,12 +876,45 @@ class KoraDirector:
                 ensure_ascii=False,
             ),
         )
+        # 3.6.6 — manifest esplicito: la voce importata parte da 0, senza ritardi inventati.
+        self.db.set_preference(
+            f"voice_manifest_{project_id}",
+            json.dumps(
+                {
+                    "audio_path": str(audio_path),
+                    "source": "upload",
+                    "is_scene_aligned": False,
+                    "start_offset_sec": 0.0,
+                    "end_padding_sec": 0.0,
+                    "source_duration_sec": round(duration, 3),
+                    "effective_duration_sec": round(duration, 3),
+                    "timeline_duration_sec": round(scaled_total / fps, 3),
+                    "declared": True,
+                    "filename": original_filename or audio_path.name,
+                },
+                ensure_ascii=False,
+            ),
+        )
+        timeline_note = ""
+        try:
+            built = self.rebuild_audio_timeline(
+                project_id,
+                script_text=(script_text or "").strip() or None,
+                use_asr=bool(use_asr and not (script_text or "").strip()),
+            )
+            timeline_note = built.get("asr_note") or ""
+        except Exception as exc:  # la timeline non deve mai impedire l'importazione
+            timeline_note = f"timeline non calcolata: {exc}"
         self.save_project_snapshot(
             project_id,
-            f"Voce importata: {original_filename or audio_path.name} ({duration:.2f}s)",
+            f"Voce importata: {original_filename or audio_path.name} ({duration:.2f}s)"
+            + (f" · {timeline_note}" if timeline_note else ""),
             "VoiceDirector",
         )
-        return self.get_project(project_id)  # type: ignore
+        project = self.get_project(project_id)  # type: ignore
+        if isinstance(project, dict):
+            project["timeline_note"] = timeline_note
+        return project
 
     def get_project_versions(self, project_id: str) -> list[dict[str, Any]]:
         with self.db.session() as conn:
@@ -999,6 +1245,49 @@ class KoraDirector:
             completed.append("Voiceover")
             check_cancelled()
 
+            # 4b. 3.6.6 — timeline canonica: voce, scene e sottotitoli leggono gli stessi tempi
+            fps_now = max(1, int(proj["fps"]))
+            total_sec = sum(s.duration_frames for s in scenes) / fps_now
+            voice_path = Path(voice_res["audio_path"]) if voice_res.get("audio_path") else None
+            timeline: Optional[dict[str, Any]] = None
+            timeline_mgr = AudioTimelineManager(fps=fps_now, project_dir=project_dir)
+            if voice_path and voice_path.is_file():
+                timeline = self._build_timeline_for(
+                    project_dir=project_dir,
+                    voice_path=voice_path,
+                    voice_res=voice_res,
+                    scenes=scenes,
+                    fps=fps_now,
+                )
+                issues = timeline_mgr.validate(timeline, total_duration_sec=total_sec)
+                blocking_issues = [i for i in issues if i["severity"] == "error"]
+                for issue in issues:
+                    self.log_job(
+                        job_id,
+                        "WARN" if issue["severity"] == "warning" else "ERROR",
+                        "AudioTimeline",
+                        issue["message"],
+                    )
+                if blocking_issues:
+                    reason = " ".join(i["message"] for i in blocking_issues)
+                    self._update_job(
+                        job_id,
+                        JobState.RICHIEDE_INTERVENTO,
+                        "Conflitto di sincronizzazione",
+                        completed,
+                        intervention_reason=reason,
+                    )
+                    return {"project": self.get_project(project_id), "job": self.get_job(job_id)}
+                source = (timeline.get("transcript") or {}).get("alignment")
+                words = len((timeline.get("transcript") or {}).get("words") or [])
+                self.log_job(
+                    job_id,
+                    "INFO",
+                    "AudioTimeline",
+                    f"Timeline canonica: {timeline['total_frames']} frame · {words} parole · "
+                    f"allineamento «{source}» · {len(timeline.get('caption_cues') or [])} cue.",
+                )
+
             # 5. Sound Design & Mix
             self._update_job(job_id, JobState.SOUND_DESIGN, "Sound design e mix audio", completed)
             existing_ap = proj.get("audio_plan") or {}
@@ -1012,15 +1301,26 @@ class KoraDirector:
                 music_volume=existing_ap.get("music_volume"),
                 voice_volume=float(existing_ap.get("voice_volume") or 1.05),
             )
-            total_sec = sum(s.duration_frames for s in scenes) / proj["fps"]
             mix_wav = project_dir / "audio_mix.wav"
-            voice_path = Path(voice_res["audio_path"]) if voice_res.get("audio_path") else None
-            self.sound_designer.render_mix(
-                total_duration_sec=total_sec,
-                audio_plan=audio_plan,
-                voice_audio_path=voice_path,
-                output_wav=mix_wav,
-            )
+            if voice_res.get("voice_manifest"):
+                audio_plan["voice_manifest"] = voice_res["voice_manifest"]
+            try:
+                self.sound_designer.render_mix(
+                    total_duration_sec=total_sec,
+                    audio_plan=audio_plan,
+                    voice_audio_path=voice_path,
+                    output_wav=mix_wav,
+                )
+            except VoiceTruncationError as exc:
+                self._update_job(
+                    job_id,
+                    JobState.RICHIEDE_INTERVENTO,
+                    "Voce più lunga del Reel",
+                    completed,
+                    intervention_reason=str(exc),
+                )
+                self.log_job(job_id, "WARN", "SoundDesigner", str(exc))
+                return {"project": self.get_project(project_id), "job": self.get_job(job_id)}
             self.mark_audio_built(project_id, note=f"job {job_id}")
             completed.append("Sound design")
             self.log_job(job_id, "INFO", "SoundDesigner", "Mix audio (voce + musica CC0 + SFX) normalizzato senza clipping.")
@@ -1052,6 +1352,7 @@ class KoraDirector:
             caption_overrides = prefs.get("caption_overrides")
             hyperframes_cfg = prefs.get("hyperframes")
             edit_res = self.editor.render_reel(
+                caption_timings=self._caption_timings(timeline, scenes, fps_now),
                 project_id=project_id,
                 title=proj["title"],
                 scenes=scenes,

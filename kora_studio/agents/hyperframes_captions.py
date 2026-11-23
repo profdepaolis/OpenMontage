@@ -226,6 +226,7 @@ def build_caption_segments_for_scene(
     width: int = DEFAULT_WIDTH,
     height: int = DEFAULT_HEIGHT,
     overrides: Optional[dict[str, Any]] = None,
+    word_timings: Optional[list[dict[str, Any]]] = None,
 ) -> list[dict[str, Any]]:
     """Render deterministic PNG overlay segment(s) for a single scene.
 
@@ -241,6 +242,32 @@ def build_caption_segments_for_scene(
 
     if caption_style == "hyperframes_word_highlight":
         words = [w for w in re.split(r"\s+", text) if w]
+        # 3.6.6 — se la timeline fornisce i tempi delle parole, si usa la voce reale:
+        # niente più suddivisione uniforme della finestra della scena.
+        timed = [w for w in (word_timings or []) if w.get("start_sec") is not None]
+        if timed:
+            out_png = sub_dir / f"sub_{scene.scene_number:02d}_0.png"
+            segs_t: list[dict[str, Any]] = []
+            for idx_w, item in enumerate(timed):
+                png = sub_dir / f"sub_{scene.scene_number:02d}_{idx_w}.png"
+                render_styled_caption_png(
+                    text,
+                    png,
+                    style=caption_style,
+                    active_word_idx=min(len(words) - 1, int(item.get("word_index", idx_w))),
+                    width=width,
+                    height=height,
+                    overrides=overrides,
+                )
+                segs_t.append(
+                    {
+                        "png": png,
+                        "start_sec": max(0.0, float(item["start_sec"])),
+                        "end_sec": max(float(item["start_sec"]) + 0.08, float(item["end_sec"])),
+                        "timing_source": item.get("timing_source", "estimated"),
+                    }
+                )
+            return segs_t
         if len(words) <= 1:
             out_png = sub_dir / f"sub_{scene.scene_number:02d}_0.png"
             render_styled_caption_png(text, out_png, style=caption_style, active_word_idx=0, width=width, height=height, overrides=overrides)

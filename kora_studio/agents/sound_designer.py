@@ -5,9 +5,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Optional
 
+from kora_studio.agents.audio_timeline import VoiceTruncationError
 from kora_studio.db.models import StoryboardScene
 from kora_studio.media_tools import run_ffmpeg
 from kora_studio.vault.sound_library import SoundLibrary
+
+# 3.6.6 — nessun ritardo "magico": l'offset della voce è dichiarato nel manifest.
+VOICE_START_OFFSET_SEC = 0.0
 
 
 class SoundDesigner:
@@ -151,6 +155,56 @@ class SoundDesigner:
             "sfx_cues": sfx_cues,
         }
 
+
+    @staticmethod
+    def voice_manifest(
+        manifest: Optional[dict[str, Any]],
+        voice_audio_path: Path,
+        total_duration_sec: float,
+    ) -> dict[str, Any]:
+        """Manifest audio esplicito: nessuna deduzione dal nome del file.
+
+        Se il progetto non ne ha ancora uno (progetti creati prima della 3.6.6)
+        si assume offset 0 e si misura la durata reale del file.
+        """
+        data = dict(manifest or {})
+        duration = float(data.get("source_duration_sec") or 0.0)
+        if duration <= 0:
+            from kora_studio.agents.audio_timeline import media_duration
+
+            duration = media_duration(voice_audio_path)
+        padding = max(0.0, float(data.get("end_padding_sec") or 0.0))
+        effective = float(data.get("effective_duration_sec") or max(0.0, duration - padding))
+        offset = float(data.get("start_offset_sec") if data.get("start_offset_sec") is not None else VOICE_START_OFFSET_SEC)
+        end_sec = offset + effective
+        if total_duration_sec and end_sec > float(total_duration_sec) + 0.02:
+            raise VoiceTruncationError(
+                f"La voce finirebbe a {end_sec:.2f}s contro un Reel di {total_duration_sec:.2f}s: "
+                "l'ultima parola verrebbe tagliata. Allunga il Reel, accorcia il copione o "
+                "riduci le pause eliminabili prima di esportare."
+            )
+        return {
+            "start_offset_sec": offset,
+            "end_padding_sec": padding,
+            "source_duration_sec": round(duration, 3),
+            "effective_duration_sec": round(effective, 3),
+            "timeline_duration_sec": round(float(total_duration_sec or 0.0), 3),
+            "end_sec": round(end_sec, 3),
+            "is_scene_aligned": bool(data.get("is_scene_aligned")),
+        }
+
+    @staticmethod
+    def _voice_filter(idx: int, offset_sec: float, effective_sec: float, volume: float) -> str:
+        delay_ms = max(0, int(round(float(offset_sec) * 1000)))
+        parts = [f"[{idx}:a]aresample=48000", "aformat=channel_layouts=stereo"]
+        if effective_sec and effective_sec > 0:
+            parts.append(f"atrim=0:{float(effective_sec):.3f}")
+            parts.append("asetpts=PTS-STARTPTS")
+        if delay_ms:
+            parts.append(f"adelay={delay_ms}|{delay_ms}")
+        parts.append(f"volume={float(volume):.3f}[vo]")
+        return ",".join(parts)
+
     def render_mix(
         self,
         total_duration_sec: float,
@@ -179,16 +233,16 @@ class SoundDesigner:
         idx = 1
 
         if has_voice and voice_audio_path:
+            manifest = self.voice_manifest(
+                audio_plan.get("voice_manifest"), voice_audio_path, total_duration_sec
+            )
             inputs.extend(["-i", str(voice_audio_path)])
             vo_vol = float(audio_plan.get("voice_volume") or 1.05)
-            # Notice: per-scene aligned voiceover already includes scene offsets; unaligned starts at 0.25s
-            is_aligned = "aligned" in voice_audio_path.name
-            vo_filter = (
-                f"[{idx}:a]aresample=48000,aformat=channel_layouts=stereo,volume={vo_vol:.3f}[vo]"
-                if is_aligned
-                else f"[{idx}:a]aresample=48000,aformat=channel_layouts=stereo,adelay=250|250,volume={vo_vol:.3f}[vo]"
+            filter_parts.append(
+                self._voice_filter(
+                    idx, manifest["start_offset_sec"], manifest["effective_duration_sec"], vo_vol
+                )
             )
-            filter_parts.append(vo_filter)
             mix_labels.append("[vo]")
             idx += 1
 
