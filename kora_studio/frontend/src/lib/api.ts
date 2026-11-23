@@ -1117,6 +1117,17 @@ export const koraApi = {
       method: "PATCH",
       body: JSON.stringify(payload),
     }),
+  /** 3.6.4 — riallinea i sottotitoli al testo ufficiale della scena. */
+  alignCaptions: (projectId: string, sceneNumbers?: number[]) =>
+    apiFetch<{
+      ok: boolean;
+      updated_scenes: number[];
+      skipped: Array<{ scene_number: number; reason: string }>;
+      scenes: SceneRow[];
+    }>(`/api/projects/${projectId}/captions/align`, {
+      method: "POST",
+      body: JSON.stringify(sceneNumbers && sceneNumbers.length ? { scene_numbers: sceneNumbers } : {}),
+    }),
   sceneAlternatives: (projectId: string, sceneNumber: number, limit = 8) =>
     apiFetch<{
       ok: boolean;

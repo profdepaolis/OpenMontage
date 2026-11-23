@@ -543,6 +543,47 @@ class SceneEditor:
             "note": note,
         }
 
+    def align_subtitles(
+        self, project_id: str, numbers: Optional[list[int]] = None
+    ) -> dict[str, Any]:
+        """Riallinea i sottotitoli al testo ufficiale della scena (voce = sottotitolo).
+
+        Serve dopo una revisione che ha cambiato solo uno dei due campi: la voce
+        dice la frase completa, il sottotitolo deve riportarla fedelmente.
+        I sottotitoli volutamente sintetici restano possibili, ma il QC li segnala
+        come avviso: qui si riallinea solo ciò che risulta discorde.
+        """
+        _, scenes = self.director._project_scenes(project_id)
+        ensure_scene_uids(scenes)
+        wanted = {int(n) for n in numbers} if numbers else None
+        changed: list[int] = []
+        skipped: list[dict[str, Any]] = []
+        for scene in scenes:
+            if scene.is_outro:
+                continue
+            if wanted is not None and scene.scene_number not in wanted:
+                continue
+            spoken = (scene.spoken_text or "").strip()
+            subtitle = (scene.subtitle_text or "").strip()
+            if not spoken or spoken == subtitle:
+                continue
+            if (scene.locks or {}).get("caption"):
+                skipped.append({"scene_number": scene.scene_number, "reason": "sottotitoli bloccati"})
+                continue
+            scene.subtitle_text = spoken
+            changed.append(scene.scene_number)
+        if changed:
+            self.director._persist_scenes(
+                project_id, scenes, f"Sottotitoli riallineati al testo ({changed})"
+            )
+            self.director.invalidate_preview(project_id)
+        return {
+            "ok": True,
+            "updated_scenes": changed,
+            "skipped": skipped,
+            "scenes": [_scene_summary(s) for s in scenes],
+        }
+
     def apply_text(self, project_id: str, number: int, text: str, source: str = "manuale") -> dict[str, Any]:
         """Applica una proposta di testo (o un testo scritto a mano) alla scena."""
         _, scenes = self.director._project_scenes(project_id)

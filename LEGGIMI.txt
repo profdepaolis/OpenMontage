@@ -1,5 +1,5 @@
 ======================================================
-  KORA STUDIO LIGHT 3.6.3 — The Art of Being
+  KORA STUDIO LIGHT 3.6.4 — The Art of Being
   Guida per chi non vuole usare il terminale
 ======================================================
 
@@ -27,8 +27,21 @@ COME PARTIRE (3 passi)
    non identificato»:
       tasto destro sul file → Apri → poi di nuovo Apri.
 
-Cosa c'è di nuovo nella 3.6.3 (montaggio robusto)
--------------------------------------------------
+Cosa c'è di nuovo nella 3.6.4 (sottotitoli allineati)
+-----------------------------------------------------
+- L'esportazione non viene più bloccata quando il sottotitolo è solo una
+  versione più breve della frase pronunciata: è una scelta legittima e
+  ora compare come avviso, non come errore.
+- Il blocco resta solo se testo e sottotitoli raccontano cose diverse, e
+  il messaggio dice quali scene e cosa dice la voce rispetto ai sottotitoli.
+- Nuovo pulsante «Allinea sottotitoli» nello Storyboard: copia il testo
+  della voce nei sottotitoli delle scene indicate, senza rigenerare voce
+  né immagini. Poi basta premere Riprova in Production.
+- Comando equivalente per il progetto fermo:
+  curl -s -X POST http://127.0.0.1:8020/api/projects/ID/captions/align
+
+Cosa c'era di nuovo nella 3.6.3 (montaggio robusto)
+---------------------------------------------------
 - Corretto il job che finiva in «Errore» con "timed out after 240 seconds":
   il limite di tempo del montaggio ora cresce con il lavoro da fare
   (718 frame → 1.149 secondi invece di 240 fissi).
@@ -131,7 +144,7 @@ o va in timeout), esegui:
     ./diagnostica_ai.sh
 
 Lo script mostra provider e modello realmente attivi, esegue un test reale e
-indica cosa correggere. Dettagli: docs/KORA_3.6.1_RIPRISTINO_AI.md e docs/KORA_3.6.3_RENDER_ROBUSTO.md e docs/KORA_3.6.2_RESTAURO_AUDIOVISIVO.md
+indica cosa correggere. Dettagli: docs/KORA_3.6.1_RIPRISTINO_AI.md e docs/KORA_3.6.4_SOTTOTITOLI.md, docs/KORA_3.6.3_RENDER_ROBUSTO.md e docs/KORA_3.6.2_RESTAURO_AUDIOVISIVO.md
 
 AGGIORNAMENTO IN UN COMANDO (terminale)
 ---------------------------------------
@@ -142,11 +155,11 @@ release). Apri Terminale lì e incolla:
 
 Se hai già scaricato il pacchetto a mano, indica il file:
 
-  bash aggiorna_kora.sh --da-zip ~/Downloads/KORA_Studio_Light_3.6.3_installer.zip
+  bash aggiorna_kora.sh --da-zip ~/Downloads/KORA_Studio_Light_3.6.4_installer.zip
 
 Fa backup, ferma il server, aggiorna solo l'applicazione (kora_data non viene
 toccata), esegue setup e verifica, riavvia KORA e lancia la diagnostica AI.
-Aggiorna alla 3.6.3 (montaggio robusto).
+Aggiorna alla 3.6.4 (sottotitoli allineati).
 Se il download dal browser non parte: scarica aggiorna_kora.sh e lancia
   bash ~/Downloads/aggiorna_kora.sh
 Opzioni: --cartella DIR · --da-zip FILE · --porta 8021 · --no-avvio · --solo-verifica

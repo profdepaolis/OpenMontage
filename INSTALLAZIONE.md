@@ -1,4 +1,4 @@
-# Installazione tecnica — KORA STUDIO LIGHT 3.6.3
+# Installazione tecnica — KORA STUDIO LIGHT 3.6.4
 
 Documento per chi vuole capire cosa fa il doppio clic, o riparare un guasto.
 Per l'uso normale basta `LEGGIMI.txt`.
@@ -60,6 +60,19 @@ versione 3.6.1, `verifica.sh` 36 OK · 0 KO · 1 avviso, server avviato e rispon
 diagnostica con esito onesto, stop del server via `pgrep` quando `lsof` non c'è,
 download fallito gestito con messaggio e rimedio, `--solo-verifica` senza modifiche.
 
+
+## 1b-bis. Esportazione bloccata da «Coerenza tra voiceover e sottotitoli» (3.6.4)
+
+Da 3.6.4 un sottotitolo più sintetico del testo detto non blocca più
+l'esportazione: viene registrato come avviso con revisione consigliata.
+Il blocco resta solo quando i due testi divergono davvero; in quel caso il
+messaggio indica le scene e il rimedio:
+
+    curl -s -X POST http://127.0.0.1:8020/api/projects/PROJECT_ID/captions/align
+
+oppure, nell'interfaccia: Storyboard → «Allinea sottotitoli», poi
+Production → Riprova. Voce, copione e clip in cache non vengono rigenerati.
+Dettagli: `docs/KORA_3.6.4_SOTTOTITOLI.md`.
 
 ## 1c. Rendering lento o «timed out» (3.6.3)
 

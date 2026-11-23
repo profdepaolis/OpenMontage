@@ -457,7 +457,7 @@ def create_app(db_path: Optional[Path] = None, auto_seed: bool = True) -> FastAP
         except Exception as exc:  # pragma: no cover
             _log_error(exc, "refresh_palette_from_vault")
 
-    app = FastAPI(title="KORA STUDIO", version="3.6.3")
+    app = FastAPI(title="KORA STUDIO", version="3.6.4")
 
     def _v35(fn: Any) -> Any:
         """Errori v3.5 tradotti in risposte parlanti: 404 scena, 400 richiesta, 409 blocco."""
@@ -1638,6 +1638,29 @@ def create_app(db_path: Optional[Path] = None, auto_seed: bool = True) -> FastAP
     def project_scene_delete(project_id: str, scene_number: int) -> dict[str, Any]:
         try:
             return director.scene_editor.remove_scene(project_id, scene_number)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/projects/{project_id}/captions/align", dependencies=[Depends(_require_local_trust)])
+    def project_align_captions(project_id: str, payload: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+        """3.6.4 — riallinea i sottotitoli al testo della scena (voce = sottotitolo).
+
+        `{"scene_numbers": [2, 3, 5]}` limita l'intervento; senza corpo si allineano
+        tutte le scene discordi. La voce registrata non viene toccata: cambia solo
+        il testo mostrato, quindi l'anteprima va rigenerata (non l'audio).
+        """
+        numbers = None
+        if payload:
+            raw = payload.get("scene_numbers")
+            if isinstance(raw, list) and raw:
+                try:
+                    numbers = [int(n) for n in raw]
+                except (TypeError, ValueError):
+                    raise HTTPException(status_code=400, detail="scene_numbers non validi") from None
+        try:
+            return director.scene_editor.align_subtitles(project_id, numbers)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ValueError as exc:

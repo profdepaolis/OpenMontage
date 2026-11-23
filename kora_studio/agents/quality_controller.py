@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import difflib
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -513,25 +514,71 @@ class QualityController:
                 else "; ".join(guard["violations"]),
             )
         )
-        # Voiceover vs subtitle coherence
-        vo_sub_mismatches = []
+        # Voiceover vs subtitle coherence.
+        # 3.6.4 — un sottotitolo più breve della frase detta è una scelta legittima,
+        # non un errore: blocca solo quando i due testi raccontano cose diverse.
+        vo_sub_hard: list[tuple[int, str, str]] = []
+        vo_sub_soft: list[int] = []
         for s in scenes:
             if s.is_outro:
                 continue
-            sp = re.sub(r"\W+", " ", (s.spoken_text or "").lower()).strip()
-            sb = re.sub(r"\W+", " ", (s.subtitle_text or "").lower()).strip()
-            if sp and sb and sp != sb and sp not in sb and sb not in sp:
-                vo_sub_mismatches.append(s.scene_number)
-        checks.append(
-            QualityCheckItem(
-                category="narrative",
-                name="Coerenza tra voiceover e sottotitoli",
-                passed=(len(vo_sub_mismatches) == 0),
-                detail="Voiceover e sottotitoli allineati su tutte le scene"
-                if not vo_sub_mismatches
-                else f"Possibile discordanza testo/voce alle scene {vo_sub_mismatches}",
+            sp_raw = (s.spoken_text or "").strip()
+            sb_raw = (s.subtitle_text or "").strip()
+            sp = re.sub(r"\W+", " ", sp_raw.lower()).strip()
+            sb = re.sub(r"\W+", " ", sb_raw.lower()).strip()
+            if not sp or not sb or sp == sb:
+                continue
+            ratio = difflib.SequenceMatcher(None, sp, sb).ratio()
+            shortened = sp.startswith(sb) or sb.startswith(sp) or ratio >= 0.6
+            if shortened:
+                vo_sub_soft.append(s.scene_number)
+            else:
+                vo_sub_hard.append((s.scene_number, sp_raw, sb_raw))
+
+        def _short(value: str, limit: int = 48) -> str:
+            return value if len(value) <= limit else value[: limit - 1].rstrip() + "…"
+
+        if vo_sub_hard:
+            examples = "; ".join(
+                f"scena {n}: voce «{_short(sp)}» ≠ sottotitoli «{_short(sb)}»"
+                for n, sp, sb in vo_sub_hard[:3]
             )
-        )
+            checks.append(
+                QualityCheckItem(
+                    category="narrative",
+                    name="Coerenza tra voiceover e sottotitoli",
+                    passed=False,
+                    severity="error",
+                    detail=(
+                        f"Testo e sottotitoli raccontano cose diverse ({examples}). "
+                        "Apri Storyboard → «Allinea sottotitoli al testo» per riallineare "
+                        "le scene indicate, poi premi Riprova."
+                    ),
+                )
+            )
+        elif vo_sub_soft:
+            checks.append(
+                QualityCheckItem(
+                    category="narrative",
+                    name="Coerenza tra voiceover e sottotitoli",
+                    passed=True,
+                    severity="warning",
+                    requires_human_review=True,
+                    detail=(
+                        f"Sottotitoli più sintetici del testo alle scene {vo_sub_soft}: "
+                        "scelta legittima, la voce dice la frase completa."
+                    ),
+                )
+            )
+        else:
+            checks.append(
+                QualityCheckItem(
+                    category="narrative",
+                    name="Coerenza tra voiceover e sottotitoli",
+                    passed=True,
+                    detail="Voiceover e sottotitoli allineati su tutte le scene",
+                )
+            )
         # Temporal validity of promo/date mentions
         cur_year = datetime.now(timezone.utc).year
         past_years = [str(y) for y in range(2020, cur_year) if str(y) in all_text]

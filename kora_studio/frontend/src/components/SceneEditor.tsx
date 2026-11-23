@@ -238,6 +238,39 @@ export function SceneEditor({ projectId, projectTitle, onPreview }: Props) {
             >
               {loading ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />} Aggiorna
             </button>
+            <button
+              type="button"
+              disabled={busy === "captions"}
+              onClick={async () => {
+                setBusy("captions");
+                try {
+                  const res = await koraApi.alignCaptions(projectId);
+                  if (res.scenes) {
+                    setScenes(res.scenes);
+                    hydrateDrafts(res.scenes);
+                  }
+                  setMsg({
+                    kind: res.updated_scenes.length ? "ok" : "info",
+                    text: res.updated_scenes.length
+                      ? `Sottotitoli riallineati alle scene ${res.updated_scenes.join(", ")}. La voce non cambia: rigenera l'anteprima per vederli.`
+                      : "Sottotitoli già allineati al testo: nessuna modifica.",
+                  });
+                } catch (err) {
+                  setMsg({ kind: "err", text: `Allineamento non riuscito: ${(err as Error).message}` });
+                } finally {
+                  setBusy("");
+                }
+              }}
+              title="Riporta i sottotitoli alla frase esatta del voiceover"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-[#DDD4C4] px-2 py-1 text-[11px] text-[#4A443C] disabled:opacity-50"
+            >
+              {busy === "captions" ? (
+                <Loader2 className="h-3 w-3 animate-spin" />
+              ) : (
+                <RefreshCw className="h-3 w-3" />
+              )}
+              Allinea sottotitoli
+            </button>
             {onPreview ? (
               <button
                 type="button"
