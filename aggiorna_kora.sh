@@ -183,7 +183,7 @@ scarica_pacchetto() {
   fi
   local destinazione="$LAVORO/$ZIP_NOME"
   local url="${KORA_ZIP_URL:-https://drive.google.com/uc?export=download&id=${ZIP_ID}}"
-  info "scarico $ZIP_NOME…"
+  info "scarico ${ZIP_NOME}…"
   if ! curl -fsSL --retry 3 --retry-delay 2 -o "$destinazione" "$url" 2>"$LAVORO/curl.err"; then
     cp "$LAVORO/curl.err" "$LAVORO/ultimo.errore" 2>/dev/null
     ko "download non riuscito"; sed 's/^/       /' "$LAVORO/curl.err" | tail -3
@@ -263,7 +263,7 @@ rollback() {
     echo "  Nessuna copia del codice: reinstalla il pacchetto precedente a mano."
     return 1
   }
-  echo "  Ripristino il codice precedente da $BACKUP_CODICE…"
+  echo "  Ripristino il codice precedente da ${BACKUP_CODICE}…"
   rm -rf "$CARTELLA/kora_studio" "$CARTELLA/assets" "$CARTELLA/docs"
   tar -xzf "$BACKUP_CODICE" -C "$CARTELLA" 2>/dev/null
   echo "  Codice ripristinato. kora_data/ non è mai stato toccato."
@@ -321,7 +321,7 @@ if [ "$AVVIA" -eq 1 ]; then
   if [ -n "$(porta_in_uso)" ]; then
     warn "porta $PORTA già occupata: non avvio un secondo server"
   else
-    info "avvio KORA sulla porta $PORTA…"
+    info "avvio KORA sulla porta ${PORTA}…"
     mkdir -p "$CARTELLA/kora_data/logs"
     KORA_PORT="$PORTA" nohup bash start.sh >"$CARTELLA/kora_data/logs/server.log" 2>&1 &
     atteso=0
