@@ -160,18 +160,21 @@ def test_forced_alignment_declares_mismatched_words():
     assert "dicembre" in result["mismatches"]
 
 
-def test_forced_alignment_label_is_not_verified():
+def test_forced_alignment_label_is_not_verified(tmp_path):
     asr = _asr_payload(["La", "luce"])
     result = align_script_to_asr("La luce", asr["segments"][0]["words"], fps=25)
     for word in result["words"]:
         assert word["timing_source"] == "forced_aligned"
         # il forced alignment non è una trascrizione: il campo verified resta False
+    clip = _audio(tmp_path / "voce.wav", seconds=2.0)
     timeline = AudioTimelineManager(fps=25).build(
-        audio_path=pathlib.Path("/tmp/voce_non_usata.wav") if False else pathlib.Path(__file__),
+        audio_path=clip,
         text="La luce",
         source="upload",
     )
     assert timeline["transcript"]["verified"] is False
+    assert timeline["transcript"]["alignment"] == "estimated"
+    assert all(w["timing_source"] == "estimated" for w in timeline["transcript"]["words"])
 
 
 # --------------------------------------------------------------------------- #

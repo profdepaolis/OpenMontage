@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
-# KORA STUDIO LIGHT 3.6.3 — aggiornamento completo da terminale.
+# KORA STUDIO LIGHT 3.6.7 — aggiornamento completo da terminale.
 #
 # Fa tutto, in ordine, senza doppio clic e senza cancellare nulla dei tuoi dati:
 #   1. trova l'installazione esistente (o ne crea una nuova)
 #   2. backup preventivo: database, progetti e copia del codice attuale
 #   3. ferma il server se è in esecuzione
-#   4. scarica (o usa) il pacchetto 3.6.3 e lo verifica
+#   4. scarica (o usa) il pacchetto 3.6.7 e lo verifica
 #   5. aggiorna SOLO l'applicazione: kora_data/ (foto, progetti, DB, voci,
 #      loghi, Reel) non viene mai toccata
 #   6. setup + verifica + avvio + diagnostica AI
 #   7. se qualcosa fallisce, rimette il codice precedente (i dati non si toccano)
 #
 # Uso:
-#   ./aggiorna_kora.sh                       # scarica 3.6.3 e aggiorna
-#   ./aggiorna_kora.sh --da-zip ~/Downloads/KORA_Studio_Light_3.6.3_installer.zip
+#   ./aggiorna_kora.sh                       # scarica 3.6.7 e aggiorna
+#   ./aggiorna_kora.sh --da-zip ~/Downloads/KORA_Studio_Light_3.6.7_installer.zip
 #   ./aggiorna_kora.sh --cartella ~/Documenti/"Kora Studio Light"
 #   ./aggiorna_kora.sh --solo-verifica       # nessuna modifica: verifica + diagnostica
 #   ./aggiorna_kora.sh --no-avvio            # aggiorna e verifica, non avvia il server
@@ -22,8 +22,8 @@
 #
 set -uo pipefail
 
-VERSIONE="3.6.6"
-ZIP_ID="1CvhARAV3D921TVM6DWialJMQ-MlelA9V"
+VERSIONE="3.6.7"
+ZIP_ID="1Nn_Vo8sTH-PVawJ4WtqTiYlhwKblBaU1"
 ZIP_NOME="KORA_Studio_Light_${VERSIONE}_installer.zip"
 PORTA="${KORA_PORT:-8020}"
 LAVORO="$(mktemp -d "${TMPDIR:-/tmp}/kora_agg.XXXXXX")"
@@ -174,7 +174,7 @@ ferma_server() {
   fi
 }
 
-# --------------------------------------------------- 4. pacchetto 3.6.3
+# --------------------------------------------------- 4. pacchetto 3.6.7
 scarica_pacchetto() {
   if [ -n "$ZIP_SCARICATO" ]; then
     [ -f "$ZIP_SCARICATO" ] || { ko "file non trovato: $ZIP_SCARICATO"; exit 1; }
@@ -240,13 +240,17 @@ aggiorna_file() {
   copia_albero "$sorgente/kora_studio" "$CARTELLA/kora_studio" || return 1
   [ -d "$sorgente/assets" ] && { copia_albero "$sorgente/assets" "$CARTELLA/assets" || return 1; }
   [ -d "$sorgente/docs" ] && { copia_albero "$sorgente/docs" "$CARTELLA/docs" || return 1; }
+  # test riproducibili (§13): prima assenti nell'installer 3.6.6
+  [ -d "$sorgente/tests" ] && { copia_albero "$sorgente/tests" "$CARTELLA/tests" || return 1; }
   # demo: aggiornate senza cancellare eventuali file tuoi
   [ -d "$sorgente/demo" ] && { integra_albero "$sorgente/demo" "$CARTELLA/demo" || return 1; }
   # script e documenti di primo livello (mai kora_data, .venv, chiavi)
   local f
   for f in setup.sh verifica.sh start.sh ripristina.sh diagnostica_ai.sh aggiorna_kora.sh \
+           diagnostica_sync.sh installa_asr.sh verifica_test.sh \
            "Installa KORA.command" "Avvia KORA.command" \
-           LEGGIMI.txt INSTALLAZIONE.md KORA_3.6_REPORT.md requirements.txt; do
+           LEGGIMI.txt INSTALLAZIONE.md KORA_3.6_REPORT.md \
+           requirements.txt requirements-dev.txt; do
     [ -f "$sorgente/$f" ] && cp -p "$sorgente/$f" "$CARTELLA/$f"
   done
   # lo strumento di aggiornamento resta disponibile nella cartella
@@ -254,7 +258,9 @@ aggiorna_file() {
     cp -p "$0" "$CARTELLA/aggiorna_kora.sh" 2>/dev/null
   fi
   chmod +x "$CARTELLA/setup.sh" "$CARTELLA/verifica.sh" "$CARTELLA/start.sh" \
-           "$CARTELLA/ripristina.sh" "$CARTELLA/diagnostica_ai.sh" "$CARTELLA/aggiorna_kora.sh" 2>/dev/null
+           "$CARTELLA/ripristina.sh" "$CARTELLA/diagnostica_ai.sh" "$CARTELLA/aggiorna_kora.sh" \
+           "$CARTELLA/diagnostica_sync.sh" "$CARTELLA/installa_asr.sh" \
+           "$CARTELLA/verifica_test.sh" 2>/dev/null
   return 0
 }
 
