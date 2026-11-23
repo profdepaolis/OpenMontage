@@ -22,8 +22,8 @@
 #
 set -uo pipefail
 
-VERSIONE="3.6.4"
-ZIP_ID="1CdxeIi8-XN8AIPyulgBGfAZVicy2aIpy"
+VERSIONE="3.6.5"
+ZIP_ID="1Ej5XnAHeDJHH2_ofkZhErU1BTxRB7niF"
 ZIP_NOME="KORA_Studio_Light_${VERSIONE}_installer.zip"
 PORTA="${KORA_PORT:-8020}"
 LAVORO="$(mktemp -d "${TMPDIR:-/tmp}/kora_agg.XXXXXX")"
