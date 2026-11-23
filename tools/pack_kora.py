@@ -31,6 +31,10 @@ EXCLUDE_SUFFIXES = {".pyc", ".pyo", ".log", ".DS_Store"}
 EXCLUDE_NAMES = {".DS_Store"}
 
 TOP_FILES = [
+    "diagnostica_sync.sh",
+    "installa_asr.sh",
+    "verifica_test.sh",
+    "requirements-dev.txt",
     "setup.sh",
     "verifica.sh",
     "start.sh",
@@ -46,6 +50,14 @@ TOP_FILES = [
 ]
 
 REQUIRED = [
+    "diagnostica_sync.sh",
+    "installa_asr.sh",
+    "verifica_test.sh",
+    "requirements-dev.txt",
+    "tests/kora_studio/__init__.py",
+    "tests/kora_studio/conftest.py",
+    "kora_studio/agents/audio_timeline.py",
+    "kora_studio/agents/asr.py",
     "kora_studio/__main__.py",
     "kora_studio/api/app.py",
     "kora_studio/agents/caption_designer.py",
@@ -93,6 +105,11 @@ def main() -> int:
         if src.exists():
             shutil.copy2(src, dest / name)
 
+    # la suite di test viaggia nel pacchetto: i risultati sono riproducibili
+    tests_src = ROOT / "tests"
+    if tests_src.is_dir():
+        shutil.copytree(tests_src, dest / "tests", ignore=ignore)
+
     docs_src = ROOT / "docs"
     if docs_src.is_dir():
         shutil.copytree(docs_src, dest / "docs", ignore=ignore)
@@ -109,6 +126,9 @@ def main() -> int:
         "ripristina.sh",
         "diagnostica_ai.sh",
         "diagnostica_motori.sh",
+        "diagnostica_sync.sh",
+        "installa_asr.sh",
+        "verifica_test.sh",
         "Installa KORA.command",
         "Avvia KORA.command",
     ):

@@ -687,6 +687,50 @@ class QualityController:
                     "Sincronizzazione non verificata: "
                     + " ".join(i["message"] for i in warnings)
                 )
+            # 3.6.7 — i sottotitoli devono venire dal testo approvato, non da un altro testo
+            transcript_words = " ".join(
+                str(w.get("word") or "") for w in (transcript.get("words") or [])
+            ).lower()
+            editorial = [
+                c
+                for c in (timeline.get("caption_cues") or [])
+                if str(c.get("timing_source")) in ("editorial_in_segment", "editorial")
+            ]
+            faithful = [
+                c
+                for c in (timeline.get("caption_cues") or [])
+                if c not in editorial
+            ]
+            untraced = (
+                [
+                    c
+                    for c in faithful
+                    if transcript_words
+                    and not all(w.lower() in transcript_words for w in str(c.get("text") or "").split())
+                ]
+                if faithful
+                else []
+            )
+            checks.append(
+                QualityCheckItem(
+                    category="narrative",
+                    name="Sottotitoli coerenti con la revisione del transcript",
+                    passed=not untraced,
+                    severity="warning",
+                    status="superato" if not untraced else "non_superato",
+                    requires_human_review=bool(editorial),
+                    detail=(
+                        f"{len(faithful)} cue fedeli alla trascrizione, "
+                        f"{len(editorial)} editoriali dichiarati"
+                        + (
+                            "; cue con parole non presenti nella trascrizione: "
+                            + ", ".join(str(c.get("cue_uid")) for c in untraced[:3])
+                            if untraced
+                            else ""
+                        )
+                    ),
+                )
+            )
             checks.append(
                 QualityCheckItem(
                     category="narrative",

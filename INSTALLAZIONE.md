@@ -1,4 +1,4 @@
-# Installazione tecnica — KORA STUDIO LIGHT 3.6.6
+# Installazione tecnica — KORA STUDIO LIGHT 3.6.7
 
 Documento per chi vuole capire cosa fa il doppio clic, o riparare un guasto.
 Per l'uso normale basta `LEGGIMI.txt`.
@@ -61,12 +61,22 @@ diagnostica con esito onesto, stop del server via `pgrep` quando `lsof` non c'è
 download fallito gestito con messaggio e rimedio, `--solo-verifica` senza modifiche.
 
 
-## 1b. Sincronizzazione voce/scene/sottotitoli (3.6.6)
+## 1a. Motore di trascrizione (3.6.7, facoltativo)
+
+    ./installa_asr.sh --verifica     # controlla architettura, Python, RAM, spazio
+    ./installa_asr.sh                # installa faster-whisper + modello, prova reale
+    ./installa_asr.sh --livello rapido|bilanciato|accurato
+
+Installa solo dentro `.venv` di KORA, nessun servizio cloud, nessun costo.
+Se non lo installi, KORA non inventa la trascrizione: usa il copione o la stima.
+
+## 1b. Sincronizzazione voce/scene/sottotitoli (3.6.6 → 3.6.7)
 
 La timeline canonica sta in `kora_data/projects/<id>/project_timeline.json`.
 Diagnostica rapida:
 
     ./diagnostica_sync.sh              # tutti i progetti
+    ./verifica_test.sh --veloce        # test della sincronizzazione
     ./diagnostica_sync.sh prj_xxxx     # un progetto
 
 Ricalcolo e verifica:

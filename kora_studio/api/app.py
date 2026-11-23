@@ -457,7 +457,7 @@ def create_app(db_path: Optional[Path] = None, auto_seed: bool = True) -> FastAP
         except Exception as exc:  # pragma: no cover
             _log_error(exc, "refresh_palette_from_vault")
 
-    app = FastAPI(title="KORA STUDIO", version="3.6.6")
+    app = FastAPI(title="KORA STUDIO", version="3.6.7")
 
     def _v35(fn: Any) -> Any:
         """Errori v3.5 tradotti in risposte parlanti: 404 scena, 400 richiesta, 409 blocco."""
@@ -1695,11 +1695,16 @@ def create_app(db_path: Optional[Path] = None, auto_seed: bool = True) -> FastAP
     def rebuild_project_timeline(project_id: str, req: Optional[dict[str, Any]] = None) -> dict[str, Any]:
         body = req or {}
         try:
+            mode = body.get("mode")
+            if mode not in (None, "asr", "auto", "script", "estimated"):
+                raise HTTPException(status_code=400, detail="Modalità non valida: usa asr, script o estimated.")
             return director.rebuild_audio_timeline(
                 project_id,
                 script_text=(body.get("script_text") or "").strip() or None,
-                use_asr=bool(body.get("use_asr", False)),
+                use_asr=bool(body.get("use_asr", mode in ("asr", "auto"))),
                 asr_level=str(body.get("asr_level") or "bilanciato"),
+                mode=mode,
+                caption_source=body.get("caption_source"),
             )
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc))

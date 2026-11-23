@@ -14,6 +14,7 @@ scena), e i sottotitoli sono dichiarati non verificati.
 
 from __future__ import annotations
 
+import difflib
 import hashlib
 import json
 import re
@@ -175,6 +176,27 @@ def _region_of(instant: float, regions: list[SpeechRegion]) -> Optional[SpeechRe
         if region.start_sec - 1e-6 <= instant <= region.end_sec + 1e-6:
             return region
     return None
+
+
+
+def _shift_words(words: list[dict[str, Any]], offset_sec: float, fps: int) -> list[dict[str, Any]]:
+    """Applica lo stesso offset dell'audio a ogni parola: nessuna anticipazione."""
+    if not offset_sec:
+        return words
+    shifted: list[dict[str, Any]] = []
+    for word in words:
+        start = float(word["start_sec"]) + offset_sec
+        end = float(word["end_sec"]) + offset_sec
+        shifted.append(
+            {
+                **word,
+                "start_sec": _round(start),
+                "end_sec": _round(end),
+                "start_frame": frames(start, fps),
+                "end_frame": max(frames(start, fps) + 1, frames(end, fps)),
+            }
+        )
+    return shifted
 
 
 def estimate_words(text: str, regions: list[SpeechRegion], fps: int, total: float) -> list[dict[str, Any]]:
@@ -524,6 +546,135 @@ def plan_scene_boundaries(
     return result[:needed]
 
 
+
+def align_script_to_asr(
+    script_text: str,
+    asr_words: list[dict[str, Any]],
+    *,
+    fps: int,
+) -> dict[str, Any]:
+    """Forced alignment leggero: il copione noto viene mappato sui tempi ASR.
+
+    Non è un allineatore acustico (tipo MFA): usa la sequenza delle parole
+    riconosciute per dare a ogni parola del copione l'intervallo in cui è stata
+    pronunciata. Le parole del copione che l'ASR non ha sentito restano senza
+    tempo e vengono dichiarate come discordanze, mai inventate.
+    """
+    script_tokens = [w for w in WORD_SPLIT.split((script_text or "").strip()) if w]
+    if not script_tokens or not asr_words:
+        return {"words": [], "mismatches": [], "matched": 0}
+    spoken = [str(w.get("word", "")).strip() for w in asr_words]
+    matcher = difflib.SequenceMatcher(
+        None, [_norm_token(t) for t in script_tokens], [_norm_token(t) for t in spoken]
+    )
+    out: list[dict[str, Any]] = []
+    mismatches: list[str] = []
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag == "equal":
+            for offset in range(i2 - i1):
+                src = asr_words[j1 + offset]
+                out.append(
+                    {
+                        "word": script_tokens[i1 + offset],
+                        "start_sec": float(src["start_sec"]),
+                        "end_sec": float(src["end_sec"]),
+                        "start_frame": int(src.get("start_frame") or frames(src["start_sec"], fps)),
+                        "end_frame": int(src.get("end_frame") or frames(src["end_sec"], fps)),
+                        "confidence": src.get("confidence"),
+                        "speaker_id": src.get("speaker_id"),
+                        "timing_source": "forced_aligned",
+                    }
+                )
+        elif tag == "replace":
+            span = asr_words[j1:j2] or [asr_words[min(len(asr_words) - 1, j1)]]
+            start = float(span[0]["start_sec"])
+            end = float(span[-1]["end_sec"])
+            step = max(0.02, (end - start) / max(1, i2 - i1))
+            for offset, token in enumerate(script_tokens[i1:i2]):
+                w_start = start + offset * step
+                out.append(
+                    {
+                        "word": token,
+                        "start_sec": _round(w_start),
+                        "end_sec": _round(min(end, w_start + step)),
+                        "start_frame": frames(w_start, fps),
+                        "end_frame": max(frames(w_start, fps) + 1, frames(min(end, w_start + step), fps)),
+                        "confidence": None,
+                        "speaker_id": None,
+                        "timing_source": "forced_aligned",
+                    }
+                )
+                if _norm_token(token) not in {_norm_token(x) for x in spoken[j1:j2]}:
+                    mismatches.append(token)
+        elif tag == "delete":
+            for token in script_tokens[i1:i2]:
+                mismatches.append(token)
+    return {"words": out, "mismatches": mismatches, "matched": len(out)}
+
+
+def _norm_token(token: str) -> str:
+    return re.sub(r"[^\wàèéìòù']+", "", str(token).lower())
+
+
+def caption_timings_from_transcript(
+    timeline: dict[str, Any],
+    scenes: list[Any],
+) -> dict[int, list[dict[str, Any]]]:
+    """Tempi parola per parola presi **dai segmenti della trascrizione**, non dall'indice.
+
+    Se il testo del sottotitolo coincide con il segmento (modalità «fedele alla
+    trascrizione») la corrispondenza è 1:1 e verificabile. Se diverge, il
+    sottotitolo è editoriale: viene distribuito dentro la finestra del segmento
+    e dichiarato come tale.
+    """
+    transcript = timeline.get("transcript") or {}
+    segments = transcript.get("segments") or []
+    words = transcript.get("words") or []
+    by_id = {str(w.get("word_id")): w for w in words}
+    out: dict[int, list[dict[str, Any]]] = {}
+    for scene in scenes:
+        number = int(getattr(scene, "scene_number", 0) or 0)
+        caption = (getattr(scene, "subtitle_text", "") or "").strip()
+        if not caption:
+            continue
+        seg = next((s for s in segments if int(s.get("scene_number") or 0) == number), None)
+        seg_words = [by_id[str(wid)] for wid in (seg.get("word_ids") if seg else []) if str(wid) in by_id]
+        if not seg_words and seg:
+            seg_words = [
+                w
+                for w in words
+                if float(seg["start_sec"]) <= (float(w["start_sec"]) + float(w["end_sec"])) / 2
+                <= float(seg["end_sec"])
+            ]
+        if not seg_words:
+            continue
+        tokens = caption.split()
+        faithful = seg is not None and _norm_text(caption) == _norm_text(str(seg.get("text") or ""))
+        planned: list[dict[str, Any]] = []
+        for index, _token in enumerate(tokens):
+            if faithful and len(seg_words) == len(tokens):
+                word = seg_words[index]
+                source = word.get("timing_source", "estimated")
+            else:
+                mapped = int(round(index * (len(seg_words) - 1) / max(1, len(tokens) - 1)))
+                word = seg_words[max(0, min(len(seg_words) - 1, mapped))]
+                source = "editorial_in_segment"
+            planned.append(
+                {
+                    "start_sec": float(word["start_sec"]),
+                    "end_sec": float(word["end_sec"]),
+                    "word_index": index,
+                    "timing_source": source,
+                }
+            )
+        out[number] = planned
+    return out
+
+
+def _norm_text(text: str) -> str:
+    return " ".join(_norm_token(t) for t in WORD_SPLIT.split(text.strip()) if t)
+
+
 def rebuild_words_from_segments(
     timeline: dict[str, Any],
     *,
@@ -654,6 +805,8 @@ class AudioTimelineManager:
             transcript_text = ""
             verified = False
 
+        # 3.6.7 — l'offset dell'audio vale per tutto: parole, frasi, cue, caption.
+        words = _shift_words(words, offset, self.fps)
         for index, word in enumerate(words, start=1):
             word["word_id"] = f"w_{index:04d}"
 
@@ -712,7 +865,11 @@ class AudioTimelineManager:
                 "effective_duration_sec": _round(effective),
                 "end_sec": _round(offset + effective),
                 "speech_regions": [
-                    {"start_sec": _round(r.start_sec), "end_sec": _round(r.end_sec)} for r in regions
+                    {
+                        "start_sec": _round(min(duration, r.start_sec + offset)),
+                        "end_sec": _round(min(duration, r.end_sec + offset)),
+                    }
+                    for r in regions
                 ],
                 "speech_span_sec": _round(speech_span),
             },

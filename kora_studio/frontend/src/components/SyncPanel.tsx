@@ -19,6 +19,9 @@ export default function SyncPanel({ projectId }: Props) {
   const [busy, setBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState<{ kind: "ok" | "info" | "err"; text: string } | null>(null);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [mode, setMode] = useState<"asr" | "script" | "estimated">("asr");
+  const [script, setScript] = useState("");
+  const [captionSource, setCaptionSource] = useState<"transcript" | "editorial">("transcript");
   const [asr, setAsr] = useState<{ available: boolean; message: string } | null>(null);
 
   const load = useCallback(async () => {
@@ -45,7 +48,13 @@ export default function SyncPanel({ projectId }: Props) {
     setBusy("rebuild");
     setMsg(null);
     try {
-      const res = await koraApi.rebuildTimeline(projectId);
+      const res = await koraApi.rebuildTimeline(projectId, {
+        mode,
+        // dichiarazione esplicita: la trascrizione si chiede, non si presume
+        use_asr: mode === "asr",
+        script_text: mode === "script" ? script.trim() : undefined,
+        caption_source: captionSource,
+      });
       setTimeline(res.timeline);
       setIssues(res.issues || []);
       setMsg({
@@ -141,6 +150,50 @@ export default function SyncPanel({ projectId }: Props) {
             Verifica sincronizzazione
           </button>
         </div>
+      </div>
+
+      <div className="mt-4 grid gap-3 rounded-xl border border-[#EDE6D9] bg-[#FCFAF6] p-3 sm:grid-cols-2">
+        <label className="text-[11px] text-[#6C6459]">
+          <span className="mb-1 block uppercase tracking-wide text-[10px] text-[#8C8273]">Come ricavare i tempi</span>
+          <select
+            value={mode}
+            onChange={(e) => setMode(e.target.value as "asr" | "script" | "estimated")}
+            className="w-full rounded-lg border border-[#DDD4C4] bg-white px-2.5 py-1.5 text-[11px] text-[#2A2A28]"
+          >
+            <option value="asr">Trascrivi automaticamente l&apos;audio (ASR)</option>
+            <option value="script">Allinea un copione già disponibile</option>
+            <option value="estimated">Tempi stimati dentro le pause</option>
+          </select>
+        </label>
+        <label className="text-[11px] text-[#6C6459]">
+          <span className="mb-1 block uppercase tracking-wide text-[10px] text-[#8C8273]">Testo dei sottotitoli</span>
+          <select
+            value={captionSource}
+            onChange={(e) => setCaptionSource(e.target.value as "transcript" | "editorial")}
+            className="w-full rounded-lg border border-[#DDD4C4] bg-white px-2.5 py-1.5 text-[11px] text-[#2A2A28]"
+          >
+            <option value="transcript">Fedeli alla trascrizione approvata</option>
+            <option value="editorial">Editoriali sintetici (non letterali)</option>
+          </select>
+        </label>
+        {mode === "script" && (
+          <label className="sm:col-span-2 text-[11px] text-[#6C6459]">
+            <span className="mb-1 block uppercase tracking-wide text-[10px] text-[#8C8273]">Copione pronunciato nel file</span>
+            <textarea
+              value={script}
+              onChange={(e) => setScript(e.target.value)}
+              rows={3}
+              placeholder="Incolla qui il testo esatto della registrazione…"
+              className="w-full resize-y rounded-lg border border-[#DDD4C4] bg-white px-2.5 py-1.5 text-[11px] text-[#2A2A28]"
+            />
+          </label>
+        )}
+        {asr && !asr.available && mode === "asr" && (
+          <p className="sm:col-span-2 rounded-lg bg-[#FBEDED] px-3 py-2 text-[11px] text-[#8A2B2B]">
+            Nessun motore ASR installato: usa «Allinea un copione» o «Tempi stimati», oppure installa il
+            motore con <code className="font-mono">./installa_asr.sh</code>.
+          </p>
+        )}
       </div>
 
       {msg && (

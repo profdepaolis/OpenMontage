@@ -1242,7 +1242,13 @@ export const koraApi = {
     }>(`/api/projects/${projectId}/timeline`),
   rebuildTimeline: (
     projectId: string,
-    body: { script_text?: string; use_asr?: boolean; asr_level?: string } = {}
+    body: {
+      script_text?: string;
+      use_asr?: boolean;
+      asr_level?: string;
+      mode?: "asr" | "auto" | "script" | "estimated";
+      caption_source?: "transcript" | "editorial";
+    } = {}
   ) =>
     apiFetch<{
       project_id: string;
@@ -1250,6 +1256,8 @@ export const koraApi = {
       issues: SyncIssue[];
       asr_note: string;
       timeline_path: string;
+      mode?: string;
+      caption_source?: string;
     }>(`/api/projects/${projectId}/timeline/rebuild`, {
       method: "POST",
       body: JSON.stringify(body),

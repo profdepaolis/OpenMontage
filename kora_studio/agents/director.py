@@ -14,6 +14,8 @@ from kora_studio.agents.brand_guardian import BrandGuardian
 from kora_studio.agents.audio_timeline import (
     AudioTimelineManager,
     VoiceTruncationError,
+    align_script_to_asr,
+    caption_timings_from_transcript,
 )
 from kora_studio.agents.cinematic_editor import CinematicEditor, CinematicPreviewRenderer
 from kora_studio.agents.colorist import Colorist
@@ -708,6 +710,11 @@ class KoraDirector:
         words = list((timeline.get("transcript") or {}).get("words") or [])
         if not words:
             return None
+        # 3.6.7 — se i sottotitoli vengono dalla trascrizione, i tempi si leggono
+        # dai segmenti (corrispondenza 1:1), non da una rimappatura per indice.
+        from_segments = caption_timings_from_transcript(timeline, scenes)
+        if from_segments:
+            return from_segments
         timings: dict[int, list[dict[str, Any]]] = {}
         for scene in scenes:
             caption_words = [w for w in (scene.subtitle_text or "").split() if w]
@@ -743,6 +750,103 @@ class KoraDirector:
             timings[scene.scene_number] = planned
         return timings or None
 
+    # ------------------------------------------------------------------ #
+    # 3.6.7 — trascrizione -> scene -> sottotitoli
+    # ------------------------------------------------------------------ #
+    def apply_transcript_to_scenes(
+        self,
+        project_id: str,
+        timeline: dict[str, Any],
+        scenes: Optional[list[StoryboardScene]] = None,
+        *,
+        mode: str = "transcript",
+    ) -> dict[str, Any]:
+        """Porta il testo approvato del transcript nelle scene, rispettando i blocchi.
+
+        ``mode="transcript"``: i sottotitoli sono fedeli a ciò che è stato detto.
+        ``mode="editorial"``: i sottotitoli restano quelli scritti a mano; cambiano
+        solo i tempi (e vengono dichiarati editoriali, non trascrizione).
+        """
+        proj = self.get_project(project_id)
+        if not proj:
+            raise KeyError(f"Progetto {project_id} non trovato.")
+        working = scenes or [StoryboardScene(**s) for s in proj["storyboard"]]
+        segments = (timeline.get("transcript") or {}).get("segments") or []
+        if not segments:
+            return {"updated_scenes": [], "skipped": [], "mode": mode}
+        updated: list[int] = []
+        skipped: list[dict[str, Any]] = []
+        for scene in working:
+            nums = {
+                int(seg.get("scene_number"))
+                for seg in segments
+                if int(seg.get("scene_number") or 0) == int(scene.scene_number)
+            }
+            if not nums:
+                continue
+            text = " ".join(
+                str(seg.get("text") or "").strip()
+                for seg in segments
+                if int(seg.get("scene_number") or 0) == int(scene.scene_number)
+            ).strip()
+            if not text:
+                continue
+            # i blocchi vivono sulla scena (3.6.x), non su una mappa separata
+            scene_lock = getattr(scene, "locks", None) or {}
+            if scene_lock.get("caption") and mode == "transcript":
+                skipped.append({"scene_number": scene.scene_number, "reason": "sottotitoli bloccati"})
+                continue
+            if scene.spoken_text != text:
+                scene.spoken_text = text
+                updated.append(scene.scene_number)
+            if mode == "transcript":
+                scene.subtitle_text = text
+        if updated:
+            with self.db.session() as conn:
+                conn.execute(
+                    "UPDATE projects SET storyboard_json = ?, updated_at = ? WHERE id = ?",
+                    (json.dumps([sc.model_dump() for sc in working], ensure_ascii=False), utcnow_iso(), project_id),
+                )
+            self.invalidate_preview(project_id)
+        return {"updated_scenes": updated, "skipped": skipped, "mode": mode}
+
+    def resolve_script_timing(
+        self,
+        project_id: str,
+        script_text: str,
+        *,
+        asr_level: str = "bilanciato",
+    ) -> dict[str, Any]:
+        """Allinea un copione noto alla registrazione: ASR + mappatura parola per parola."""
+        from kora_studio.agents import asr as asr_mod
+
+        proj = self.get_project(project_id)
+        if not proj:
+            raise KeyError(f"Progetto {project_id} non trovato.")
+        uploaded = self.voice_director._project_voiceover_override(project_id)
+        if not uploaded:
+            raise ValueError("Nessun audio esterno importato per questo progetto.")
+        audio = Path(str(uploaded["path"]))
+        try:
+            result = asr_mod.transcribe(audio, language="it", level=asr_level)
+        except asr_mod.AsrUnavailable as exc:
+            return {"ok": False, "alignment": "estimated", "note": str(exc), "mismatches": []}
+        asr_dict = result.to_dict()
+        fps = max(1, int(proj.get("fps") or DEFAULT_FPS))
+        aligned = align_script_to_asr(script_text, asr_dict.get("segments", []) and [
+            w for seg in asr_dict.get("segments", []) for w in (seg.get("words") or [])
+        ], fps=fps)
+        return {
+            "ok": bool(aligned["words"]),
+            "alignment": "forced_aligned" if aligned["words"] else "estimated",
+            "words": aligned["words"],
+            "mismatches": aligned["mismatches"],
+            "matched": aligned["matched"],
+            "engine": result.engine,
+            "model": result.model,
+            "note": "Copione allineato ai tempi riconosciuti." if aligned["words"] else "Nessuna parola allineata.",
+        }
+
     def rebuild_audio_timeline(
         self,
         project_id: str,
@@ -750,6 +854,8 @@ class KoraDirector:
         script_text: Optional[str] = None,
         use_asr: bool = False,
         asr_level: str = "bilanciato",
+        mode: Optional[str] = None,
+        caption_source: Optional[str] = None,
     ) -> dict[str, Any]:
         """Ricalcola la timeline del progetto dalla voce realmente presente su disco."""
         from kora_studio.agents import audio_timeline as tl_mod
@@ -786,15 +892,39 @@ class KoraDirector:
         asr_result: Optional[dict[str, Any]] = None
         asr_note = ""
         text = (script_text or "").strip()
-        if use_asr:
+        requested = mode or ("asr" if use_asr else ("script" if text else "estimated"))
+        if requested in ("asr", "auto"):
             try:
                 result = asr_mod.transcribe(voice_path, language="it", level=asr_level)
                 asr_result = result.to_dict()
                 asr_note = f"trascrizione ASR ({result.engine}/{result.model})"
+                if text:  # copione fornito: allineamento forzato sui tempi riconosciuti
+                    flat = [w for seg in asr_result.get("segments", []) for w in (seg.get("words") or [])]
+                    aligned = align_script_to_asr(text, flat, fps=fps)
+                    if aligned["words"]:
+                        asr_note += (
+                            f" · copione allineato ({aligned['matched']} parole"
+                            + (f", {len(aligned['mismatches'])} discordanze" if aligned["mismatches"] else "")
+                            + ")"
+                        )
+                        asr_result = {
+                            **asr_result,
+                            "segments": [
+                                {
+                                    "text": " ".join(w["word"] for w in aligned["words"]),
+                                    "start_sec": aligned["words"][0]["start_sec"],
+                                    "end_sec": aligned["words"][-1]["end_sec"],
+                                    "words": aligned["words"],
+                                }
+                            ],
+                        }
+                        text = ""
             except asr_mod.AsrUnavailable as exc:
                 asr_note = f"ASR non disponibile: {exc}"
-        elif not text:
+        elif requested == "estimated" and not text:
             asr_note = "testo dallo storyboard (stima dentro le pause misurate, non trascrizione)"
+        elif requested == "script" and not text:
+            asr_note = "nessun copione fornito: serve il testo per allinearlo"
 
         timeline = self._build_timeline_for(
             project_dir=project_dir,
@@ -807,9 +937,16 @@ class KoraDirector:
         )
         total_sec = sum(s.duration_frames for s in scenes) / fps
         manager = AudioTimelineManager(fps=fps, project_dir=project_dir)
+        if caption_source:
+            self.db.set_preference(f"caption_source_{project_id}", caption_source)
+        elif not self.db.get_preference(f"caption_source_{project_id}") and uploaded:
+            # per un MP3 esterno il sottotitolo fedele è il comportamento predefinito
+            self.db.set_preference(f"caption_source_{project_id}", "transcript")
         issues = manager.validate(timeline, total_duration_sec=total_sec)
         return {
             "project_id": project_id,
+            "mode": requested,
+            "caption_source": self.db.get_preference(f"caption_source_{project_id}") or "editorial",
             "timeline": timeline,
             "issues": issues,
             "asr_note": asr_note,
@@ -1278,6 +1415,19 @@ class KoraDirector:
                         intervention_reason=reason,
                     )
                     return {"project": self.get_project(project_id), "job": self.get_job(job_id)}
+                caption_source = self.db.get_preference(f"caption_source_{project_id}") or "editorial"
+                if caption_source == "transcript" and (timeline.get("transcript") or {}).get("segments"):
+                    applied = self.apply_transcript_to_scenes(
+                        project_id, timeline, scenes, mode="transcript"
+                    )
+                    if applied.get("updated_scenes"):
+                        self.log_job(
+                            job_id,
+                            "INFO",
+                            "AudioTimeline",
+                            f"Sottotitoli allineati al testo pronunciato nelle scene "
+                            f"{applied['updated_scenes']}.",
+                        )
                 source = (timeline.get("transcript") or {}).get("alignment")
                 words = len((timeline.get("transcript") or {}).get("words") or [])
                 self.log_job(
