@@ -94,7 +94,8 @@ In interfaccia: **Storyboard → «Allinea sottotitoli» → Production → Ripr
 |---|---|
 | `tests/kora_studio/test_v364_caption_coherence.py` (sottotitolo sintetico → avviso; testi divergenti → blocco con numeri di scena; endpoint di allineamento; idempotenza; sottoinsieme di scene) | **5 passed** |
 | `npx tsc --noEmit` + `npm run build` (interfaccia) | OK |
-| Suite completa `tests/kora_studio` | vedi log `/tmp/pytest_364.log` |
+| Suite completa `tests/kora_studio` | **244 passed, 3 skipped in 890 s** |
+| Prova dal vivo sul server 3.6.4: `POST /api/projects/prj_256e7cbebf/captions/align` (tutte le scene, poi solo 1-2) | `ok:true`, seconda chiamata non riscrive nulla |
 
 **Non collaudato:** resa del montaggio su un Mac Intel reale con questo
 pacchetto (i test girano su Linux), e la resa percettiva del preset
