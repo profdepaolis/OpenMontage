@@ -27,6 +27,30 @@ class _SkipAudioLevels(Exception):
     """Segnale interno: livelli audio non applicabili a questo export."""
 
 
+def _content_words(text: str) -> set[str]:
+    """Parole portanti di una frase: senza articoli, preposizioni e congiunzioni."""
+    stopwords = {
+        "il", "lo", "la", "i", "gli", "le", "un", "uno", "una", "di", "del", "dello",
+        "della", "dei", "degli", "delle", "a", "al", "allo", "alla", "ai", "agli",
+        "alle", "da", "dal", "dallo", "dalla", "dai", "dagli", "dalle", "in", "nel",
+        "nello", "nella", "nei", "negli", "nelle", "con", "su", "sul", "sullo",
+        "sulla", "sui", "sugli", "sulle", "per", "tra", "fra", "e", "ed", "o", "che",
+        "chi", "cui", "non", "piu", "più", "si", "ci", "mi", "ti", "vi", "ne", "è",
+        "e'", "sono", "sei", "siamo", "siete", "ha", "ho", "hai", "hanno", "come",
+        "dove", "quando", "questo", "questa", "questi", "queste", "quello", "quella",
+        "tuo", "tua", "suo", "sua", "te", "me", "lui", "lei", "noi", "voi", "loro",
+    }
+    return {w for w in text.split() if len(w) > 2 and w not in stopwords}
+
+
+def _word_coverage(spoken: str, subtitle: str) -> float:
+    """Quota di parole portanti del sottotitolo già presenti nella frase detta."""
+    sub = _content_words(subtitle)
+    if not sub:
+        return 1.0
+    return len(sub & _content_words(spoken)) / len(sub)
+
+
 class QualityController:
     """Performs automated technical, visual, and narrative checks on rendered Reels."""
 
@@ -529,7 +553,16 @@ class QualityController:
             if not sp or not sb or sp == sb:
                 continue
             ratio = difflib.SequenceMatcher(None, sp, sb).ratio()
-            shortened = sp.startswith(sb) or sb.startswith(sp) or ratio >= 0.6
+            shortened = (
+                sp.startswith(sb)
+                or sb.startswith(sp)
+                or ratio >= 0.6
+                # 3.6.5 — il sottotitolo riformula la frase dello speaker con
+                # parole sue (es. «La luce sfiora il pergolato» al posto di
+                # «La luce di novembre sfiora il pergolato, posa i suoi fili
+                # d'ombra»): resta una sintesi, non un testo diverso.
+                or _word_coverage(sp, sb) >= 0.75
+            )
             if shortened:
                 vo_sub_soft.append(s.scene_number)
             else:

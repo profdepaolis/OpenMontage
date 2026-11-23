@@ -1,4 +1,4 @@
-# Installazione tecnica — KORA STUDIO LIGHT 3.6.4
+# Installazione tecnica — KORA STUDIO LIGHT 3.6.5
 
 Documento per chi vuole capire cosa fa il doppio clic, o riparare un guasto.
 Per l'uso normale basta `LEGGIMI.txt`.
@@ -61,7 +61,12 @@ diagnostica con esito onesto, stop del server via `pgrep` quando `lsof` non c'è
 download fallito gestito con messaggio e rimedio, `--solo-verifica` senza modifiche.
 
 
-## 1b-bis. Esportazione bloccata da «Coerenza tra voiceover e sottotitoli» (3.6.4)
+## 1b-bis. Esportazione bloccata da «Coerenza tra voiceover e sottotitoli» (3.6.4 → 3.6.5)
+
+Da 3.6.5 un sottotitolo che **riformula** la frase con le parole dello
+speaker (accorciandola, o cambiando articoli e preposizioni) è un avviso,
+non un errore: contano le parole portanti, non la forma esatta. Il blocco
+resta quando il sottotitolo parla d'altro.
 
 Da 3.6.4 un sottotitolo più sintetico del testo detto non blocca più
 l'esportazione: viene registrato come avviso con revisione consigliata.

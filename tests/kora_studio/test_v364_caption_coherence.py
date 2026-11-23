@@ -148,3 +148,61 @@ def test_align_accepts_scene_subset(client, director):
     assert res.json()["updated_scenes"] == [1]
     scenes = {s["scene_number"]: s for s in client.get(f"/api/projects/{project_id}/scenes").json()["scenes"]}
     assert scenes[2]["subtitle_text"] == "Diverso due"
+
+
+def test_paraphrased_subtitle_is_a_warning_not_a_block(director, tmp_path):
+    """3.6.5 — caso reale: «La luce sfiora il pergolato» al posto della frase intera."""
+    _, scenes = _project(director)
+    coppie = [
+        (
+            "La luce di novembre sfiora il pergolato, posa i suoi fili d'ombra.",
+            "La luce sfiora il pergolato",
+        ),
+        (
+            "Il sale resta sull'immobile, il posto è già pronto per te.",
+            "Un posto, già pronto per te",
+        ),
+    ]
+    for scena, (detto, scritto) in zip(scenes[: len(coppie)], coppie):
+        scena.spoken_text = detto
+        scena.subtitle_text = scritto
+    report = director.qc.inspect_reel(
+        _clip(tmp_path / "clip.mp4"), scenes, expected_duration_sec=2.0,
+        expect_audio=True, voiceover_present=True,
+    )
+    check = _vc_check(report)
+    assert check.passed is True, check.detail
+    assert check.blocks_delivery() is False
+    assert check.status == "superato"
+    assert check.requires_human_review is True
+    assert "scene [1, 2]" in check.detail
+
+
+def test_message_with_different_subject_still_blocks(director, tmp_path):
+    """Una riformulazione che cambia il soggetto resta un errore vero."""
+    _, scenes = _project(director)
+    scenes[0].spoken_text = "Il mare è calmo e limpido stamattina."
+    scenes[0].subtitle_text = "Aperitivo al tramonto con musica dal vivo"
+    report = director.qc.inspect_reel(
+        _clip(tmp_path / "clip.mp4"), scenes, expected_duration_sec=2.0,
+        expect_audio=True, voiceover_present=True,
+    )
+    check = _vc_check(report)
+    assert check.passed is False
+    assert check.blocks_delivery() is True
+
+
+def test_delivery_block_message_is_not_duplicated(director, tmp_path):
+    """Il messaggio finale non deve ripetere due volte gli stessi controlli."""
+    from kora_studio.agents.export_manager import _qc_block_message
+
+    _, scenes = _project(director)
+    scenes[0].subtitle_text = "Il vento sposta le sedie del portico"
+    report = director.qc.inspect_reel(
+        _clip(tmp_path / "clip.mp4"), scenes, expected_duration_sec=2.0,
+        expect_audio=True, voiceover_present=True,
+    )
+    fallback = {"used": False, "suggestion": "Correggere i controlli falliti e rieseguire il montaggio: xyz"}
+    message = _qc_block_message(report, fallback)
+    assert message.count("Coerenza tra voiceover e sottotitoli") == 1
+    assert "Diagnosi:" not in message

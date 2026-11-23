@@ -18,6 +18,20 @@ from kora_studio.media_tools import run_ffmpeg
 from kora_studio.vault.media_vault import MediaVault
 
 
+def _qc_block_message(report: Any, diagnosis: Optional[dict[str, Any]] = None) -> str:
+    """Messaggio di blocco leggibile, senza ripetere due volte lo stesso testo."""
+    detail = "; ".join(
+        f"{c.name}: {c.detail}" for c in getattr(report, "checks", []) or [] if not c.passed
+    )
+    hint = ((diagnosis or {}).get("suggestion") or "").strip()
+    # La diagnosi di ripiego ripete i nostri stessi dettagli: inutile e confusa.
+    if hint and hint.startswith("Correggere i controlli falliti"):
+        hint = ""
+    if hint and hint not in detail:
+        detail = f"{detail} Diagnosi: {hint}"
+    return "Esportazione bloccata dal Controllo Qualità: " + detail
+
+
 class ExportManager:
     """Produces the complete verified export bundle required by Section 19."""
 
@@ -204,15 +218,12 @@ class ExportManager:
             voiceover_present=voiceover_present,
         )
         if not qc_report.passed:
-            detail = "; ".join(c.name + ": " + c.detail for c in qc_report.checks if not c.passed)
+            diagnosis = None
             try:
                 diagnosis = self.qc.diagnose(qc_report)
-                hint = (diagnosis or {}).get("suggestion")
-                if hint:
-                    detail = f"{detail}. Diagnosi: {hint}"
             except Exception:
-                pass
-            raise RuntimeError("Esportazione bloccata dal Controllo Qualità: " + detail)
+                diagnosis = None
+            raise RuntimeError(_qc_block_message(qc_report, diagnosis))
 
         final_mp4 = export_dir / f"{project_id}_reel_final.mp4"
         if main_mp4.resolve() != final_mp4.resolve():
