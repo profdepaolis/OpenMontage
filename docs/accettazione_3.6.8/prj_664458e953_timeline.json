@@ -1,0 +1,171 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-11-25T00:21:13.230307+00:00",
+  "fps": 25,
+  "duration_sec": 22.047,
+  "total_frames": 551,
+  "audio": {
+    "path": "/tmp/acc368/data/projects/prj_664458e953/voice_tiziana_norm.wav",
+    "sha256": "f526237526b6382717cdadb969f4609ece863431a3222cbae60532d0ff9e1cfb",
+    "source": "voce_importata_manuale",
+    "duration_sec": 22.047,
+    "is_scene_aligned": false,
+    "start_offset_sec": 0.0,
+    "end_padding_sec": 0.0,
+    "effective_duration_sec": 22.047,
+    "end_sec": 22.047,
+    "speech_regions": [
+      {
+        "start_sec": 0.0,
+        "end_sec": 3.394
+      },
+      {
+        "start_sec": 3.986,
+        "end_sec": 5.205
+      },
+      {
+        "start_sec": 5.79,
+        "end_sec": 7.038
+      },
+      {
+        "start_sec": 7.422,
+        "end_sec": 9.598
+      },
+      {
+        "start_sec": 9.986,
+        "end_sec": 16.732
+      },
+      {
+        "start_sec": 17.107,
+        "end_sec": 19.684
+      },
+      {
+        "start_sec": 20.068,
+        "end_sec": 22.047
+      }
+    ],
+    "speech_span_sec": 19.338
+  },
+  "transcript": {
+    "alignment": "none",
+    "verified": false,
+    "verification": {
+      "timing_status": "none",
+      "text_status": "none",
+      "verified": false,
+      "words_from_asr": 0,
+      "words_forced_aligned": 0,
+      "words_estimated": 0
+    },
+    "mismatches": [],
+    "engine": null,
+    "model": null,
+    "language": "it",
+    "text": "",
+    "words": [],
+    "segments": []
+  },
+  "scenes": [
+    {
+      "scene_uid": "scene_01",
+      "scene_number": 1,
+      "start_sec": 0.0,
+      "end_sec": 1.84,
+      "start_frame": 0,
+      "end_frame": 46,
+      "asset_id": "ast_b0d8916288b1",
+      "duration_frames": 46
+    },
+    {
+      "scene_uid": "scene_02",
+      "scene_number": 2,
+      "start_sec": 1.84,
+      "end_sec": 3.68,
+      "start_frame": 46,
+      "end_frame": 92,
+      "asset_id": "ast_17ea3797864b",
+      "duration_frames": 46
+    },
+    {
+      "scene_uid": "scene_03",
+      "scene_number": 3,
+      "start_sec": 3.68,
+      "end_sec": 5.48,
+      "start_frame": 92,
+      "end_frame": 137,
+      "asset_id": "ast_573c71ed234a",
+      "duration_frames": 45
+    },
+    {
+      "scene_uid": "scene_04",
+      "scene_number": 4,
+      "start_sec": 5.48,
+      "end_sec": 7.2,
+      "start_frame": 137,
+      "end_frame": 180,
+      "asset_id": "ast_8eaaa1faa3cf",
+      "duration_frames": 43
+    },
+    {
+      "scene_uid": "scene_05",
+      "scene_number": 5,
+      "start_sec": 7.2,
+      "end_sec": 9.8,
+      "start_frame": 180,
+      "end_frame": 245,
+      "asset_id": "ast_354aee03af6f",
+      "duration_frames": 65
+    },
+    {
+      "scene_uid": "scene_06",
+      "scene_number": 6,
+      "start_sec": 9.8,
+      "end_sec": 13.0,
+      "start_frame": 245,
+      "end_frame": 325,
+      "asset_id": "ast_838acc1223f6",
+      "duration_frames": 80
+    },
+    {
+      "scene_uid": "scene_07",
+      "scene_number": 7,
+      "start_sec": 13.0,
+      "end_sec": 14.96,
+      "start_frame": 325,
+      "end_frame": 374,
+      "asset_id": "ast_f153ef8824c3",
+      "duration_frames": 49
+    },
+    {
+      "scene_uid": "scene_08",
+      "scene_number": 8,
+      "start_sec": 14.96,
+      "end_sec": 16.92,
+      "start_frame": 374,
+      "end_frame": 423,
+      "asset_id": "ast_aa2e472bf899",
+      "duration_frames": 49
+    },
+    {
+      "scene_uid": "scene_09",
+      "scene_number": 9,
+      "start_sec": 16.92,
+      "end_sec": 19.88,
+      "start_frame": 423,
+      "end_frame": 497,
+      "asset_id": "ast_d708b22649d3",
+      "duration_frames": 74
+    },
+    {
+      "scene_uid": "scene_10",
+      "scene_number": 10,
+      "start_sec": 19.88,
+      "end_sec": 22.04,
+      "start_frame": 497,
+      "end_frame": 551,
+      "asset_id": "ast_434af4a8c0e5",
+      "duration_frames": 54
+    }
+  ],
+  "caption_cues": []
+}

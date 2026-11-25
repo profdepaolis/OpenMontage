@@ -1258,6 +1258,17 @@ export const koraApi = {
       timeline_path: string;
       mode?: string;
       caption_source?: string;
+      alignment?: string;
+      verified?: boolean;
+      mismatches?: string[];
+      verification?: {
+        timing_status?: string;
+        text_status?: string;
+        verified?: boolean;
+        words_from_asr?: number;
+        words_forced_aligned?: number;
+        words_estimated?: number;
+      };
     }>(`/api/projects/${projectId}/timeline/rebuild`, {
       method: "POST",
       body: JSON.stringify(body),

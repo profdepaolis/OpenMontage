@@ -8,6 +8,7 @@ type Props = { projectId: string };
 
 const ALIGNMENT_LABEL: Record<string, string> = {
   asr: "Trascritta dalla voce (verificata)",
+  forced_aligned: "Copione allineato ai tempi della voce",
   estimated: "Tempi stimati nelle pause misurate",
   manual: "Testo corretto a mano",
   none: "Nessuna trascrizione",
@@ -23,6 +24,7 @@ export default function SyncPanel({ projectId }: Props) {
   const [script, setScript] = useState("");
   const [captionSource, setCaptionSource] = useState<"transcript" | "editorial">("transcript");
   const [asr, setAsr] = useState<{ available: boolean; message: string } | null>(null);
+  const [mismatches, setMismatches] = useState<string[]>([]);
 
   const load = useCallback(async () => {
     try {
@@ -57,6 +59,7 @@ export default function SyncPanel({ projectId }: Props) {
       });
       setTimeline(res.timeline);
       setIssues(res.issues || []);
+      setMismatches(res.mismatches || []);
       setMsg({
         kind: res.issues.some((i) => i.severity === "error") ? "err" : "ok",
         text: res.asr_note || "Timeline ricalcolata.",
@@ -161,7 +164,7 @@ export default function SyncPanel({ projectId }: Props) {
             className="w-full rounded-lg border border-[#DDD4C4] bg-white px-2.5 py-1.5 text-[11px] text-[#2A2A28]"
           >
             <option value="asr">Trascrivi automaticamente l&apos;audio (ASR)</option>
-            <option value="script">Allinea un copione già disponibile</option>
+            <option value="script">Allinea un copione già disponibile (trascrive e confronta)</option>
             <option value="estimated">Tempi stimati dentro le pause</option>
           </select>
         </label>
@@ -208,6 +211,21 @@ export default function SyncPanel({ projectId }: Props) {
         >
           {msg.text}
         </p>
+      )}
+
+      {mismatches.length > 0 && (
+        <div className="mt-3 rounded-lg bg-[#FBF4E7] px-3 py-2 text-[11px] text-[#7A5A20]">
+          <p className="font-medium">
+            Parole del copione non riconosciute nella registrazione ({mismatches.length})
+          </p>
+          <p className="mt-1 break-words">
+            {mismatches.slice(0, 24).join(" · ")}
+            {mismatches.length > 24 ? " …" : ""}
+          </p>
+          <p className="mt-1 text-[10px] text-[#8C8273]">
+            I loro tempi sono stimati dentro il parlato, non riconosciuti: correggi il copione o il testo.
+          </p>
+        </div>
       )}
 
       {timeline ? (

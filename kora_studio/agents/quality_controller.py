@@ -749,6 +749,39 @@ class QualityController:
                     ),
                 )
             )
+            # 3.6.8 — una parola del copione appoggiata ai tempi ASR non è una parola
+            # riconosciuta: se `verified` è True deve esserlo ogni singola parola.
+            timed_words = list(transcript.get("words") or [])
+            non_asr = [
+                w
+                for w in timed_words
+                if str(w.get("timing_source") or "") not in ("asr",)
+            ]
+            false_verified = bool(transcript.get("verified")) and (
+                alignment != "asr" or bool(non_asr)
+            )
+            script_mismatches = [str(m) for m in (transcript.get("mismatches") or [])]
+            checks.append(
+                QualityCheckItem(
+                    category="narrative",
+                    name="Nessuna parola del copione spacciata per riconosciuta",
+                    passed=not false_verified,
+                    severity="error",
+                    status="superato" if not false_verified else "non_superato",
+                    requires_human_review=bool(script_mismatches),
+                    detail=(
+                        "Ogni parola dichiara la propria origine "
+                        f"({(transcript.get('verification') or {}).get('words_from_asr', 0)} da ASR, "
+                        f"{(transcript.get('verification') or {}).get('words_forced_aligned', 0)} allineate dal copione, "
+                        f"{(transcript.get('verification') or {}).get('words_estimated', 0)} stimate)"
+                        + (
+                            f"; parole del copione non riconosciute: {', '.join(script_mismatches[:5])}"
+                            if script_mismatches
+                            else ""
+                        )
+                    ),
+                )
+            )
         else:
             checks.append(
                 QualityCheckItem(

@@ -1,0 +1,19 @@
+{
+  "alignment": "none",
+  "verified": false,
+  "verification": {
+    "timing_status": "none",
+    "text_status": "none",
+    "verified": false,
+    "words_from_asr": 0,
+    "words_forced_aligned": 0,
+    "words_estimated": 0
+  },
+  "mismatches": [],
+  "engine": null,
+  "model": null,
+  "language": "it",
+  "text": "",
+  "words": [],
+  "segments": []
+}

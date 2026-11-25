@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# KORA Studio Light 3.6.6 — diagnostica della sincronizzazione
+# KORA Studio Light 3.6.8 — diagnostica della sincronizzazione
 # Uso:
 #   ./diagnostica_sync.sh                 # tutti i progetti
 #   ./diagnostica_sync.sh prj_xxxxxxxx    # un solo progetto
@@ -61,7 +61,14 @@ issues=d.get("issues") or []
 if d.get("ok"): print("  OK   nessun conflitto tra voce, scene e sottotitoli")
 else: print("  KO   conflitti da risolvere")
 print("  ..   allineamento: %s · parole: %s · cue: %s" % (d.get("alignment"), d.get("words"), d.get("cues")))
-print("  ..   verificata sulle parole pronunciate: %s" % ("sì" if d.get("verified") else "no (tempi stimati o corretti a mano)"))
+print("  ..   verificata sulle parole pronunciate: %s" % ("sì" if d.get("verified") else "no (tempi stimati, copione allineato o corretti a mano)"))
+v=d.get("verification") or {}
+if v:
+    print("  ..   provenienza: %s da ASR · %s allineate dal copione · %s stimate" % (
+        v.get("words_from_asr", 0), v.get("words_forced_aligned", 0), v.get("words_estimated", 0)))
+mm=d.get("mismatches") or []
+if mm:
+    print("  ..   parole del copione non riconosciute: %s" % ", ".join(mm[:8]))
 audio=d.get("audio") or {}
 if audio:
     print("  ..   voce %.2fs → %.2fs · offset dichiarato %.2fs · durata sorgente %.2fs" % (

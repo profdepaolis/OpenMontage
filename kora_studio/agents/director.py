@@ -677,12 +677,15 @@ class KoraDirector:
         text: Optional[str] = None,
         asr_result: Optional[dict[str, Any]] = None,
         source: str = "",
+        allow_storyboard_text: bool = True,
     ) -> dict[str, Any]:
         """Costruisce e salva la timeline canonica; unica fonte per mix, caption e QC."""
         manifest = voice_res.get("voice_manifest") or {}
-        spoken = (text or "").strip() or " ".join(
-            (sc.spoken_text or "").strip() for sc in scenes if not sc.is_outro and (sc.spoken_text or "").strip()
-        )
+        spoken = (text or "").strip()
+        if not spoken and allow_storyboard_text:
+            spoken = " ".join(
+                (sc.spoken_text or "").strip() for sc in scenes if not sc.is_outro and (sc.spoken_text or "").strip()
+            )
         manager = AudioTimelineManager(fps=fps, project_dir=project_dir)
         timeline = manager.build(
             audio_path=voice_path,
@@ -892,40 +895,69 @@ class KoraDirector:
         asr_result: Optional[dict[str, Any]] = None
         asr_note = ""
         text = (script_text or "").strip()
+        script_original = text
         requested = mode or ("asr" if use_asr else ("script" if text else "estimated"))
-        if requested in ("asr", "auto"):
+        if requested == "script" and not text:
+            raise ValueError(
+                "La modalità copione richiede il testo del copione: incollalo per allinearlo alla voce."
+            )
+        mismatches: list[str] = []
+        # 3.6.8 — anche la modalità copione chiama davvero l'ASR: è l'unico modo per
+        # sapere *dove* sono state pronunciate le parole. Senza ASR si dichiara stima.
+        if requested in ("asr", "auto", "script"):
             try:
                 result = asr_mod.transcribe(voice_path, language="it", level=asr_level)
                 asr_result = result.to_dict()
                 asr_note = f"trascrizione ASR ({result.engine}/{result.model})"
-                if text:  # copione fornito: allineamento forzato sui tempi riconosciuti
-                    flat = [w for seg in asr_result.get("segments", []) for w in (seg.get("words") or [])]
-                    aligned = align_script_to_asr(text, flat, fps=fps)
-                    if aligned["words"]:
-                        asr_note += (
-                            f" · copione allineato ({aligned['matched']} parole"
-                            + (f", {len(aligned['mismatches'])} discordanze" if aligned["mismatches"] else "")
-                            + ")"
-                        )
-                        asr_result = {
-                            **asr_result,
-                            "segments": [
-                                {
-                                    "text": " ".join(w["word"] for w in aligned["words"]),
-                                    "start_sec": aligned["words"][0]["start_sec"],
-                                    "end_sec": aligned["words"][-1]["end_sec"],
-                                    "words": aligned["words"],
-                                }
-                            ],
-                        }
-                        text = ""
             except asr_mod.AsrUnavailable as exc:
-                asr_note = f"ASR non disponibile: {exc}"
+                asr_result = None
+                asr_note = (
+                    "ASR non disponibile: tempi stimati dentro le pause misurate, "
+                    f"nessun allineamento forzato ({exc})"
+                    if requested == "script"
+                    else f"ASR non disponibile: {exc}"
+                )
+            if asr_result is not None and text:
+                # copione noto: le parole riconosciute fanno da riferimento ai tempi
+                flat = [w for seg in asr_result.get("segments", []) for w in (seg.get("words") or [])]
+                aligned = align_script_to_asr(text, flat, fps=fps)
+                mismatches = [str(m) for m in aligned.get("mismatches") or []]
+                if aligned["words"]:
+                    aligned_words = aligned["words"]
+                    asr_result = {
+                        **asr_result,
+                        "mismatches": mismatches,
+                        "script_text": text,
+                        "text": " ".join(w["word"] for w in aligned_words),
+                        "segments": [
+                            {
+                                "text": " ".join(w["word"] for w in aligned_words),
+                                "start_sec": aligned_words[0]["start_sec"],
+                                "end_sec": aligned_words[-1]["end_sec"],
+                                "words": aligned_words,
+                            }
+                        ],
+                    }
+                    asr_note += (
+                        f" · copione allineato ai tempi riconosciuti ({aligned['matched']} parole"
+                        + (f", {len(mismatches)} discordanze" if mismatches else "")
+                        + ")"
+                    )
+                    text = ""
+                else:
+                    # il copione non somiglia al parlato: non si spaccia l'ASR per
+                    # allineamento del copione, si dichiara la stima e le discordanze
+                    asr_result = None
+                    asr_note += (
+                        " · nessuna parola del copione riconosciuta nel parlato: "
+                        f"tempi stimati, {len(mismatches)} discordanze dichiarate"
+                    )
         elif requested == "estimated" and not text:
             asr_note = "testo dallo storyboard (stima dentro le pause misurate, non trascrizione)"
-        elif requested == "script" and not text:
-            asr_note = "nessun copione fornito: serve il testo per allinearlo"
 
+        # 3.6.8 — se l'utente ha chiesto la trascrizione e il motore non c'è, il testo
+        # dello storyboard non viene spacciato per testo pronunciato.
+        allow_storyboard_text = not (requested in ("asr", "auto", "script") and asr_result is None)
         timeline = self._build_timeline_for(
             project_dir=project_dir,
             voice_path=voice_path,
@@ -934,18 +966,29 @@ class KoraDirector:
             fps=fps,
             text=text or None,
             asr_result=asr_result,
+            allow_storyboard_text=allow_storyboard_text,
         )
         total_sec = sum(s.duration_frames for s in scenes) / fps
         manager = AudioTimelineManager(fps=fps, project_dir=project_dir)
+        # 3.6.8 — la scelta dell'utente resta scritta nel progetto: la produzione
+        # non deve tornare a stimare dal testo creativo ciò che era stato chiesto all'ASR.
+        self.db.set_preference(f"transcript_source_{project_id}", requested)
+        if script_original:
+            self.db.set_preference(f"transcript_script_{project_id}", script_original)
         if caption_source:
             self.db.set_preference(f"caption_source_{project_id}", caption_source)
         elif not self.db.get_preference(f"caption_source_{project_id}") and uploaded:
             # per un MP3 esterno il sottotitolo fedele è il comportamento predefinito
             self.db.set_preference(f"caption_source_{project_id}", "transcript")
         issues = manager.validate(timeline, total_duration_sec=total_sec)
+        transcript = timeline.get("transcript") or {}
         return {
             "project_id": project_id,
             "mode": requested,
+            "alignment": transcript.get("alignment"),
+            "verified": bool(transcript.get("verified")),
+            "verification": transcript.get("verification") or {},
+            "mismatches": list(transcript.get("mismatches") or []),
             "caption_source": self.db.get_preference(f"caption_source_{project_id}") or "editorial",
             "timeline": timeline,
             "issues": issues,
@@ -1034,10 +1077,14 @@ class KoraDirector:
         )
         timeline_note = ""
         try:
+            # 3.6.8 — un copione non deve spegnere l'ASR: serve a sapere dove cadono
+            # le parole. La modalità copione trascrive e poi allinea.
+            has_script = bool((script_text or "").strip())
             built = self.rebuild_audio_timeline(
                 project_id,
                 script_text=(script_text or "").strip() or None,
-                use_asr=bool(use_asr and not (script_text or "").strip()),
+                use_asr=bool(use_asr),
+                mode="script" if has_script else ("asr" if use_asr else "estimated"),
             )
             timeline_note = built.get("asr_note") or ""
         except Exception as exc:  # la timeline non deve mai impedire l'importazione
@@ -1389,13 +1436,33 @@ class KoraDirector:
             timeline: Optional[dict[str, Any]] = None
             timeline_mgr = AudioTimelineManager(fps=fps_now, project_dir=project_dir)
             if voice_path and voice_path.is_file():
+                # 3.6.8 — se l'utente ha chiesto ASR/copione, la produzione non
+                # ripiega sul testo creativo: usa il copione salvato o resta senza parole.
+                requested_source = (
+                    self.db.get_preference(f"transcript_source_{project_id}") or "estimated"
+                )
+                saved_script = (
+                    self.db.get_preference(f"transcript_script_{project_id}") or ""
+                ).strip()
+                allow_storyboard_text = requested_source not in ("asr", "script")
                 timeline = self._build_timeline_for(
                     project_dir=project_dir,
                     voice_path=voice_path,
                     voice_res=voice_res,
                     scenes=scenes,
                     fps=fps_now,
+                    text=saved_script or None,
+                    allow_storyboard_text=allow_storyboard_text,
                 )
+                if not allow_storyboard_text and not (timeline.get("transcript") or {}).get("words"):
+                    self.log_job(
+                        job_id,
+                        "WARN",
+                        "AudioTimeline",
+                        "Nessuna trascrizione disponibile per questa voce: la timeline resta "
+                        "senza parole (nessun testo inventato). Installa il motore ASR "
+                        "(./installa_asr.sh) o fornisci il copione.",
+                    )
                 issues = timeline_mgr.validate(timeline, total_duration_sec=total_sec)
                 blocking_issues = [i for i in issues if i["severity"] == "error"]
                 for issue in issues:

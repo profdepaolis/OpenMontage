@@ -1,0 +1,797 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-11-25T00:19:26.674669+00:00",
+  "fps": 25,
+  "duration_sec": 21.081,
+  "total_frames": 527,
+  "audio": {
+    "path": "/tmp/acc368/data/projects/prj_5bc67a900c/voice_brando_norm.wav",
+    "sha256": "8de1173dba2938bbda72748c041580e6d07d7f6fb5ea0f21735555e9f77f7df0",
+    "source": "voce_importata_manuale",
+    "duration_sec": 21.081,
+    "is_scene_aligned": false,
+    "start_offset_sec": 0.0,
+    "end_padding_sec": 0.0,
+    "effective_duration_sec": 21.081,
+    "end_sec": 21.081,
+    "speech_regions": [
+      {
+        "start_sec": 0.0,
+        "end_sec": 3.146
+      },
+      {
+        "start_sec": 3.814,
+        "end_sec": 4.99
+      },
+      {
+        "start_sec": 5.476,
+        "end_sec": 6.584
+      },
+      {
+        "start_sec": 7.045,
+        "end_sec": 9.077
+      },
+      {
+        "start_sec": 9.518,
+        "end_sec": 13.872
+      },
+      {
+        "start_sec": 14.231,
+        "end_sec": 15.87
+      },
+      {
+        "start_sec": 16.238,
+        "end_sec": 18.653
+      },
+      {
+        "start_sec": 19.075,
+        "end_sec": 19.449
+      },
+      {
+        "start_sec": 19.82,
+        "end_sec": 21.081
+      }
+    ],
+    "speech_span_sec": 17.506
+  },
+  "transcript": {
+    "alignment": "estimated",
+    "verified": false,
+    "verification": {
+      "timing_status": "estimated",
+      "text_status": "from_script",
+      "verified": false,
+      "words_from_asr": 0,
+      "words_forced_aligned": 0,
+      "words_estimated": 22
+    },
+    "mismatches": [],
+    "engine": null,
+    "model": null,
+    "language": "it",
+    "text": "La luce accarezza il pergolato e la sabbia. Materiali semplici, proporzioni giuste, niente di superfluo. L'identità KORA si riconosce da un dettaglio.",
+    "words": [
+      {
+        "word": "La",
+        "start_sec": 0.0,
+        "end_sec": 0.271,
+        "start_frame": 0,
+        "end_frame": 7,
+        "confidence": null,
+        "speaker_id": null,
+        "timing_source": "estimated",
+        "word_id": "w_0001"
+      },
+      {
+        "word": "luce",
+        "start_sec": 0.271,
+        "end_sec": 0.814,
+        "start_frame": 7,
+        "end_frame": 20,
+        "confidence": null,
+        "speaker_id": null,
+        "timing_source": "estimated",
+        "word_id": "w_0002"
+      },
+      {
+        "word": "accarezza",
+        "start_sec": 0.814,
+        "end_sec": 2.036,
+        "start_frame": 20,
+        "end_frame": 51,
+        "confidence": null,
+        "speaker_id": null,
+        "timing_source": "estimated",
+        "word_id": "w_0003"
+      },
+      {
+        "word": "il",
+        "start_sec": 2.036,
+        "end_sec": 2.307,
+        "start_frame": 51,
+        "end_frame": 58,
+        "confidence": null,
+        "speaker_id": null,
+        "timing_source": "estimated",
+        "word_id": "w_0004"
+      },
+      {
+        "word": "pergolato",
+        "start_sec": 2.307,
+        "end_sec": 3.146,
+        "start_frame": 58,
+        "end_frame": 79,
+        "confidence": null,
+        "speaker_id": null,
+        "timing_source": "estimated",
+        "word_id": "w_0005"
+      },
+      {
+        "word": "e",
+        "start_sec": 4.196,
+        "end_sec": 4.331,
+        "start_frame": 105,
+        "end_frame": 108,
+        "confidence": null,
+        "speaker_id": null,
+        "timing_source": "estimated",
+        "word_id": "w_0006"
+      },
+      {
+        "word": "la",
+        "start_sec": 4.331,
+        "end_sec": 4.603,
+        "start_frame": 108,
+        "end_frame": 115,
+        "confidence": null,
+        "speaker_id": null,
+        "timing_source": "estimated",
+        "word_id": "w_0007"
+      },
+      {
+        "word": "sabbia.",
+        "start_sec": 4.603,
+        "end_sec": 4.99,
+        "start_frame": 115,
+        "end_frame": 125,
+        "confidence": null,
+        "speaker_id": null,
+        "timing_source": "estimated",
+        "word_id": "w_0008"
+      },
+      {
+        "word": "Materiali",
+        "start_sec": 6.039,
+        "end_sec": 6.584,
+        "start_frame": 151,
+        "end_frame": 165,
+        "confidence": null,
+        "speaker_id": null,
+        "timing_source": "estimated",
+        "word_id": "w_0009"
+      },
+      {
+        "word": "semplici,",
+        "start_sec": 7.721,
+        "end_sec": 8.942,
+        "start_frame": 193,
+        "end_frame": 224,
+        "confidence": null,
+        "speaker_id": null,
+        "timing_source": "estimated",
+        "word_id": "w_0010"
+      },
+      {
+        "word": "proporzioni",
+        "start_sec": 8.942,
+        "end_sec": 9.077,
+        "start_frame": 224,
+        "end_frame": 227,
+        "confidence": null,
+        "speaker_id": null,
+        "timing_source": "estimated",
+        "word_id": "w_0011"
+      },
+      {
+        "word": "giuste,",
+        "start_sec": 10.876,
+        "end_sec": 11.826,
+        "start_frame": 272,
+        "end_frame": 296,
+        "confidence": null,
+        "speaker_id": null,
+        "timing_source": "estimated",
+        "word_id": "w_0012"
+      },
+      {
+        "word": "niente",
+        "start_sec": 11.826,
+        "end_sec": 12.64,
+        "start_frame": 296,
+        "end_frame": 316,
+        "confidence": null,
+        "speaker_id": null,
+        "timing_source": "estimated",
+        "word_id": "w_0013"
+      },
+      {
+        "word": "di",
+        "start_sec": 12.64,
+        "end_sec": 12.911,
+        "start_frame": 316,
+        "end_frame": 323,
+        "confidence": null,
+        "speaker_id": null,
+        "timing_source": "estimated",
+        "word_id": "w_0014"
+      },
+      {
+        "word": "superfluo.",
+        "start_sec": 12.911,
+        "end_sec": 13.872,
+        "start_frame": 323,
+        "end_frame": 347,
+        "confidence": null,
+        "speaker_id": null,
+        "timing_source": "estimated",
+        "word_id": "w_0015"
+      },
+      {
+        "word": "L'identità",
+        "start_sec": 14.628,
+        "end_sec": 15.87,
+        "start_frame": 366,
+        "end_frame": 397,
+        "confidence": null,
+        "speaker_id": null,
+        "timing_source": "estimated",
+        "word_id": "w_0016"
+      },
+      {
+        "word": "KORA",
+        "start_sec": 16.353,
+        "end_sec": 16.896,
+        "start_frame": 409,
+        "end_frame": 422,
+        "confidence": null,
+        "speaker_id": null,
+        "timing_source": "estimated",
+        "word_id": "w_0017"
+      },
+      {
+        "word": "si",
+        "start_sec": 16.896,
+        "end_sec": 17.167,
+        "start_frame": 422,
+        "end_frame": 429,
+        "confidence": null,
+        "speaker_id": null,
+        "timing_source": "estimated",
+        "word_id": "w_0018"
+      },
+      {
+        "word": "riconosce",
+        "start_sec": 17.167,
+        "end_sec": 18.388,
+        "start_frame": 429,
+        "end_frame": 460,
+        "confidence": null,
+        "speaker_id": null,
+        "timing_source": "estimated",
+        "word_id": "w_0019"
+      },
+      {
+        "word": "da",
+        "start_sec": 18.388,
+        "end_sec": 18.653,
+        "start_frame": 460,
+        "end_frame": 466,
+        "confidence": null,
+        "speaker_id": null,
+        "timing_source": "estimated",
+        "word_id": "w_0020"
+      },
+      {
+        "word": "un",
+        "start_sec": 19.082,
+        "end_sec": 19.353,
+        "start_frame": 477,
+        "end_frame": 484,
+        "confidence": null,
+        "speaker_id": null,
+        "timing_source": "estimated",
+        "word_id": "w_0021"
+      },
+      {
+        "word": "dettaglio.",
+        "start_sec": 19.353,
+        "end_sec": 19.449,
+        "start_frame": 484,
+        "end_frame": 486,
+        "confidence": null,
+        "speaker_id": null,
+        "timing_source": "estimated",
+        "word_id": "w_0022"
+      }
+    ],
+    "segments": [
+      {
+        "segment_uid": "seg_001",
+        "text": "La luce accarezza il pergolato",
+        "start_sec": 0.0,
+        "end_sec": 3.146,
+        "start_frame": 0,
+        "end_frame": 79,
+        "word_ids": [
+          "w_0001",
+          "w_0002",
+          "w_0003",
+          "w_0004",
+          "w_0005"
+        ],
+        "scene_uid": "scene_01",
+        "review_status": "pending",
+        "scene_number": 1
+      },
+      {
+        "segment_uid": "seg_002",
+        "text": "e la sabbia.",
+        "start_sec": 4.196,
+        "end_sec": 4.99,
+        "start_frame": 105,
+        "end_frame": 125,
+        "word_ids": [
+          "w_0006",
+          "w_0007",
+          "w_0008"
+        ],
+        "scene_uid": "scene_03",
+        "review_status": "pending",
+        "scene_number": 3
+      },
+      {
+        "segment_uid": "seg_003",
+        "text": "Materiali",
+        "start_sec": 6.039,
+        "end_sec": 6.584,
+        "start_frame": 151,
+        "end_frame": 165,
+        "word_ids": [
+          "w_0009"
+        ],
+        "scene_uid": "scene_04",
+        "review_status": "pending",
+        "scene_number": 4
+      },
+      {
+        "segment_uid": "seg_004",
+        "text": "semplici, proporzioni",
+        "start_sec": 7.721,
+        "end_sec": 9.077,
+        "start_frame": 193,
+        "end_frame": 227,
+        "word_ids": [
+          "w_0010",
+          "w_0011"
+        ],
+        "scene_uid": "scene_05",
+        "review_status": "pending",
+        "scene_number": 5
+      },
+      {
+        "segment_uid": "seg_005",
+        "text": "giuste, niente di superfluo.",
+        "start_sec": 10.876,
+        "end_sec": 13.872,
+        "start_frame": 272,
+        "end_frame": 347,
+        "word_ids": [
+          "w_0012",
+          "w_0013",
+          "w_0014",
+          "w_0015"
+        ],
+        "scene_uid": "scene_07",
+        "review_status": "pending",
+        "scene_number": 7
+      },
+      {
+        "segment_uid": "seg_006",
+        "text": "L'identità",
+        "start_sec": 14.628,
+        "end_sec": 15.87,
+        "start_frame": 366,
+        "end_frame": 397,
+        "word_ids": [
+          "w_0016"
+        ],
+        "scene_uid": "scene_08",
+        "review_status": "pending",
+        "scene_number": 8
+      },
+      {
+        "segment_uid": "seg_007",
+        "text": "KORA si riconosce da un dettaglio.",
+        "start_sec": 16.353,
+        "end_sec": 19.449,
+        "start_frame": 409,
+        "end_frame": 486,
+        "word_ids": [
+          "w_0017",
+          "w_0018",
+          "w_0019",
+          "w_0020",
+          "w_0021",
+          "w_0022"
+        ],
+        "scene_uid": "scene_09",
+        "review_status": "pending",
+        "scene_number": 9
+      }
+    ]
+  },
+  "scenes": [
+    {
+      "scene_uid": "scene_01",
+      "scene_number": 1,
+      "start_sec": 0.0,
+      "end_sec": 1.72,
+      "start_frame": 0,
+      "end_frame": 43,
+      "asset_id": "ast_b0d8916288b1",
+      "duration_frames": 43
+    },
+    {
+      "scene_uid": "scene_02",
+      "scene_number": 2,
+      "start_sec": 1.72,
+      "end_sec": 3.48,
+      "start_frame": 43,
+      "end_frame": 87,
+      "asset_id": "ast_17ea3797864b",
+      "duration_frames": 44
+    },
+    {
+      "scene_uid": "scene_03",
+      "scene_number": 3,
+      "start_sec": 3.48,
+      "end_sec": 5.24,
+      "start_frame": 87,
+      "end_frame": 131,
+      "asset_id": "ast_573c71ed234a",
+      "duration_frames": 44
+    },
+    {
+      "scene_uid": "scene_04",
+      "scene_number": 4,
+      "start_sec": 5.24,
+      "end_sec": 6.8,
+      "start_frame": 131,
+      "end_frame": 170,
+      "asset_id": "ast_8eaaa1faa3cf",
+      "duration_frames": 39
+    },
+    {
+      "scene_uid": "scene_05",
+      "scene_number": 5,
+      "start_sec": 6.8,
+      "end_sec": 9.28,
+      "start_frame": 170,
+      "end_frame": 232,
+      "asset_id": "ast_354aee03af6f",
+      "duration_frames": 62
+    },
+    {
+      "scene_uid": "scene_06",
+      "scene_number": 6,
+      "start_sec": 9.28,
+      "end_sec": 11.68,
+      "start_frame": 232,
+      "end_frame": 292,
+      "asset_id": "ast_838acc1223f6",
+      "duration_frames": 60
+    },
+    {
+      "scene_uid": "scene_07",
+      "scene_number": 7,
+      "start_sec": 11.68,
+      "end_sec": 14.04,
+      "start_frame": 292,
+      "end_frame": 351,
+      "asset_id": "ast_f153ef8824c3",
+      "duration_frames": 59
+    },
+    {
+      "scene_uid": "scene_08",
+      "scene_number": 8,
+      "start_sec": 14.04,
+      "end_sec": 16.04,
+      "start_frame": 351,
+      "end_frame": 401,
+      "asset_id": "ast_aa2e472bf899",
+      "duration_frames": 50
+    },
+    {
+      "scene_uid": "scene_09",
+      "scene_number": 9,
+      "start_sec": 16.04,
+      "end_sec": 18.84,
+      "start_frame": 401,
+      "end_frame": 471,
+      "asset_id": "ast_d708b22649d3",
+      "duration_frames": 70
+    },
+    {
+      "scene_uid": "scene_10",
+      "scene_number": 10,
+      "start_sec": 18.84,
+      "end_sec": 19.64,
+      "start_frame": 471,
+      "end_frame": 491,
+      "asset_id": "ast_7bc3ab6c0033",
+      "duration_frames": 20
+    },
+    {
+      "scene_uid": "scene_11",
+      "scene_number": 11,
+      "start_sec": 19.64,
+      "end_sec": 21.08,
+      "start_frame": 491,
+      "end_frame": 527,
+      "asset_id": "ast_434af4a8c0e5",
+      "duration_frames": 36
+    }
+  ],
+  "caption_cues": [
+    {
+      "cue_uid": "cue_001",
+      "text": "La luce accarezza",
+      "start_sec": 0.0,
+      "end_sec": 1.72,
+      "start_frame": 0,
+      "end_frame": 43,
+      "timing_source": "estimated",
+      "words": [
+        {
+          "word": "La",
+          "start_sec": 0.0,
+          "end_sec": 0.271
+        },
+        {
+          "word": "luce",
+          "start_sec": 0.271,
+          "end_sec": 0.814
+        },
+        {
+          "word": "accarezza",
+          "start_sec": 0.814,
+          "end_sec": 2.036
+        }
+      ],
+      "scene_uid": "scene_01",
+      "scene_number": 1,
+      "clipped_to_scene": false
+    },
+    {
+      "cue_uid": "cue_002",
+      "text": "il pergolato",
+      "start_sec": 2.036,
+      "end_sec": 3.146,
+      "start_frame": 51,
+      "end_frame": 79,
+      "timing_source": "estimated",
+      "words": [
+        {
+          "word": "il",
+          "start_sec": 2.036,
+          "end_sec": 2.307
+        },
+        {
+          "word": "pergolato",
+          "start_sec": 2.307,
+          "end_sec": 3.146
+        }
+      ],
+      "scene_uid": "scene_02",
+      "scene_number": 2,
+      "clipped_to_scene": false
+    },
+    {
+      "cue_uid": "cue_003",
+      "text": "e la sabbia.",
+      "start_sec": 4.196,
+      "end_sec": 4.99,
+      "start_frame": 105,
+      "end_frame": 125,
+      "timing_source": "estimated",
+      "words": [
+        {
+          "word": "e",
+          "start_sec": 4.196,
+          "end_sec": 4.331
+        },
+        {
+          "word": "la",
+          "start_sec": 4.331,
+          "end_sec": 4.603
+        },
+        {
+          "word": "sabbia.",
+          "start_sec": 4.603,
+          "end_sec": 4.99
+        }
+      ],
+      "scene_uid": "scene_03",
+      "scene_number": 3,
+      "clipped_to_scene": false
+    },
+    {
+      "cue_uid": "cue_004",
+      "text": "Materiali",
+      "start_sec": 6.039,
+      "end_sec": 6.584,
+      "start_frame": 151,
+      "end_frame": 165,
+      "timing_source": "estimated",
+      "words": [
+        {
+          "word": "Materiali",
+          "start_sec": 6.039,
+          "end_sec": 6.584
+        }
+      ],
+      "scene_uid": "scene_04",
+      "scene_number": 4,
+      "clipped_to_scene": false
+    },
+    {
+      "cue_uid": "cue_005",
+      "text": "semplici, proporzioni",
+      "start_sec": 7.721,
+      "end_sec": 9.077,
+      "start_frame": 193,
+      "end_frame": 227,
+      "timing_source": "estimated",
+      "words": [
+        {
+          "word": "semplici,",
+          "start_sec": 7.721,
+          "end_sec": 8.942
+        },
+        {
+          "word": "proporzioni",
+          "start_sec": 8.942,
+          "end_sec": 9.077
+        }
+      ],
+      "scene_uid": "scene_05",
+      "scene_number": 5,
+      "clipped_to_scene": false
+    },
+    {
+      "cue_uid": "cue_006",
+      "text": "giuste,",
+      "start_sec": 10.876,
+      "end_sec": 11.68,
+      "start_frame": 272,
+      "end_frame": 292,
+      "timing_source": "estimated",
+      "words": [
+        {
+          "word": "giuste,",
+          "start_sec": 10.876,
+          "end_sec": 11.826
+        }
+      ],
+      "scene_uid": "scene_06",
+      "scene_number": 6,
+      "clipped_to_scene": false
+    },
+    {
+      "cue_uid": "cue_007",
+      "text": "niente di superfluo.",
+      "start_sec": 11.826,
+      "end_sec": 13.872,
+      "start_frame": 296,
+      "end_frame": 347,
+      "timing_source": "estimated",
+      "words": [
+        {
+          "word": "niente",
+          "start_sec": 11.826,
+          "end_sec": 12.64
+        },
+        {
+          "word": "di",
+          "start_sec": 12.64,
+          "end_sec": 12.911
+        },
+        {
+          "word": "superfluo.",
+          "start_sec": 12.911,
+          "end_sec": 13.872
+        }
+      ],
+      "scene_uid": "scene_07",
+      "scene_number": 7,
+      "clipped_to_scene": false
+    },
+    {
+      "cue_uid": "cue_008",
+      "text": "L'identità",
+      "start_sec": 14.628,
+      "end_sec": 15.87,
+      "start_frame": 366,
+      "end_frame": 397,
+      "timing_source": "estimated",
+      "words": [
+        {
+          "word": "L'identità",
+          "start_sec": 14.628,
+          "end_sec": 15.87
+        }
+      ],
+      "scene_uid": "scene_08",
+      "scene_number": 8,
+      "clipped_to_scene": false
+    },
+    {
+      "cue_uid": "cue_009",
+      "text": "KORA si riconosce da",
+      "start_sec": 16.353,
+      "end_sec": 18.653,
+      "start_frame": 409,
+      "end_frame": 466,
+      "timing_source": "estimated",
+      "words": [
+        {
+          "word": "KORA",
+          "start_sec": 16.353,
+          "end_sec": 16.896
+        },
+        {
+          "word": "si",
+          "start_sec": 16.896,
+          "end_sec": 17.167
+        },
+        {
+          "word": "riconosce",
+          "start_sec": 17.167,
+          "end_sec": 18.388
+        },
+        {
+          "word": "da",
+          "start_sec": 18.388,
+          "end_sec": 18.653
+        }
+      ],
+      "scene_uid": "scene_09",
+      "scene_number": 9,
+      "clipped_to_scene": false
+    },
+    {
+      "cue_uid": "cue_010",
+      "text": "un dettaglio.",
+      "start_sec": 19.082,
+      "end_sec": 19.449,
+      "start_frame": 477,
+      "end_frame": 486,
+      "timing_source": "estimated",
+      "words": [
+        {
+          "word": "un",
+          "start_sec": 19.082,
+          "end_sec": 19.353
+        },
+        {
+          "word": "dettaglio.",
+          "start_sec": 19.353,
+          "end_sec": 19.449
+        }
+      ],
+      "scene_uid": "scene_10",
+      "scene_number": 10,
+      "clipped_to_scene": false
+    }
+  ]
+}

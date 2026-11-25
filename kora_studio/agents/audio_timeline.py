@@ -217,11 +217,18 @@ def estimate_words(text: str, regions: list[SpeechRegion], fps: int, total: floa
 
 
 def words_from_asr(asr: dict[str, Any], fps: int) -> list[dict[str, Any]]:
+    """Parole lette da un risultato ASR **conservandone la provenienza**.
+
+    3.6.8 — se la parola arriva da un allineamento forzato del copione
+    (``timing_source="forced_aligned"``) non viene promossa a parola
+    riconosciuta: la fonte dichiarata dal chiamante resta quella.
+    """
     words: list[dict[str, Any]] = []
     for seg in asr.get("segments") or []:
         for word in seg.get("words") or []:
             start = float(word.get("start_sec") or seg.get("start_sec") or 0.0)
             end = float(word.get("end_sec") or start + 0.08)
+            source = str(word.get("timing_source") or "asr")
             words.append(
                 {
                     "word": str(word.get("word", "")).strip(),
@@ -231,7 +238,8 @@ def words_from_asr(asr: dict[str, Any], fps: int) -> list[dict[str, Any]]:
                     "end_frame": max(frames(start, fps) + 1, frames(max(end, start + 0.02), fps)),
                     "confidence": word.get("confidence"),
                     "speaker_id": word.get("speaker_id"),
-                    "timing_source": "asr",
+                    "timing_source": source,
+                    "recognized": source == "asr",
                 }
             )
     return [w for w in words if w["word"]]
@@ -622,49 +630,125 @@ def caption_timings_from_transcript(
 ) -> dict[int, list[dict[str, Any]]]:
     """Tempi parola per parola presi **dai segmenti della trascrizione**, non dall'indice.
 
-    Se il testo del sottotitolo coincide con il segmento (modalità «fedele alla
-    trascrizione») la corrispondenza è 1:1 e verificabile. Se diverge, il
-    sottotitolo è editoriale: viene distribuito dentro la finestra del segmento
-    e dichiarato come tale.
+    3.6.8 — una scena può contenere **più frasi**: si raccolgono tutti i segmenti
+    associati alla scena (in ordine temporale) e ogni parola conserva il tempo del
+    proprio segmento. Una frase che attraversa due scene viene divisa per parola
+    sulla scena in cui viene pronunciata. Le scene senza parlato non producono
+    sottotitoli e non inventano tempi.
+
+    Se il testo del sottotitolo coincide con i segmenti (modalità «fedele alla
+    trascrizione») la corrispondenza è 1:1 e verificabile (``mapping="exact"``).
+    Se diverge, il sottotitolo è editoriale: resta ancorato ai tempi reali delle
+    parole che copre, ma viene dichiarato ``editorial_in_segment``.
     """
     transcript = timeline.get("transcript") or {}
     segments = transcript.get("segments") or []
     words = transcript.get("words") or []
-    by_id = {str(w.get("word_id")): w for w in words}
+    by_id = {str(w.get("word_id")): w for w in words if w.get("word_id")}
+    windows: list[tuple[int, float, float]] = []
+    for sc in scenes:
+        try:
+            windows.append(
+                (
+                    int(getattr(sc, "scene_number", 0) or 0),
+                    float(getattr(sc, "start_sec", 0.0) or 0.0),
+                    float(getattr(sc, "end_sec", 0.0) or 0.0),
+                )
+            )
+        except (TypeError, ValueError):
+            continue
+
+    def owner_of(mid: float) -> Optional[int]:
+        for number, start_sec, end_sec in windows:
+            if end_sec > start_sec and start_sec - 0.02 <= mid < end_sec + 0.02:
+                return number
+        return None
+
+    def words_of(seg: dict[str, Any]) -> list[dict[str, Any]]:
+        picked = [by_id[str(wid)] for wid in (seg.get("word_ids") or []) if str(wid) in by_id]
+        if not picked:
+            seg_start = float(seg.get("start_sec") or 0.0)
+            seg_end = float(seg.get("end_sec") or 0.0)
+            picked = [
+                w
+                for w in words
+                if seg_start <= (float(w["start_sec"]) + float(w["end_sec"])) / 2 <= seg_end
+            ]
+        return sorted(picked, key=lambda w: float(w.get("start_sec") or 0.0))
+
     out: dict[int, list[dict[str, Any]]] = {}
     for scene in scenes:
         number = int(getattr(scene, "scene_number", 0) or 0)
         caption = (getattr(scene, "subtitle_text", "") or "").strip()
         if not caption:
             continue
-        seg = next((s for s in segments if int(s.get("scene_number") or 0) == number), None)
-        seg_words = [by_id[str(wid)] for wid in (seg.get("word_ids") if seg else []) if str(wid) in by_id]
-        if not seg_words and seg:
-            seg_words = [
-                w
-                for w in words
-                if float(seg["start_sec"]) <= (float(w["start_sec"]) + float(w["end_sec"])) / 2
-                <= float(seg["end_sec"])
-            ]
-        if not seg_words:
+        own = sorted(
+            [s for s in segments if int(s.get("scene_number") or 0) == number],
+            key=lambda s: float(s.get("start_sec") or 0.0),
+        )
+        selected: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for seg in own:
+            for word in words_of(seg):
+                key = str(word.get("word_id") or f"{word.get('word')}@{word.get('start_sec')}")
+                if key in seen:
+                    continue
+                mid = (float(word["start_sec"]) + float(word["end_sec"])) / 2
+                place = owner_of(mid)
+                if place is not None and place != number:
+                    # frase distribuita su più scene: questa scena prende solo le sue parole
+                    continue
+                seen.add(key)
+                selected.append(word)
+        if not selected and not own:
+            # frase distribuita su più scene: la scena prende le parole che cadono
+            # nella propria finestra, anche se il segmento è assegnato altrove
+            for word in sorted(words, key=lambda w: float(w.get("start_sec") or 0.0)):
+                key = str(word.get("word_id") or f"{word.get('word')}@{word.get('start_sec')}")
+                if key in seen:
+                    continue
+                mid = (float(word["start_sec"]) + float(word["end_sec"])) / 2
+                if owner_of(mid) != number:
+                    continue
+                seen.add(key)
+                selected.append(word)
+        if not selected:
             continue
+        combined = _norm_text(
+            " ".join(str(s.get("text") or "") for s in own)
+            or " ".join(str(w.get("word") or "") for w in selected)
+        )
+        caption_norm = _norm_text(caption)
         tokens = caption.split()
-        faithful = seg is not None and _norm_text(caption) == _norm_text(str(seg.get("text") or ""))
+        exact = bool(combined) and combined == caption_norm and len(selected) == len(tokens)
+        editorial = caption_norm != combined
         planned: list[dict[str, Any]] = []
-        for index, _token in enumerate(tokens):
-            if faithful and len(seg_words) == len(tokens):
-                word = seg_words[index]
-                source = word.get("timing_source", "estimated")
+        for index in range(len(tokens)):
+            if exact:
+                word = selected[index]
+                source = str(word.get("timing_source") or "estimated")
+                mapping = "exact"
             else:
-                mapped = int(round(index * (len(seg_words) - 1) / max(1, len(tokens) - 1)))
-                word = seg_words[max(0, min(len(seg_words) - 1, mapped))]
-                source = "editorial_in_segment"
+                span = len(selected)
+                mapped = (
+                    index
+                    if span == len(tokens)
+                    else int(round(index * (span - 1) / max(1, len(tokens) - 1)))
+                )
+                word = selected[max(0, min(span - 1, mapped))]
+                if editorial:
+                    source = "editorial_in_segment"
+                    mapping = "editorial"
+                else:
+                    source = str(word.get("timing_source") or "estimated")
+                    mapping = "proportional"
             planned.append(
                 {
                     "start_sec": float(word["start_sec"]),
                     "end_sec": float(word["end_sec"]),
                     "word_index": index,
                     "timing_source": source,
+                    "mapping": mapping,
                 }
             )
         out[number] = planned
@@ -783,19 +867,48 @@ class AudioTimelineManager:
         )
         effective = round(max(0.0, duration - float(end_padding_sec or 0.0)), 3)
 
+        # 3.6.8 — tre stati separati: allineamento dei tempi, corrispondenza del
+        # testo, grado di verifica. Una parola del copione appoggiata ai tempi ASR
+        # non è una parola riconosciuta dal parlato.
+        mismatches: list[str] = []
+        text_status = "none"
         if asr_result and (asr_result.get("segments") or asr_result.get("text")):
             words = words_from_asr(asr_result, self.fps)
-            alignment = "asr"
+            sources = {str(w.get("timing_source") or "asr") for w in words}
+            if sources == {"asr"}:
+                alignment = "asr"
+            elif "forced_aligned" in sources:
+                alignment = "forced_aligned"
+            elif sources == {"manual"}:
+                alignment = "manual"
+            else:
+                alignment = "estimated"
             engine = asr_result.get("engine")
             model = asr_result.get("model")
             transcript_text = asr_result.get("text") or " ".join(w["word"] for w in words)
-            verified = bool(words) and bool(asr_result.get("words_have_timestamps"))
+            mismatches = [str(m) for m in (asr_result.get("mismatches") or []) if str(m).strip()]
+            if alignment == "asr":
+                text_status = "recognized"
+            elif alignment == "forced_aligned":
+                text_status = "script_with_mismatches" if mismatches else "script_matched"
+            elif alignment == "manual":
+                text_status = "manual"
+            else:
+                text_status = "unknown"
+            # verified solo se OGNI parola viene dal riconoscimento del parlato
+            verified = (
+                alignment == "asr"
+                and bool(asr_result.get("words_have_timestamps"))
+                and bool(words)
+                and all(str(w.get("timing_source")) == "asr" for w in words)
+            )
         elif text and text.strip():
             words = estimate_words(text, regions, self.fps, duration)
             alignment = "estimated"
             engine = None
             model = None
             transcript_text = text.strip()
+            text_status = "from_script"
             verified = False
         else:
             words = estimate_words("", regions, self.fps, duration)
@@ -803,6 +916,7 @@ class AudioTimelineManager:
             engine = None
             model = None
             transcript_text = ""
+            text_status = "none"
             verified = False
 
         # 3.6.7 — l'offset dell'audio vale per tutto: parole, frasi, cue, caption.
@@ -876,6 +990,17 @@ class AudioTimelineManager:
             "transcript": {
                 "alignment": alignment,
                 "verified": verified,
+                "verification": {
+                    "timing_status": alignment,
+                    "text_status": text_status,
+                    "verified": verified,
+                    "words_from_asr": sum(1 for w in words if str(w.get("timing_source")) == "asr"),
+                    "words_forced_aligned": sum(
+                        1 for w in words if str(w.get("timing_source")) == "forced_aligned"
+                    ),
+                    "words_estimated": sum(1 for w in words if str(w.get("timing_source")) == "estimated"),
+                },
+                "mismatches": mismatches,
                 "engine": engine,
                 "model": model,
                 "language": language,

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# KORA Studio Light 3.6.7 — installazione facoltativa del motore di trascrizione (ASR)
+# KORA Studio Light 3.6.8 — installazione facoltativa del motore di trascrizione (ASR)
 #
 #   ./installa_asr.sh                 # chiede conferma, livello consigliato
 #   ./installa_asr.sh --livello rapido

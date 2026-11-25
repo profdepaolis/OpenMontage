@@ -1,5 +1,5 @@
 ======================================================
-  KORA STUDIO LIGHT 3.6.7 — The Art of Being
+  KORA STUDIO LIGHT 3.6.8 — The Art of Being
   Guida per chi non vuole usare il terminale
 ======================================================
 
@@ -41,6 +41,21 @@ Cosa c'è di nuovo nella 3.6.7 (sincronizzazione completa)
   corrispondenza per indice.
 - Il pacchetto include la suite di test (./verifica_test.sh) e
   diagnostica_sync.sh: i risultati sono riproducibili.
+
+Cosa c'è di nuovo nella 3.6.8 (correzione della sincronizzazione)
+----------------------------------------------------------------
+- «Allinea un copione» ora trascrive davvero l'audio e confronta le parole
+  riconosciute con il copione: i tempi arrivano dalla voce, non da una
+  distribuzione uniforme. Le parole del copione che non sono state pronunciate
+  vengono mostrate come discordanze.
+- Se il motore di trascrizione non è installato, KORA lo dice e dichiara i
+  tempi come stimati: non chiama più «allineamento» una stima.
+- Una scena può contenere più frasi: i sottotitoli seguono ciascuna frase con
+  i propri tempi (una seconda frase non finisce più nei tempi della prima).
+- Lo stato «verificato» è riservato alle parole realmente riconosciute: un
+  copione allineato risulta «copione allineato ai tempi della voce», non
+  «trascritto».
+- ./verifica_test.sh --veloce esegue solo i test di sincronizzazione.
 
 Cosa c'era di nuovo nella 3.6.6 (sincronizzazione)
 --------------------------------------------------
@@ -183,7 +198,7 @@ o va in timeout), esegui:
     ./diagnostica_ai.sh
 
 Lo script mostra provider e modello realmente attivi, esegue un test reale e
-indica cosa correggere. Dettagli: docs/KORA_3.6.1_RIPRISTINO_AI.md e docs/KORA_3.6.7_ALLINEAMENTO.md, docs/KORA_3.6.6_SINCRONIZZAZIONE.md, docs/KORA_3.6.4_SOTTOTITOLI.md, docs/KORA_3.6.3_RENDER_ROBUSTO.md e docs/KORA_3.6.2_RESTAURO_AUDIOVISIVO.md
+indica cosa correggere. Dettagli: docs/KORA_3.6.1_RIPRISTINO_AI.md e docs/KORA_3.6.8_SINCRONIZZAZIONE_REGRESSIONI.md, docs/KORA_3.6.7_ALLINEAMENTO.md, docs/KORA_3.6.6_SINCRONIZZAZIONE.md, docs/KORA_3.6.4_SOTTOTITOLI.md, docs/KORA_3.6.3_RENDER_ROBUSTO.md e docs/KORA_3.6.2_RESTAURO_AUDIOVISIVO.md
 
 AGGIORNAMENTO IN UN COMANDO (terminale)
 ---------------------------------------
@@ -194,11 +209,11 @@ release). Apri Terminale lì e incolla:
 
 Se hai già scaricato il pacchetto a mano, indica il file:
 
-  bash aggiorna_kora.sh --da-zip ~/Downloads/KORA_Studio_Light_3.6.7_installer.zip
+  bash aggiorna_kora.sh --da-zip ~/Downloads/KORA_Studio_Light_3.6.8_installer.zip
 
 Fa backup, ferma il server, aggiorna solo l'applicazione (kora_data non viene
 toccata), esegue setup e verifica, riavvia KORA e lancia la diagnostica AI.
-Aggiorna alla 3.6.7 (sincronizzazione completa).
+Aggiorna alla 3.6.8 (correzione della sincronizzazione).
 Se il download dal browser non parte: scarica aggiorna_kora.sh e lancia
   bash ~/Downloads/aggiorna_kora.sh
 Opzioni: --cartella DIR · --da-zip FILE · --porta 8021 · --no-avvio · --solo-verifica

@@ -1,4 +1,4 @@
-# Installazione tecnica — KORA STUDIO LIGHT 3.6.7
+# Installazione tecnica — KORA STUDIO LIGHT 3.6.8
 
 Documento per chi vuole capire cosa fa il doppio clic, o riparare un guasto.
 Per l'uso normale basta `LEGGIMI.txt`.
@@ -70,7 +70,21 @@ download fallito gestito con messaggio e rimedio, `--solo-verifica` senza modifi
 Installa solo dentro `.venv` di KORA, nessun servizio cloud, nessun costo.
 Se non lo installi, KORA non inventa la trascrizione: usa il copione o la stima.
 
-## 1b. Sincronizzazione voce/scene/sottotitoli (3.6.6 → 3.6.7)
+## 1a-bis. Cosa è cambiato nella 3.6.8 (correzione)
+
+- `mode="script"` (Allinea un copione) ora **trascrive** l'audio e allinea il
+  copione ai tempi riconosciuti; le parole non riconosciute sono elencate
+  (`mismatches`) e mostrate nel pannello.
+- Senza motore ASR la modalità copione dichiara `alignment="estimated"`: non
+  viene più presentata una distribuzione proporzionale come allineamento.
+- `caption_timings_from_transcript()` usa **tutti** i segmenti della scena.
+- `verified=True` solo con parole provenienti dall'ASR; un copione allineato ha
+  `alignment="forced_aligned"`, `verified=false`, `verification.*` distinti.
+- `./verifica_test.sh --veloce` esegue solo i test di sincronizzazione.
+
+Dettagli e prove: `docs/KORA_3.6.8_SINCRONIZZAZIONE_REGRESSIONI.md`.
+
+## 1b. Sincronizzazione voce/scene/sottotitoli (3.6.6 → 3.6.8)
 
 La timeline canonica sta in `kora_data/projects/<id>/project_timeline.json`.
 Diagnostica rapida:

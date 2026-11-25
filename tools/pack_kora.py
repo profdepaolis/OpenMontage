@@ -50,6 +50,8 @@ TOP_FILES = [
 ]
 
 REQUIRED = [
+    "tests/kora_studio/test_v368_sync_regression.py",
+    "docs/KORA_3.6.8_SINCRONIZZAZIONE_REGRESSIONI.md",
     "diagnostica_sync.sh",
     "installa_asr.sh",
     "verifica_test.sh",

@@ -1,0 +1,151 @@
+{
+  "asr": {
+    "available": false,
+    "engines": [],
+    "preferred": null,
+    "levels": [
+      {
+        "id": "rapido",
+        "label": "Rapido"
+      },
+      {
+        "id": "bilanciato",
+        "label": "Bilanciato"
+      },
+      {
+        "id": "accurato",
+        "label": "Accurato"
+      }
+    ],
+    "message": "Nessun motore ASR installato (faster-whisper o whisper). KORA non inventa la trascrizione: incolla il copione o correggi il testo a mano.",
+    "install_hint": "pip install faster-whisper  # oppure: pip install openai-whisper"
+  },
+  "percorsi": [
+    {
+      "percorso": "A · MP3 + copione",
+      "project_id": "prj_5bc67a900c",
+      "mp3": "/home/user/OpenMontage/assets/kora/voices/voce_brando.mp3",
+      "copione": "La luce accarezza il pergolato e la sabbia. Materiali semplici, proporzioni giuste, niente di superfluo. L'identità KORA si riconosce da un dettaglio.",
+      "mode": "script",
+      "alignment_after_rebuild": "estimated",
+      "verified": false,
+      "verification": {
+        "timing_status": "estimated",
+        "text_status": "from_script",
+        "verified": false,
+        "words_from_asr": 0,
+        "words_forced_aligned": 0,
+        "words_estimated": 22
+      },
+      "mismatches": [],
+      "asr_note": "ASR non disponibile: tempi stimati dentro le pause misurate, nessun allineamento forzato (Nessun motore di trascrizione installato: impossibile ricavare le parole pronunciate. Inserisci il copione o correggi il testo a mano.)",
+      "production": {
+        "job_state": "Completato",
+        "project_keys": [
+          "job",
+          "project"
+        ]
+      },
+      "mp4": "/tmp/acc368/reels/prj_5bc67a900c_prj_5bc67a900c_reel_final.mp4",
+      "mp4_bytes": 7634103,
+      "mp4_duration_sec": 21.08,
+      "fps": 25.0,
+      "video_frames": 527,
+      "has_audio_stream": true,
+      "resolution": "1080x1920",
+      "timeline": {
+        "alignment": "estimated",
+        "verified": false,
+        "words": 22,
+        "segments": 7,
+        "cues": 10,
+        "audio_end_sec": 21.081,
+        "total_frames": 527
+      },
+      "cues_oltre_la_voce": 0,
+      "srt_cues": 10,
+      "srt_coerente_con_timeline": true,
+      "srt_prime_righe": [
+        "La luce accarezza",
+        "il pergolato",
+        "e la sabbia."
+      ],
+      "artefatti": {
+        "srt": [
+          "/tmp/acc368/data/exports/prj_5bc67a900c/prj_5bc67a900c_sottotitoli.srt"
+        ],
+        "vtt": [
+          "/tmp/acc368/data/exports/prj_5bc67a900c/prj_5bc67a900c_sottotitoli.vtt"
+        ],
+        "transcript": [
+          "/tmp/acc368/data/exports/prj_5bc67a900c/prj_5bc67a900c_transcript.json"
+        ],
+        "timeline": [
+          "/tmp/acc368/data/exports/prj_5bc67a900c/prj_5bc67a900c_timeline.json"
+        ]
+      }
+    },
+    {
+      "percorso": "B · MP3 senza copione",
+      "project_id": "prj_664458e953",
+      "mp3": "/home/user/OpenMontage/assets/kora/voices/voce_tiziana.mp3",
+      "mode": "asr",
+      "alignment_after_rebuild": "none",
+      "verified": false,
+      "trigger_asr": "ASR non disponibile: Nessun motore di trascrizione installato: impossibile ricavare le parole pronunciate. Inserisci il copione o correggi il testo a mano.",
+      "production": {
+        "job_state": "Completato",
+        "project_keys": [
+          "job",
+          "project"
+        ]
+      },
+      "mp4": "/tmp/acc368/reels/prj_664458e953_prj_664458e953_reel_final.mp4",
+      "mp4_bytes": 7952414,
+      "mp4_duration_sec": 22.04,
+      "fps": 25.0,
+      "video_frames": 551,
+      "has_audio_stream": true,
+      "resolution": "1080x1920",
+      "timeline": {
+        "alignment": "none",
+        "verified": false,
+        "words": 0,
+        "segments": 0,
+        "cues": 0,
+        "audio_end_sec": 22.047,
+        "total_frames": 551
+      },
+      "cues_oltre_la_voce": 0,
+      "srt_cues": 0,
+      "srt_coerente_con_timeline": true,
+      "srt_prime_righe": [],
+      "artefatti": {
+        "srt": [
+          "/tmp/acc368/data/exports/prj_664458e953/prj_664458e953_sottotitoli.srt"
+        ],
+        "vtt": [
+          "/tmp/acc368/data/exports/prj_664458e953/prj_664458e953_sottotitoli.vtt"
+        ],
+        "transcript": [
+          "/tmp/acc368/data/exports/prj_664458e953/prj_664458e953_transcript.json"
+        ],
+        "timeline": [
+          "/tmp/acc368/data/exports/prj_664458e953/prj_664458e953_timeline.json"
+        ]
+      }
+    }
+  ],
+  "verifiche": [
+    {
+      "percorso": "A · MP3 + copione",
+      "audio_completo": true,
+      "cue_coerenti": true
+    },
+    {
+      "percorso": "B · MP3 senza copione",
+      "audio_completo": true,
+      "cue_coerenti": true
+    }
+  ]
+}
