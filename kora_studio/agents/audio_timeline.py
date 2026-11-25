@@ -1182,3 +1182,50 @@ def cues_to_ass(cues: Iterable[dict[str, Any]], *, font: str = "Playfair Display
             f"Dialogue: 0,{_ass_time(cue['start_sec'])},{_ass_time(cue['end_sec'])},KORA,,0,0,0,,{text}"
         )
     return header + "\n".join(lines) + "\n"
+
+
+def editorial_caption_cues(
+    scenes: list[Any],
+    *,
+    fps: int,
+    pad_sec: float = 0.12,
+) -> list[dict[str, Any]]:
+    """Cue dei sottotitoli **editoriali** (3.6.9): il testo è quello scritto dall'utente.
+
+    I tempi delle parole non esistono — l'utente ha scritto una sintesi, non la
+    trascrizione — quindi vengono distribuiti dentro la finestra della scena e
+    dichiarati per quello che sono: ``timing_source="editorial"``. Nessun cue
+    inventa parole che l'utente non ha scritto.
+    """
+    cues: list[dict[str, Any]] = []
+    for scene in scenes:
+        text = (getattr(scene, "subtitle_text", "") or "").strip()
+        if not text:
+            continue
+        words = [w for w in text.split() if w]
+        if not words:
+            continue
+        start = float(getattr(scene, "start_sec", 0.0) or 0.0) + pad_sec
+        end = float(getattr(scene, "end_sec", 0.0) or 0.0) - pad_sec
+        if end - start < 0.3:
+            start = float(getattr(scene, "start_sec", 0.0) or 0.0)
+            end = max(start + 0.3, float(getattr(scene, "end_sec", 0.0) or 0.0))
+        slot = (end - start) / len(words)
+        synthetic = [
+            {
+                "word": word,
+                "start_sec": _round(start + index * slot),
+                "end_sec": _round(start + (index + 1) * slot),
+                "timing_source": "editorial",
+            }
+            for index, word in enumerate(words)
+        ]
+        for cue in build_cues(synthetic, fps=fps, max_words=7, max_duration_sec=2.8, pause_sec=0.35):
+            cue["scene_number"] = int(getattr(scene, "scene_number", 0) or 0)
+            cue["scene_uid"] = str(getattr(scene, "scene_uid", "") or "")
+            cue["timing_source"] = "editorial"
+            cue["mapping"] = "editorial"
+            cues.append(cue)
+    for index, cue in enumerate(sorted(cues, key=lambda c: float(c["start_sec"])), start=1):
+        cue["cue_uid"] = f"cue_{index:03d}"
+    return cues

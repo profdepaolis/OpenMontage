@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# KORA Studio Light 3.6.8 — esegue la suite di test dentro l'ambiente di KORA
+# KORA Studio Light 3.6.9 — esegue la suite di test dentro l'ambiente di KORA
 #
 #   ./verifica_test.sh            # suite completa (15-20 min)
 #   ./verifica_test.sh -k timeline   # solo i test che contengono "timeline"
@@ -23,8 +23,9 @@ if [ "${1:-}" = "--veloce" ]; then
     "tests/kora_studio/test_v366_audio_timeline.py"
     "tests/kora_studio/test_v367_speech_sync.py"
     "tests/kora_studio/test_v368_sync_regression.py"
+    "tests/kora_studio/test_v369_editorial_captions.py"
   )
-  echo "Modalità veloce: solo i test di sincronizzazione (3.6.6 / 3.6.7 / 3.6.8)."
+  echo "Modalità veloce: solo i test di sincronizzazione (3.6.6 / 3.6.7 / 3.6.8 / 3.6.9)."
 fi
 if [ "$#" -gt 0 ]; then
   # argomenti extra (es. -k parola) passano a pytest; percorsi espliciti sostituiscono i target

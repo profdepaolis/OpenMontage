@@ -1,0 +1,272 @@
+{
+  "project_id": "prj_6de272f4a3",
+  "title": "L'aperitivo senza fretta — Ospitalità Misurata",
+  "preset": "KORA Experience",
+  "spec": {
+    "format": "MP4",
+    "video_codec": "H.264 (libx264)",
+    "resolution": "1080x1920",
+    "aspect_ratio": "9:16",
+    "fps": 25,
+    "audio_codec": "AAC 48kHz Stereo",
+    "color_space": "Rec.709 (bt709)",
+    "total_frames": 527,
+    "duration_sec": 21.08
+  },
+  "qc": {
+    "passed": true,
+    "needs_human_review": true,
+    "human_review_reasons": [
+      "Sottotitoli editoriali alle scene 1, 2, 3: testo diverso dalla voce per scelta dichiarata.",
+      "Sincronizzazione non verificata: Tempi stimati dentro le pause misurate (nessun motore ASR o testo corretto a mano): la sincronizzazione è dichiarata, non verificata."
+    ],
+    "checks": [
+      {
+        "category": "technical",
+        "name": "File decodificabile e dimensioni valide",
+        "passed": true,
+        "severity": "error",
+        "detail": "Dimensione 6.61 MB",
+        "requires_human_review": false,
+        "status": "superato"
+      },
+      {
+        "category": "technical",
+        "name": "Durata esatta",
+        "passed": true,
+        "severity": "error",
+        "detail": "Attesa 21.08s, rilevata 21.08s",
+        "requires_human_review": false,
+        "status": "superato"
+      },
+      {
+        "category": "technical",
+        "name": "Risoluzione 1080x1920 (9:16)",
+        "passed": true,
+        "severity": "error",
+        "detail": "1080x1920",
+        "requires_human_review": false,
+        "status": "superato"
+      },
+      {
+        "category": "technical",
+        "name": "Frame rate 25 fps",
+        "passed": true,
+        "severity": "error",
+        "detail": "25.0 fps",
+        "requires_human_review": false,
+        "status": "superato"
+      },
+      {
+        "category": "technical",
+        "name": "Codec video H.264 compatibile",
+        "passed": true,
+        "severity": "error",
+        "detail": "h264",
+        "requires_human_review": false,
+        "status": "superato"
+      },
+      {
+        "category": "technical",
+        "name": "Audio AAC presente",
+        "passed": true,
+        "severity": "error",
+        "detail": "aac",
+        "requires_human_review": false,
+        "status": "superato"
+      },
+      {
+        "category": "technical",
+        "name": "Nessun clipping audio",
+        "passed": true,
+        "severity": "error",
+        "detail": "Picco massimo -1.6 dB, media -17.1 dB",
+        "requires_human_review": false,
+        "status": "superato"
+      },
+      {
+        "category": "technical",
+        "name": "Loudness del master (−14 LUFS, picco ≤ −1 dBTP)",
+        "passed": true,
+        "severity": "warning",
+        "detail": "-14.6 LUFS integrato, true peak -1.5 dBTP",
+        "requires_human_review": false,
+        "status": "superato"
+      },
+      {
+        "category": "technical",
+        "name": "Decodifica completa del video (zero pacchetti corrotti)",
+        "passed": true,
+        "severity": "error",
+        "detail": "Tutti i frame decodificati senza errori",
+        "requires_human_review": false,
+        "status": "superato"
+      },
+      {
+        "category": "technical",
+        "name": "Verifica esatta dei fotogrammi",
+        "passed": true,
+        "severity": "error",
+        "detail": "Attesi 527 frame (21.1 s @ 25 fps), contati 527 frame (nb_read_frames)",
+        "requires_human_review": false,
+        "status": "superato"
+      },
+      {
+        "category": "technical",
+        "name": "Nessun frame nero indesiderato nelle scene",
+        "passed": true,
+        "severity": "error",
+        "detail": "Nessun nero anomalo rilevato",
+        "requires_human_review": false,
+        "status": "superato"
+      },
+      {
+        "category": "visual",
+        "name": "Integrità asset e logo originale",
+        "passed": true,
+        "severity": "error",
+        "detail": "Tutti gli asset e il logo originale verificati",
+        "requires_human_review": false,
+        "status": "superato"
+      },
+      {
+        "category": "visual",
+        "name": "Coerenza architettura, arredi e autenticità KORA",
+        "passed": true,
+        "severity": "info",
+        "detail": "Materiali 100% autentici/conservativi",
+        "requires_human_review": false,
+        "status": "superato"
+      },
+      {
+        "category": "narrative",
+        "name": "Identità narrativa KORA e continuità",
+        "passed": true,
+        "severity": "error",
+        "detail": "Tono evocativo e identità KORA coerenti",
+        "requires_human_review": false,
+        "status": "superato"
+      },
+      {
+        "category": "narrative",
+        "name": "Coerenza tra voiceover e sottotitoli",
+        "passed": true,
+        "severity": "warning",
+        "detail": "Sottotitoli editoriali dichiarati (scene 1, 2, 3): non sono la trascrizione letterale della voce, sono una sintesi creativa. Per sottotitoli fedeli: Storyboard → Trascrizione & Sincronizzazione → Testo dei sottotitoli: «Fedeli alla trascrizione approvata».",
+        "requires_human_review": true,
+        "status": "superato"
+      },
+      {
+        "category": "technical",
+        "name": "Voce non tagliata (inizio e fine conservati)",
+        "passed": true,
+        "severity": "error",
+        "detail": "Voce 0.00s → 21.08s su 21.08s di Reel",
+        "requires_human_review": false,
+        "status": "superato"
+      },
+      {
+        "category": "narrative",
+        "name": "Sincronizzazione audio, scene e sottotitoli",
+        "passed": true,
+        "severity": "warning",
+        "detail": "Timeline: 23 parole, 11 cue, allineamento «estimated». Tempi stimati dentro le pause misurate (nessun motore ASR o testo corretto a mano): la sincronizzazione è dichiarata, non verificata.",
+        "requires_human_review": true,
+        "status": "superato"
+      },
+      {
+        "category": "narrative",
+        "name": "Sottotitoli coerenti con la revisione del transcript",
+        "passed": true,
+        "severity": "warning",
+        "detail": "0 cue fedeli alla trascrizione, 11 editoriali dichiarati",
+        "requires_human_review": true,
+        "status": "superato"
+      },
+      {
+        "category": "narrative",
+        "name": "Trascrizione verificata sulle parole pronunciate",
+        "passed": false,
+        "severity": "warning",
+        "detail": "Tempi stimati dentro le pause misurate (nessun motore ASR): i sottotitoli sono coerenti con il testo, non trascritti dalla voce.",
+        "requires_human_review": true,
+        "status": "non_verificato"
+      },
+      {
+        "category": "narrative",
+        "name": "Nessuna parola del copione spacciata per riconosciuta",
+        "passed": true,
+        "severity": "error",
+        "detail": "Ogni parola dichiara la propria origine (0 da ASR, 0 allineate dal copione, 23 stimate)",
+        "requires_human_review": false,
+        "status": "superato"
+      },
+      {
+        "category": "narrative",
+        "name": "Validità temporale delle informazioni promozionali",
+        "passed": true,
+        "severity": "error",
+        "detail": "Nessun riferimento temporale scaduto o promozionale improprio",
+        "requires_human_review": false,
+        "status": "superato"
+      },
+      {
+        "category": "visual",
+        "name": "Logo originale e payoff esatto 'The Art of Being'",
+        "passed": true,
+        "severity": "error",
+        "detail": "Logo originale KORA e payoff verificati in chiusura",
+        "requires_human_review": false,
+        "status": "superato"
+      },
+      {
+        "category": "narrative",
+        "name": "Sottotitoli sincronizzati e non tagliati",
+        "passed": true,
+        "severity": "error",
+        "detail": "Nessun voiceover in questo Reel: sincronizzazione non applicabile",
+        "requires_human_review": false,
+        "status": "non_applicabile"
+      }
+    ],
+    "metrics": {
+      "file_size_mb": 6.61,
+      "actual_duration_sec": 21.08,
+      "expected_duration_sec": 21.08,
+      "width": 1080,
+      "height": 1920,
+      "fps": 25.0,
+      "video_codec": "h264",
+      "audio_codec": "aac",
+      "max_volume_db": -1.6,
+      "mean_volume_db": -17.1,
+      "lufs": -14.61,
+      "true_peak_db": -1.5,
+      "expected_frames": 527,
+      "actual_frames": 527,
+      "qc_sample_size": [
+        1080,
+        1920
+      ],
+      "qc_status_counts": {
+        "superato": 21,
+        "non_verificato": 1,
+        "non_applicabile": 1
+      }
+    }
+  },
+  "files": {
+    "reel_mp4": "/tmp/acc369/data/exports/prj_6de272f4a3/prj_6de272f4a3_reel_final.mp4",
+    "cover_png": "/tmp/acc369/data/exports/prj_6de272f4a3/prj_6de272f4a3_copertina.png",
+    "caption_txt": "/tmp/acc369/data/exports/prj_6de272f4a3/prj_6de272f4a3_caption_instagram.txt",
+    "no_subtitles_mp4": null,
+    "no_music_mp4": null,
+    "editable_project_json": "/tmp/acc369/data/exports/prj_6de272f4a3/prj_6de272f4a3_progetto_modificabile.json",
+    "cues_json": "/tmp/acc369/data/exports/prj_6de272f4a3/prj_6de272f4a3_cues.json",
+    "srt": "/tmp/acc369/data/exports/prj_6de272f4a3/prj_6de272f4a3_sottotitoli.srt",
+    "vtt": "/tmp/acc369/data/exports/prj_6de272f4a3/prj_6de272f4a3_sottotitoli.vtt",
+    "ass": "/tmp/acc369/data/exports/prj_6de272f4a3/prj_6de272f4a3_sottotitoli.ass",
+    "timeline_json": "/tmp/acc369/data/exports/prj_6de272f4a3/prj_6de272f4a3_timeline.json",
+    "transcript_json": "/tmp/acc369/data/exports/prj_6de272f4a3/prj_6de272f4a3_transcript.json"
+  }
+}

@@ -1,4 +1,4 @@
-# Installazione tecnica — KORA STUDIO LIGHT 3.6.8
+# Installazione tecnica — KORA STUDIO LIGHT 3.6.9
 
 Documento per chi vuole capire cosa fa il doppio clic, o riparare un guasto.
 Per l'uso normale basta `LEGGIMI.txt`.
@@ -84,7 +84,30 @@ Se non lo installi, KORA non inventa la trascrizione: usa il copione o la stima.
 
 Dettagli e prove: `docs/KORA_3.6.8_SINCRONIZZAZIONE_REGRESSIONI.md`.
 
-## 1b. Sincronizzazione voce/scene/sottotitoli (3.6.6 → 3.6.8)
+## 1a-ter. Cosa è cambiato nella 3.6.9 (sottotitoli editoriali)
+
+Caso reale: voce «Nel tardo pomeriggio d'autunno, la luce si abbassa…», sottotitolo
+creativo «Il pomeriggio rallenta.». La produzione si fermava con «Testo e sottotitoli
+raccontano cose diverse» e nessuna via d'uscita visibile.
+
+- Un sottotitolo **dichiarato editoriale** non è più un errore bloccante: il controllo
+  diventa un avviso esplicito («non sono la trascrizione letterale») e il Reel si
+  esporta con revisione umana segnalata.
+- Il comportamento predefinito resta severo: finché il progetto non dichiara
+  `caption_source = editorial`, un testo diverso dal parlato **blocca**.
+- Il messaggio di blocco indica **due** rimedi (Allinea sottotitoli al testo /
+  Editoriali sintetici) e separa gli avvisi non bloccanti dalla causa reale.
+- Dalla pagina **Produzione**, riquadro d'errore: due pulsanti risolvono il caso
+  senza cercare altre schermate.
+- La dichiarazione si imposta anche in **Sincronizzazione** (menu «Testo dei
+  sottotitoli») o via API:
+
+      curl -s -X POST http://127.0.0.1:8020/api/projects/ID/timeline/rebuild \
+        -H 'Content-Type: application/json' -d '{"caption_source": "editorial"}'
+
+Dettagli e prove: `docs/KORA_3.6.9_SOTTOTITOLI_EDITORIALI.md`.
+
+## 1b. Sincronizzazione voce/scene/sottotitoli (3.6.6 → 3.6.9)
 
 La timeline canonica sta in `kora_data/projects/<id>/project_timeline.json`.
 Diagnostica rapida:

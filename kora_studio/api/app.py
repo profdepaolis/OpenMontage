@@ -457,7 +457,7 @@ def create_app(db_path: Optional[Path] = None, auto_seed: bool = True) -> FastAP
         except Exception as exc:  # pragma: no cover
             _log_error(exc, "refresh_palette_from_vault")
 
-    app = FastAPI(title="KORA STUDIO", version="3.6.8")
+    app = FastAPI(title="KORA STUDIO", version="3.6.9")
 
     def _v35(fn: Any) -> Any:
         """Errori v3.5 tradotti in risposte parlanti: 404 scena, 400 richiesta, 409 blocco."""

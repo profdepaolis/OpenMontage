@@ -1,0 +1,291 @@
+[
+  {
+    "cue_uid": "cue_001",
+    "text": "Il pomeriggio",
+    "start_sec": 0.12,
+    "end_sec": 2.28,
+    "start_frame": 3,
+    "end_frame": 57,
+    "timing_source": "editorial",
+    "words": [
+      {
+        "word": "Il",
+        "start_sec": 0.12,
+        "end_sec": 1.2
+      },
+      {
+        "word": "pomeriggio",
+        "start_sec": 1.2,
+        "end_sec": 2.28
+      }
+    ],
+    "scene_number": 1,
+    "scene_uid": "sc_514d60ad7a",
+    "mapping": "editorial"
+  },
+  {
+    "cue_uid": "cue_002",
+    "text": "rallenta.",
+    "start_sec": 2.28,
+    "end_sec": 3.36,
+    "start_frame": 57,
+    "end_frame": 84,
+    "timing_source": "editorial",
+    "words": [
+      {
+        "word": "rallenta.",
+        "start_sec": 2.28,
+        "end_sec": 3.36
+      }
+    ],
+    "scene_number": 1,
+    "scene_uid": "sc_514d60ad7a",
+    "mapping": "editorial"
+  },
+  {
+    "cue_uid": "cue_003",
+    "text": "Ombre lunghe.",
+    "start_sec": 3.6,
+    "end_sec": 5.12,
+    "start_frame": 90,
+    "end_frame": 128,
+    "timing_source": "editorial",
+    "words": [
+      {
+        "word": "Ombre",
+        "start_sec": 3.6,
+        "end_sec": 4.36
+      },
+      {
+        "word": "lunghe.",
+        "start_sec": 4.36,
+        "end_sec": 5.12
+      }
+    ],
+    "scene_number": 2,
+    "scene_uid": "sc_30228dc228",
+    "mapping": "editorial"
+  },
+  {
+    "cue_uid": "cue_004",
+    "text": "Un bicchiere, il silenzio.",
+    "start_sec": 5.36,
+    "end_sec": 6.68,
+    "start_frame": 134,
+    "end_frame": 167,
+    "timing_source": "editorial",
+    "words": [
+      {
+        "word": "Un",
+        "start_sec": 5.36,
+        "end_sec": 5.69
+      },
+      {
+        "word": "bicchiere,",
+        "start_sec": 5.69,
+        "end_sec": 6.02
+      },
+      {
+        "word": "il",
+        "start_sec": 6.02,
+        "end_sec": 6.35
+      },
+      {
+        "word": "silenzio.",
+        "start_sec": 6.35,
+        "end_sec": 6.68
+      }
+    ],
+    "scene_number": 3,
+    "scene_uid": "sc_3656d5c391",
+    "mapping": "editorial"
+  },
+  {
+    "cue_uid": "cue_005",
+    "text": "e le ombre",
+    "start_sec": 6.92,
+    "end_sec": 9.253,
+    "start_frame": 173,
+    "end_frame": 231,
+    "timing_source": "editorial",
+    "words": [
+      {
+        "word": "e",
+        "start_sec": 6.92,
+        "end_sec": 7.698
+      },
+      {
+        "word": "le",
+        "start_sec": 7.698,
+        "end_sec": 8.476
+      },
+      {
+        "word": "ombre",
+        "start_sec": 8.476,
+        "end_sec": 9.253
+      }
+    ],
+    "scene_number": 4,
+    "scene_uid": "sc_77786b0284",
+    "mapping": "editorial"
+  },
+  {
+    "cue_uid": "cue_006",
+    "text": "si allungano sul",
+    "start_sec": 9.253,
+    "end_sec": 11.587,
+    "start_frame": 231,
+    "end_frame": 290,
+    "timing_source": "editorial",
+    "words": [
+      {
+        "word": "si",
+        "start_sec": 9.253,
+        "end_sec": 10.031
+      },
+      {
+        "word": "allungano",
+        "start_sec": 10.031,
+        "end_sec": 10.809
+      },
+      {
+        "word": "sul",
+        "start_sec": 10.809,
+        "end_sec": 11.587
+      }
+    ],
+    "scene_number": 4,
+    "scene_uid": "sc_77786b0284",
+    "mapping": "editorial"
+  },
+  {
+    "cue_uid": "cue_007",
+    "text": "pergolato.",
+    "start_sec": 11.587,
+    "end_sec": 12.364,
+    "start_frame": 290,
+    "end_frame": 309,
+    "timing_source": "editorial",
+    "words": [
+      {
+        "word": "pergolato.",
+        "start_sec": 11.587,
+        "end_sec": 12.364
+      }
+    ],
+    "scene_number": 4,
+    "scene_uid": "sc_77786b0284",
+    "mapping": "editorial"
+  },
+  {
+    "cue_uid": "cue_008",
+    "text": "Il bicchiere",
+    "start_sec": 12.364,
+    "end_sec": 13.92,
+    "start_frame": 309,
+    "end_frame": 348,
+    "timing_source": "editorial",
+    "words": [
+      {
+        "word": "Il",
+        "start_sec": 12.364,
+        "end_sec": 13.142
+      },
+      {
+        "word": "bicchiere",
+        "start_sec": 13.142,
+        "end_sec": 13.92
+      }
+    ],
+    "scene_number": 4,
+    "scene_uid": "sc_77786b0284",
+    "mapping": "editorial"
+  },
+  {
+    "cue_uid": "cue_009",
+    "text": "resta",
+    "start_sec": 14.16,
+    "end_sec": 15.92,
+    "start_frame": 354,
+    "end_frame": 398,
+    "timing_source": "editorial",
+    "words": [
+      {
+        "word": "resta",
+        "start_sec": 14.16,
+        "end_sec": 15.92
+      }
+    ],
+    "scene_number": 5,
+    "scene_uid": "sc_651cc52cf3",
+    "mapping": "editorial"
+  },
+  {
+    "cue_uid": "cue_010",
+    "text": "sul tavolo, il tempo",
+    "start_sec": 16.16,
+    "end_sec": 18.72,
+    "start_frame": 404,
+    "end_frame": 468,
+    "timing_source": "editorial",
+    "words": [
+      {
+        "word": "sul",
+        "start_sec": 16.16,
+        "end_sec": 16.8
+      },
+      {
+        "word": "tavolo,",
+        "start_sec": 16.8,
+        "end_sec": 17.44
+      },
+      {
+        "word": "il",
+        "start_sec": 17.44,
+        "end_sec": 18.08
+      },
+      {
+        "word": "tempo",
+        "start_sec": 18.08,
+        "end_sec": 18.72
+      }
+    ],
+    "scene_number": 6,
+    "scene_uid": "sc_bdc9d19b27",
+    "mapping": "editorial"
+  },
+  {
+    "cue_uid": "cue_011",
+    "text": "The Art of Being",
+    "start_sec": 18.96,
+    "end_sec": 20.96,
+    "start_frame": 474,
+    "end_frame": 524,
+    "timing_source": "editorial",
+    "words": [
+      {
+        "word": "The",
+        "start_sec": 18.96,
+        "end_sec": 19.46
+      },
+      {
+        "word": "Art",
+        "start_sec": 19.46,
+        "end_sec": 19.96
+      },
+      {
+        "word": "of",
+        "start_sec": 19.96,
+        "end_sec": 20.46
+      },
+      {
+        "word": "Being",
+        "start_sec": 20.46,
+        "end_sec": 20.96
+      }
+    ],
+    "scene_number": 7,
+    "scene_uid": "sc_340288224b",
+    "mapping": "editorial"
+  }
+]

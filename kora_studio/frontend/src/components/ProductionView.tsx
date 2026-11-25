@@ -43,6 +43,46 @@ export function ProductionView({
     onRefresh();
   };
 
+  // 3.6.9 — i due rimedi al blocco «testo e sottotitoli diversi», senza uscire dalla pagina
+  const [fixBusy, setFixBusy] = React.useState<string | null>(null);
+  const [fixMsg, setFixMsg] = React.useState<string | null>(null);
+
+  const alignSubsToText = async () => {
+    if (!job) return;
+    setFixBusy("align");
+    setFixMsg(null);
+    try {
+      const res = await koraApi.alignCaptions(job.project_id);
+      setFixMsg(
+        res.updated_scenes.length
+          ? `Sottotitoli allineati al testo nelle scene ${res.updated_scenes.join(", ")}. Premi «Riprova».`
+          : "Nessuna scena da riallineare: i sottotitoli coincidono già con il testo."
+      );
+      onRefresh();
+    } catch (err) {
+      setFixMsg(err instanceof Error ? err.message : "Riallineamento non riuscito.");
+    } finally {
+      setFixBusy(null);
+    }
+  };
+
+  const declareEditorial = async () => {
+    if (!job) return;
+    setFixBusy("editorial");
+    setFixMsg(null);
+    try {
+      await koraApi.rebuildTimeline(job.project_id, { caption_source: "editorial" });
+      setFixMsg(
+        "Sottotitoli dichiarati editoriali: non saranno più presentati come trascrizione. Premi «Riprova»."
+      );
+      onRefresh();
+    } catch (err) {
+      setFixMsg(err instanceof Error ? err.message : "Dichiarazione non salvata.");
+    } finally {
+      setFixBusy(null);
+    }
+  };
+
   const handleRetry = async (id: string) => {
     await koraApi.retryJob(id);
     onRefresh();
@@ -122,7 +162,31 @@ export function ProductionView({
             )}
             {job.error_message && (
               <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-3 text-xs text-red-800">
-                Errore: {job.error_message}
+                <div>Errore: {job.error_message}</div>
+                {/sottotitol/i.test(job.error_message) && (
+                  <div className="mt-3 flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={alignSubsToText}
+                      disabled={fixBusy !== null}
+                      className="rounded-lg border border-[#DDD4C4] bg-white px-3 py-1.5 text-[11px] font-medium text-[#2A2A28] hover:bg-[#F6F1E7] disabled:opacity-50"
+                    >
+                      {fixBusy === "align" ? "Allineamento…" : "Allinea sottotitoli al testo"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={declareEditorial}
+                      disabled={fixBusy !== null}
+                      className="rounded-lg border border-[#DDD4C4] bg-white px-3 py-1.5 text-[11px] font-medium text-[#2A2A28] hover:bg-[#F6F1E7] disabled:opacity-50"
+                    >
+                      {fixBusy === "editorial" ? "Salvataggio…" : "Mantieni sottotitoli editoriali"}
+                    </button>
+                    <span className="text-[10px] text-red-700/80">
+                      «Editoriali» = sintesi creativa dichiarata, non trascrizione letterale.
+                    </span>
+                  </div>
+                )}
+                {fixMsg && <div className="mt-2 text-[11px] text-[#2A2A28]">{fixMsg}</div>}
               </div>
             )}
 

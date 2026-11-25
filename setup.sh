@@ -48,7 +48,7 @@ fi
 
 # 3b ------------------------------------------- versione precedente e backup
 step 3b/7 "Versione precedente e backup dei dati"
-KORA_VERSION="3.6.8"
+KORA_VERSION="3.6.9"
 VERSION_FILE="kora_data/installed_version.txt"
 if [ -f "kora_data/kora_studio.db" ]; then
   PREV=""

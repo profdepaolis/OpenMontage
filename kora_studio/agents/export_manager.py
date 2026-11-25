@@ -19,17 +19,34 @@ from kora_studio.vault.media_vault import MediaVault
 
 
 def _qc_block_message(report: Any, diagnosis: Optional[dict[str, Any]] = None) -> str:
-    """Messaggio di blocco leggibile, senza ripetere due volte lo stesso testo."""
-    detail = "; ".join(
-        f"{c.name}: {c.detail}" for c in getattr(report, "checks", []) or [] if not c.passed
-    )
+    """Messaggio di blocco leggibile: solo i controlli che bloccano davvero.
+
+    3.6.9 — prima elencava anche i controlli non superati ma non bloccanti
+    (es. «trascrizione non verificata»), facendo credere che fossero la causa
+    dello stop. Ora i due gruppi sono separati.
+    """
+    def _blocking(check: Any) -> bool:
+        blocks = getattr(check, "blocks_delivery", None)
+        if callable(blocks):
+            return bool(blocks())
+        return not check.passed and getattr(check, "severity", "error") == "error"
+
+    checks = list(getattr(report, "checks", []) or [])
+    detail = "; ".join(f"{c.name}: {c.detail}" for c in checks if _blocking(c))
+    warnings = [c for c in checks if not c.passed and not _blocking(c)]
     hint = ((diagnosis or {}).get("suggestion") or "").strip()
     # La diagnosi di ripiego ripete i nostri stessi dettagli: inutile e confusa.
     if hint and hint.startswith("Correggere i controlli falliti"):
         hint = ""
     if hint and hint not in detail:
         detail = f"{detail} Diagnosi: {hint}"
-    return "Esportazione bloccata dal Controllo Qualità: " + detail
+    message = "Esportazione bloccata dal Controllo Qualità: " + (detail or "controlli bloccanti superati.")
+    if warnings:
+        message += (
+            " — Avvisi (non bloccanti): "
+            + "; ".join(f"{c.name}: {c.detail}" for c in warnings[:4])
+        )
+    return message
 
 
 class ExportManager:
@@ -195,6 +212,7 @@ class ExportManager:
         include_no_subtitles_variant: bool = False,
         include_no_music_variant: bool = False,
         fps: int = DEFAULT_FPS,
+        caption_source: str = "",
     ) -> dict[str, Any]:
         project_id = project["id"]
         export_dir = EXPORTS_DIR / project_id
@@ -216,6 +234,7 @@ class ExportManager:
             expect_audio=True,
             work_dir=project_dir,
             voiceover_present=voiceover_present,
+            caption_source=caption_source or str((project.get("preferences") or {}).get("caption_source") or ""),
         )
         if not qc_report.passed:
             diagnosis = None

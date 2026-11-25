@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# KORA Studio Light 3.6.8 — diagnostica della sincronizzazione
+# KORA Studio Light 3.6.9 — diagnostica della sincronizzazione
 # Uso:
 #   ./diagnostica_sync.sh                 # tutti i progetti
 #   ./diagnostica_sync.sh prj_xxxxxxxx    # un solo progetto

@@ -158,6 +158,7 @@ class QualityController:
         expect_audio: bool = True,
         work_dir: Path | None = None,
         voiceover_present: Optional[bool] = None,
+        caption_source: str = "",
     ) -> QualityReport:
         checks: list[QualityCheckItem] = []
         metrics: dict[str, Any] = {}
@@ -571,7 +572,30 @@ class QualityController:
         def _short(value: str, limit: int = 48) -> str:
             return value if len(value) <= limit else value[: limit - 1].rstrip() + "…"
 
-        if vo_sub_hard:
+        editorial_captions = str(caption_source or "").strip().lower() == "editorial"
+        if vo_sub_hard and editorial_captions:
+            # 3.6.9 — l'utente ha dichiarato i sottotitoli editoriali: non si spacciano
+            # per trascrizione, ma non bloccano un Reel narrato. Restano un avviso.
+            scenes_list = ", ".join(str(n) for n, _sp, _sb in vo_sub_hard[:6])
+            checks.append(
+                QualityCheckItem(
+                    category="narrative",
+                    name="Coerenza tra voiceover e sottotitoli",
+                    passed=True,
+                    severity="warning",
+                    requires_human_review=True,
+                    detail=(
+                        f"Sottotitoli editoriali dichiarati (scene {scenes_list}): non sono "
+                        "la trascrizione letterale della voce, sono una sintesi creativa. "
+                        "Per sottotitoli fedeli: Storyboard → Trascrizione & Sincronizzazione → "
+                        "Testo dei sottotitoli: «Fedeli alla trascrizione approvata»."
+                    ),
+                )
+            )
+            human_reasons.append(
+                f"Sottotitoli editoriali alle scene {scenes_list}: testo diverso dalla voce per scelta dichiarata."
+            )
+        elif vo_sub_hard:
             examples = "; ".join(
                 f"scena {n}: voce «{_short(sp)}» ≠ sottotitoli «{_short(sb)}»"
                 for n, sp, sb in vo_sub_hard[:3]
@@ -584,8 +608,10 @@ class QualityController:
                     severity="error",
                     detail=(
                         f"Testo e sottotitoli raccontano cose diverse ({examples}). "
-                        "Apri Storyboard → «Allinea sottotitoli al testo» per riallineare "
-                        "le scene indicate, poi premi Riprova."
+                        "Due rimedi: (1) Storyboard → «Allinea sottotitoli al testo» per "
+                        "riallineare le scene indicate; (2) se i sottotitoli sono una scelta "
+                        "editoriale, dichiarali in Storyboard → Trascrizione & Sincronizzazione → "
+                        "Testo dei sottotitoli: «Editoriali sintetici». Poi premi Riprova."
                     ),
                 )
             )

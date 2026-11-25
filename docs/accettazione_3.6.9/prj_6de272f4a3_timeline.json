@@ -1,0 +1,835 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-11-25T08:06:54.125134+00:00",
+  "fps": 25,
+  "duration_sec": 21.081,
+  "total_frames": 527,
+  "audio": {
+    "path": "/tmp/acc369/data/projects/prj_6de272f4a3/voice_brando_norm.wav",
+    "sha256": "8de1173dba2938bbda72748c041580e6d07d7f6fb5ea0f21735555e9f77f7df0",
+    "source": "voce_importata_manuale",
+    "duration_sec": 21.081,
+    "is_scene_aligned": false,
+    "start_offset_sec": 0.0,
+    "end_padding_sec": 0.0,
+    "effective_duration_sec": 21.081,
+    "end_sec": 21.081,
+    "speech_regions": [
+      {
+        "start_sec": 0.0,
+        "end_sec": 3.146
+      },
+      {
+        "start_sec": 3.814,
+        "end_sec": 4.99
+      },
+      {
+        "start_sec": 5.476,
+        "end_sec": 6.584
+      },
+      {
+        "start_sec": 7.045,
+        "end_sec": 9.077
+      },
+      {
+        "start_sec": 9.518,
+        "end_sec": 13.872
+      },
+      {
+        "start_sec": 14.231,
+        "end_sec": 15.87
+      },
+      {
+        "start_sec": 16.238,
+        "end_sec": 18.653
+      },
+      {
+        "start_sec": 19.075,
+        "end_sec": 19.449
+      },
+      {
+        "start_sec": 19.82,
+        "end_sec": 21.081
+      }
+    ],
+    "speech_span_sec": 17.506
+  },
+  "transcript": {
+    "alignment": "estimated",
+    "verified": false,
+    "verification": {
+      "timing_status": "estimated",
+      "text_status": "from_script",
+      "verified": false,
+      "words_from_asr": 0,
+      "words_forced_aligned": 0,
+      "words_estimated": 23
+    },
+    "mismatches": [],
+    "engine": null,
+    "model": null,
+    "language": "it",
+    "text": "Nel tardo pomeriggio d'autunno, la luce si abbassa e le ombre si allungano sul pergolato. Il bicchiere resta sul tavolo, il tempo rallenta.",
+    "words": [
+      {
+        "word": "Nel",
+        "start_sec": 0.0,
+        "end_sec": 0.449,
+        "start_frame": 0,
+        "end_frame": 11,
+        "confidence": null,
+        "speaker_id": null,
+        "timing_source": "estimated",
+        "word_id": "w_0001"
+      },
+      {
+        "word": "tardo",
+        "start_sec": 0.449,
+        "end_sec": 1.197,
+        "start_frame": 11,
+        "end_frame": 30,
+        "confidence": null,
+        "speaker_id": null,
+        "timing_source": "estimated",
+        "word_id": "w_0002"
+      },
+      {
+        "word": "pomeriggio",
+        "start_sec": 1.197,
+        "end_sec": 2.693,
+        "start_frame": 30,
+        "end_frame": 67,
+        "confidence": null,
+        "speaker_id": null,
+        "timing_source": "estimated",
+        "word_id": "w_0003"
+      },
+      {
+        "word": "d'autunno,",
+        "start_sec": 2.693,
+        "end_sec": 3.146,
+        "start_frame": 67,
+        "end_frame": 79,
+        "confidence": null,
+        "speaker_id": null,
+        "timing_source": "estimated",
+        "word_id": "w_0004"
+      },
+      {
+        "word": "la",
+        "start_sec": 4.857,
+        "end_sec": 4.99,
+        "start_frame": 121,
+        "end_frame": 125,
+        "confidence": null,
+        "speaker_id": null,
+        "timing_source": "estimated",
+        "word_id": "w_0005"
+      },
+      {
+        "word": "luce",
+        "start_sec": 5.642,
+        "end_sec": 6.24,
+        "start_frame": 141,
+        "end_frame": 156,
+        "confidence": null,
+        "speaker_id": null,
+        "timing_source": "estimated",
+        "word_id": "w_0006"
+      },
+      {
+        "word": "si",
+        "start_sec": 6.24,
+        "end_sec": 6.54,
+        "start_frame": 156,
+        "end_frame": 164,
+        "confidence": null,
+        "speaker_id": null,
+        "timing_source": "estimated",
+        "word_id": "w_0007"
+      },
+      {
+        "word": "abbassa",
+        "start_sec": 6.54,
+        "end_sec": 6.584,
+        "start_frame": 164,
+        "end_frame": 165,
+        "confidence": null,
+        "speaker_id": null,
+        "timing_source": "estimated",
+        "word_id": "w_0008"
+      },
+      {
+        "word": "e",
+        "start_sec": 8.048,
+        "end_sec": 8.198,
+        "start_frame": 201,
+        "end_frame": 205,
+        "confidence": null,
+        "speaker_id": null,
+        "timing_source": "estimated",
+        "word_id": "w_0009"
+      },
+      {
+        "word": "le",
+        "start_sec": 8.198,
+        "end_sec": 8.497,
+        "start_frame": 205,
+        "end_frame": 212,
+        "confidence": null,
+        "speaker_id": null,
+        "timing_source": "estimated",
+        "word_id": "w_0010"
+      },
+      {
+        "word": "ombre",
+        "start_sec": 8.497,
+        "end_sec": 9.077,
+        "start_frame": 212,
+        "end_frame": 227,
+        "confidence": null,
+        "speaker_id": null,
+        "timing_source": "estimated",
+        "word_id": "w_0011"
+      },
+      {
+        "word": "si",
+        "start_sec": 9.686,
+        "end_sec": 9.985,
+        "start_frame": 242,
+        "end_frame": 250,
+        "confidence": null,
+        "speaker_id": null,
+        "timing_source": "estimated",
+        "word_id": "w_0012"
+      },
+      {
+        "word": "allungano",
+        "start_sec": 9.985,
+        "end_sec": 11.332,
+        "start_frame": 250,
+        "end_frame": 283,
+        "confidence": null,
+        "speaker_id": null,
+        "timing_source": "estimated",
+        "word_id": "w_0013"
+      },
+      {
+        "word": "sul",
+        "start_sec": 11.332,
+        "end_sec": 11.781,
+        "start_frame": 283,
+        "end_frame": 295,
+        "confidence": null,
+        "speaker_id": null,
+        "timing_source": "estimated",
+        "word_id": "w_0014"
+      },
+      {
+        "word": "pergolato.",
+        "start_sec": 11.781,
+        "end_sec": 13.277,
+        "start_frame": 295,
+        "end_frame": 332,
+        "confidence": null,
+        "speaker_id": null,
+        "timing_source": "estimated",
+        "word_id": "w_0015"
+      },
+      {
+        "word": "Il",
+        "start_sec": 13.277,
+        "end_sec": 13.576,
+        "start_frame": 332,
+        "end_frame": 339,
+        "confidence": null,
+        "speaker_id": null,
+        "timing_source": "estimated",
+        "word_id": "w_0016"
+      },
+      {
+        "word": "bicchiere",
+        "start_sec": 13.576,
+        "end_sec": 13.872,
+        "start_frame": 339,
+        "end_frame": 347,
+        "confidence": null,
+        "speaker_id": null,
+        "timing_source": "estimated",
+        "word_id": "w_0017"
+      },
+      {
+        "word": "resta",
+        "start_sec": 15.283,
+        "end_sec": 15.87,
+        "start_frame": 382,
+        "end_frame": 397,
+        "confidence": null,
+        "speaker_id": null,
+        "timing_source": "estimated",
+        "word_id": "w_0018"
+      },
+      {
+        "word": "sul",
+        "start_sec": 16.398,
+        "end_sec": 16.847,
+        "start_frame": 410,
+        "end_frame": 421,
+        "confidence": null,
+        "speaker_id": null,
+        "timing_source": "estimated",
+        "word_id": "w_0019"
+      },
+      {
+        "word": "tavolo,",
+        "start_sec": 16.847,
+        "end_sec": 17.894,
+        "start_frame": 421,
+        "end_frame": 447,
+        "confidence": null,
+        "speaker_id": null,
+        "timing_source": "estimated",
+        "word_id": "w_0020"
+      },
+      {
+        "word": "il",
+        "start_sec": 17.894,
+        "end_sec": 18.194,
+        "start_frame": 447,
+        "end_frame": 455,
+        "confidence": null,
+        "speaker_id": null,
+        "timing_source": "estimated",
+        "word_id": "w_0021"
+      },
+      {
+        "word": "tempo",
+        "start_sec": 18.194,
+        "end_sec": 18.653,
+        "start_frame": 455,
+        "end_frame": 466,
+        "confidence": null,
+        "speaker_id": null,
+        "timing_source": "estimated",
+        "word_id": "w_0022"
+      },
+      {
+        "word": "rallenta.",
+        "start_sec": 19.364,
+        "end_sec": 19.449,
+        "start_frame": 484,
+        "end_frame": 486,
+        "confidence": null,
+        "speaker_id": null,
+        "timing_source": "estimated",
+        "word_id": "w_0023"
+      }
+    ],
+    "segments": [
+      {
+        "segment_uid": "seg_001",
+        "text": "Nel tardo pomeriggio d'autunno,",
+        "start_sec": 0.0,
+        "end_sec": 3.146,
+        "start_frame": 0,
+        "end_frame": 79,
+        "word_ids": [
+          "w_0001",
+          "w_0002",
+          "w_0003",
+          "w_0004"
+        ],
+        "scene_uid": "sc_514d60ad7a",
+        "review_status": "pending",
+        "scene_number": 1
+      },
+      {
+        "segment_uid": "seg_002",
+        "text": "la",
+        "start_sec": 4.857,
+        "end_sec": 4.99,
+        "start_frame": 121,
+        "end_frame": 125,
+        "word_ids": [
+          "w_0005"
+        ],
+        "scene_uid": "sc_30228dc228",
+        "review_status": "pending",
+        "scene_number": 2
+      },
+      {
+        "segment_uid": "seg_003",
+        "text": "luce si abbassa",
+        "start_sec": 5.642,
+        "end_sec": 6.584,
+        "start_frame": 141,
+        "end_frame": 165,
+        "word_ids": [
+          "w_0006",
+          "w_0007",
+          "w_0008"
+        ],
+        "scene_uid": "sc_3656d5c391",
+        "review_status": "pending",
+        "scene_number": 3
+      },
+      {
+        "segment_uid": "seg_004",
+        "text": "e le ombre",
+        "start_sec": 8.048,
+        "end_sec": 9.077,
+        "start_frame": 201,
+        "end_frame": 227,
+        "word_ids": [
+          "w_0009",
+          "w_0010",
+          "w_0011"
+        ],
+        "scene_uid": "sc_77786b0284",
+        "review_status": "pending",
+        "scene_number": 4
+      },
+      {
+        "segment_uid": "seg_005",
+        "text": "si allungano sul pergolato.",
+        "start_sec": 9.686,
+        "end_sec": 13.277,
+        "start_frame": 242,
+        "end_frame": 332,
+        "word_ids": [
+          "w_0012",
+          "w_0013",
+          "w_0014",
+          "w_0015"
+        ],
+        "scene_uid": "sc_77786b0284",
+        "review_status": "pending",
+        "scene_number": 4
+      },
+      {
+        "segment_uid": "seg_006",
+        "text": "Il bicchiere",
+        "start_sec": 13.277,
+        "end_sec": 13.872,
+        "start_frame": 332,
+        "end_frame": 347,
+        "word_ids": [
+          "w_0016",
+          "w_0017"
+        ],
+        "scene_uid": "sc_77786b0284",
+        "review_status": "pending",
+        "scene_number": 4
+      },
+      {
+        "segment_uid": "seg_007",
+        "text": "resta",
+        "start_sec": 15.283,
+        "end_sec": 15.87,
+        "start_frame": 382,
+        "end_frame": 397,
+        "word_ids": [
+          "w_0018"
+        ],
+        "scene_uid": "sc_651cc52cf3",
+        "review_status": "pending",
+        "scene_number": 5
+      },
+      {
+        "segment_uid": "seg_008",
+        "text": "sul tavolo, il tempo",
+        "start_sec": 16.398,
+        "end_sec": 18.653,
+        "start_frame": 410,
+        "end_frame": 466,
+        "word_ids": [
+          "w_0019",
+          "w_0020",
+          "w_0021",
+          "w_0022"
+        ],
+        "scene_uid": "sc_bdc9d19b27",
+        "review_status": "pending",
+        "scene_number": 6
+      },
+      {
+        "segment_uid": "seg_009",
+        "text": "rallenta.",
+        "start_sec": 19.364,
+        "end_sec": 19.449,
+        "start_frame": 484,
+        "end_frame": 486,
+        "word_ids": [
+          "w_0023"
+        ],
+        "scene_uid": "sc_340288224b",
+        "review_status": "pending",
+        "scene_number": 7
+      }
+    ]
+  },
+  "scenes": [
+    {
+      "scene_uid": "sc_514d60ad7a",
+      "scene_number": 1,
+      "start_sec": 0.0,
+      "end_sec": 3.48,
+      "start_frame": 0,
+      "end_frame": 87,
+      "asset_id": "ast_4835accea143",
+      "duration_frames": 87
+    },
+    {
+      "scene_uid": "sc_30228dc228",
+      "scene_number": 2,
+      "start_sec": 3.48,
+      "end_sec": 5.24,
+      "start_frame": 87,
+      "end_frame": 131,
+      "asset_id": "ast_cca5bf3b532b",
+      "duration_frames": 44
+    },
+    {
+      "scene_uid": "sc_3656d5c391",
+      "scene_number": 3,
+      "start_sec": 5.24,
+      "end_sec": 6.8,
+      "start_frame": 131,
+      "end_frame": 170,
+      "asset_id": "ast_3b4f950f2a89",
+      "duration_frames": 39
+    },
+    {
+      "scene_uid": "sc_77786b0284",
+      "scene_number": 4,
+      "start_sec": 6.8,
+      "end_sec": 14.04,
+      "start_frame": 170,
+      "end_frame": 351,
+      "asset_id": "ast_084a734f2a11",
+      "duration_frames": 181
+    },
+    {
+      "scene_uid": "sc_651cc52cf3",
+      "scene_number": 5,
+      "start_sec": 14.04,
+      "end_sec": 16.04,
+      "start_frame": 351,
+      "end_frame": 401,
+      "asset_id": "ast_9d1b830cd997",
+      "duration_frames": 50
+    },
+    {
+      "scene_uid": "sc_bdc9d19b27",
+      "scene_number": 6,
+      "start_sec": 16.04,
+      "end_sec": 18.84,
+      "start_frame": 401,
+      "end_frame": 471,
+      "asset_id": "ast_25aacfa6e0c6",
+      "duration_frames": 70
+    },
+    {
+      "scene_uid": "sc_340288224b",
+      "scene_number": 7,
+      "start_sec": 18.84,
+      "end_sec": 21.08,
+      "start_frame": 471,
+      "end_frame": 527,
+      "asset_id": "ast_1d49c6b8779a",
+      "duration_frames": 56
+    }
+  ],
+  "caption_cues": [
+    {
+      "cue_uid": "cue_001",
+      "text": "Il pomeriggio",
+      "start_sec": 0.12,
+      "end_sec": 2.28,
+      "start_frame": 3,
+      "end_frame": 57,
+      "timing_source": "editorial",
+      "words": [
+        {
+          "word": "Il",
+          "start_sec": 0.12,
+          "end_sec": 1.2
+        },
+        {
+          "word": "pomeriggio",
+          "start_sec": 1.2,
+          "end_sec": 2.28
+        }
+      ],
+      "scene_number": 1,
+      "scene_uid": "sc_514d60ad7a",
+      "mapping": "editorial"
+    },
+    {
+      "cue_uid": "cue_002",
+      "text": "rallenta.",
+      "start_sec": 2.28,
+      "end_sec": 3.36,
+      "start_frame": 57,
+      "end_frame": 84,
+      "timing_source": "editorial",
+      "words": [
+        {
+          "word": "rallenta.",
+          "start_sec": 2.28,
+          "end_sec": 3.36
+        }
+      ],
+      "scene_number": 1,
+      "scene_uid": "sc_514d60ad7a",
+      "mapping": "editorial"
+    },
+    {
+      "cue_uid": "cue_003",
+      "text": "Ombre lunghe.",
+      "start_sec": 3.6,
+      "end_sec": 5.12,
+      "start_frame": 90,
+      "end_frame": 128,
+      "timing_source": "editorial",
+      "words": [
+        {
+          "word": "Ombre",
+          "start_sec": 3.6,
+          "end_sec": 4.36
+        },
+        {
+          "word": "lunghe.",
+          "start_sec": 4.36,
+          "end_sec": 5.12
+        }
+      ],
+      "scene_number": 2,
+      "scene_uid": "sc_30228dc228",
+      "mapping": "editorial"
+    },
+    {
+      "cue_uid": "cue_004",
+      "text": "Un bicchiere, il silenzio.",
+      "start_sec": 5.36,
+      "end_sec": 6.68,
+      "start_frame": 134,
+      "end_frame": 167,
+      "timing_source": "editorial",
+      "words": [
+        {
+          "word": "Un",
+          "start_sec": 5.36,
+          "end_sec": 5.69
+        },
+        {
+          "word": "bicchiere,",
+          "start_sec": 5.69,
+          "end_sec": 6.02
+        },
+        {
+          "word": "il",
+          "start_sec": 6.02,
+          "end_sec": 6.35
+        },
+        {
+          "word": "silenzio.",
+          "start_sec": 6.35,
+          "end_sec": 6.68
+        }
+      ],
+      "scene_number": 3,
+      "scene_uid": "sc_3656d5c391",
+      "mapping": "editorial"
+    },
+    {
+      "cue_uid": "cue_005",
+      "text": "e le ombre",
+      "start_sec": 6.92,
+      "end_sec": 9.253,
+      "start_frame": 173,
+      "end_frame": 231,
+      "timing_source": "editorial",
+      "words": [
+        {
+          "word": "e",
+          "start_sec": 6.92,
+          "end_sec": 7.698
+        },
+        {
+          "word": "le",
+          "start_sec": 7.698,
+          "end_sec": 8.476
+        },
+        {
+          "word": "ombre",
+          "start_sec": 8.476,
+          "end_sec": 9.253
+        }
+      ],
+      "scene_number": 4,
+      "scene_uid": "sc_77786b0284",
+      "mapping": "editorial"
+    },
+    {
+      "cue_uid": "cue_006",
+      "text": "si allungano sul",
+      "start_sec": 9.253,
+      "end_sec": 11.587,
+      "start_frame": 231,
+      "end_frame": 290,
+      "timing_source": "editorial",
+      "words": [
+        {
+          "word": "si",
+          "start_sec": 9.253,
+          "end_sec": 10.031
+        },
+        {
+          "word": "allungano",
+          "start_sec": 10.031,
+          "end_sec": 10.809
+        },
+        {
+          "word": "sul",
+          "start_sec": 10.809,
+          "end_sec": 11.587
+        }
+      ],
+      "scene_number": 4,
+      "scene_uid": "sc_77786b0284",
+      "mapping": "editorial"
+    },
+    {
+      "cue_uid": "cue_007",
+      "text": "pergolato.",
+      "start_sec": 11.587,
+      "end_sec": 12.364,
+      "start_frame": 290,
+      "end_frame": 309,
+      "timing_source": "editorial",
+      "words": [
+        {
+          "word": "pergolato.",
+          "start_sec": 11.587,
+          "end_sec": 12.364
+        }
+      ],
+      "scene_number": 4,
+      "scene_uid": "sc_77786b0284",
+      "mapping": "editorial"
+    },
+    {
+      "cue_uid": "cue_008",
+      "text": "Il bicchiere",
+      "start_sec": 12.364,
+      "end_sec": 13.92,
+      "start_frame": 309,
+      "end_frame": 348,
+      "timing_source": "editorial",
+      "words": [
+        {
+          "word": "Il",
+          "start_sec": 12.364,
+          "end_sec": 13.142
+        },
+        {
+          "word": "bicchiere",
+          "start_sec": 13.142,
+          "end_sec": 13.92
+        }
+      ],
+      "scene_number": 4,
+      "scene_uid": "sc_77786b0284",
+      "mapping": "editorial"
+    },
+    {
+      "cue_uid": "cue_009",
+      "text": "resta",
+      "start_sec": 14.16,
+      "end_sec": 15.92,
+      "start_frame": 354,
+      "end_frame": 398,
+      "timing_source": "editorial",
+      "words": [
+        {
+          "word": "resta",
+          "start_sec": 14.16,
+          "end_sec": 15.92
+        }
+      ],
+      "scene_number": 5,
+      "scene_uid": "sc_651cc52cf3",
+      "mapping": "editorial"
+    },
+    {
+      "cue_uid": "cue_010",
+      "text": "sul tavolo, il tempo",
+      "start_sec": 16.16,
+      "end_sec": 18.72,
+      "start_frame": 404,
+      "end_frame": 468,
+      "timing_source": "editorial",
+      "words": [
+        {
+          "word": "sul",
+          "start_sec": 16.16,
+          "end_sec": 16.8
+        },
+        {
+          "word": "tavolo,",
+          "start_sec": 16.8,
+          "end_sec": 17.44
+        },
+        {
+          "word": "il",
+          "start_sec": 17.44,
+          "end_sec": 18.08
+        },
+        {
+          "word": "tempo",
+          "start_sec": 18.08,
+          "end_sec": 18.72
+        }
+      ],
+      "scene_number": 6,
+      "scene_uid": "sc_bdc9d19b27",
+      "mapping": "editorial"
+    },
+    {
+      "cue_uid": "cue_011",
+      "text": "The Art of Being",
+      "start_sec": 18.96,
+      "end_sec": 20.96,
+      "start_frame": 474,
+      "end_frame": 524,
+      "timing_source": "editorial",
+      "words": [
+        {
+          "word": "The",
+          "start_sec": 18.96,
+          "end_sec": 19.46
+        },
+        {
+          "word": "Art",
+          "start_sec": 19.46,
+          "end_sec": 19.96
+        },
+        {
+          "word": "of",
+          "start_sec": 19.96,
+          "end_sec": 20.46
+        },
+        {
+          "word": "Being",
+          "start_sec": 20.46,
+          "end_sec": 20.96
+        }
+      ],
+      "scene_number": 7,
+      "scene_uid": "sc_340288224b",
+      "mapping": "editorial"
+    }
+  ],
+  "caption_cues_source": "editorial"
+}

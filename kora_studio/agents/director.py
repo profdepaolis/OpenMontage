@@ -678,6 +678,7 @@ class KoraDirector:
         asr_result: Optional[dict[str, Any]] = None,
         source: str = "",
         allow_storyboard_text: bool = True,
+        caption_source: str = "",
     ) -> dict[str, Any]:
         """Costruisce e salva la timeline canonica; unica fonte per mix, caption e QC."""
         manifest = voice_res.get("voice_manifest") or {}
@@ -698,8 +699,26 @@ class KoraDirector:
             asr_result=asr_result,
             audio_duration_sec=float(manifest.get("source_duration_sec") or 0.0) or None,
         )
+        # 3.6.9 — sottotitoli editoriali: i cue consegnati (SRT/VTT/ASS) devono dire
+        # le stesse parole che si vedono nel Reel, non la trascrizione della voce.
+        if str(caption_source or "").strip().lower() == "editorial":
+            from kora_studio.agents import audio_timeline as _tl
+
+            editorial_cues = _tl.editorial_caption_cues(scenes, fps=fps)
+            if editorial_cues:
+                timeline["caption_cues"] = editorial_cues
+                timeline["caption_cues_source"] = "editorial"
         manager.save(timeline, project_dir)
         return timeline
+
+    def caption_source_for(self, project_id: str) -> str:
+        """Testo dei sottotitoli dichiarato per il progetto.
+
+        3.6.9 — default «transcript» (fedeli): finché l'utente non dichiara
+        esplicitamente «editorial», il QC considera un sottotitolo diverso dal
+        parlato un errore, non una scelta.
+        """
+        return str(self.db.get_preference(f"caption_source_{project_id}") or "transcript")
 
     @staticmethod
     def _caption_timings(
@@ -779,6 +798,7 @@ class KoraDirector:
             return {"updated_scenes": [], "skipped": [], "mode": mode}
         updated: list[int] = []
         skipped: list[dict[str, Any]] = []
+        preserved: list[int] = []
         for scene in working:
             nums = {
                 int(seg.get("scene_number"))
@@ -799,11 +819,20 @@ class KoraDirector:
             if scene_lock.get("caption") and mode == "transcript":
                 skipped.append({"scene_number": scene.scene_number, "reason": "sottotitoli bloccati"})
                 continue
+            # 3.6.9 — prima di riscrivere il testo si guarda cosa c'era: un sottotitolo
+            # già diverso dal parlato è una scelta dell'utente (editoriale) e non va
+            # distrutta di nascosto: il QC la valuterà e dirà come comportarsi.
+            previous_spoken = (scene.spoken_text or "").strip()
+            current_caption = (scene.subtitle_text or "").strip()
+            faithful_caption = (not current_caption) or current_caption == previous_spoken
             if scene.spoken_text != text:
                 scene.spoken_text = text
                 updated.append(scene.scene_number)
             if mode == "transcript":
-                scene.subtitle_text = text
+                if faithful_caption:
+                    scene.subtitle_text = text
+                elif current_caption != text:
+                    preserved.append(scene.scene_number)
         if updated:
             with self.db.session() as conn:
                 conn.execute(
@@ -811,7 +840,12 @@ class KoraDirector:
                     (json.dumps([sc.model_dump() for sc in working], ensure_ascii=False), utcnow_iso(), project_id),
                 )
             self.invalidate_preview(project_id)
-        return {"updated_scenes": updated, "skipped": skipped, "mode": mode}
+        return {
+            "updated_scenes": updated,
+            "skipped": skipped,
+            "preserved_captions": preserved,
+            "mode": mode,
+        }
 
     def resolve_script_timing(
         self,
@@ -958,6 +992,12 @@ class KoraDirector:
         # 3.6.8 — se l'utente ha chiesto la trascrizione e il motore non c'è, il testo
         # dello storyboard non viene spacciato per testo pronunciato.
         allow_storyboard_text = not (requested in ("asr", "auto", "script") and asr_result is None)
+        # 3.6.9 — la dichiarazione vale già per questo ricalcolo (non solo dal prossimo)
+        effective_caption_source = (
+            caption_source
+            or self.db.get_preference(f"caption_source_{project_id}")
+            or "transcript"
+        )
         timeline = self._build_timeline_for(
             project_dir=project_dir,
             voice_path=voice_path,
@@ -967,6 +1007,7 @@ class KoraDirector:
             text=text or None,
             asr_result=asr_result,
             allow_storyboard_text=allow_storyboard_text,
+            caption_source=str(effective_caption_source),
         )
         total_sec = sum(s.duration_frames for s in scenes) / fps
         manager = AudioTimelineManager(fps=fps, project_dir=project_dir)
@@ -1453,6 +1494,7 @@ class KoraDirector:
                     fps=fps_now,
                     text=saved_script or None,
                     allow_storyboard_text=allow_storyboard_text,
+                    caption_source=self.caption_source_for(project_id),
                 )
                 if not allow_storyboard_text and not (timeline.get("transcript") or {}).get("words"):
                     self.log_job(
@@ -1482,7 +1524,11 @@ class KoraDirector:
                         intervention_reason=reason,
                     )
                     return {"project": self.get_project(project_id), "job": self.get_job(job_id)}
-                caption_source = self.db.get_preference(f"caption_source_{project_id}") or "editorial"
+                # 3.6.9 — stessa fonte della verità usata dal QC (prima qui il default era
+                # «editorial» e il QC riceveva «transcript»: due risposte diverse allo stesso
+                # progetto). Il default è «transcript»: i sottotitoli fedeli si riallineano,
+                # quelli editoriali non vengono toccati.
+                caption_source = self.caption_source_for(project_id)
                 if caption_source == "transcript" and (timeline.get("transcript") or {}).get("segments"):
                     applied = self.apply_transcript_to_scenes(
                         project_id, timeline, scenes, mode="transcript"
@@ -1494,6 +1540,15 @@ class KoraDirector:
                             "AudioTimeline",
                             f"Sottotitoli allineati al testo pronunciato nelle scene "
                             f"{applied['updated_scenes']}.",
+                        )
+                    if applied.get("preserved_captions"):
+                        self.log_job(
+                            job_id,
+                            "INFO",
+                            "AudioTimeline",
+                            "Sottotitoli editoriali mantenuti nelle scene "
+                            f"{applied['preserved_captions']}: non sono stati riscritti con "
+                            "il testo pronunciato (il Controllo Qualità li dichiara).",
                         )
                 source = (timeline.get("transcript") or {}).get("alignment")
                 words = len((timeline.get("transcript") or {}).get("words") or [])
@@ -1611,6 +1666,7 @@ class KoraDirector:
                 include_no_subtitles_variant=include_no_subtitles_variant,
                 include_no_music_variant=include_no_music_variant,
                 fps=proj["fps"],
+                caption_source=self.caption_source_for(project_id),
             )
             completed.append("Controllo qualità")
 

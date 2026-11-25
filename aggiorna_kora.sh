@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
-# KORA STUDIO LIGHT 3.6.8 — aggiornamento completo da terminale.
+# KORA STUDIO LIGHT 3.6.9 — aggiornamento completo da terminale.
 #
 # Fa tutto, in ordine, senza doppio clic e senza cancellare nulla dei tuoi dati:
 #   1. trova l'installazione esistente (o ne crea una nuova)
 #   2. backup preventivo: database, progetti e copia del codice attuale
 #   3. ferma il server se è in esecuzione
-#   4. scarica (o usa) il pacchetto 3.6.8 e lo verifica
+#   4. scarica (o usa) il pacchetto 3.6.9 e lo verifica
 #   5. aggiorna SOLO l'applicazione: kora_data/ (foto, progetti, DB, voci,
 #      loghi, Reel) non viene mai toccata
 #   6. setup + verifica + avvio + diagnostica AI
 #   7. se qualcosa fallisce, rimette il codice precedente (i dati non si toccano)
 #
 # Uso:
-#   ./aggiorna_kora.sh                       # scarica 3.6.8 e aggiorna
-#   ./aggiorna_kora.sh --da-zip ~/Downloads/KORA_Studio_Light_3.6.8_installer.zip
+#   ./aggiorna_kora.sh                       # scarica 3.6.9 e aggiorna
+#   ./aggiorna_kora.sh --da-zip ~/Downloads/KORA_Studio_Light_3.6.9_installer.zip
 #   ./aggiorna_kora.sh --cartella ~/Documenti/"Kora Studio Light"
 #   ./aggiorna_kora.sh --solo-verifica       # nessuna modifica: verifica + diagnostica
 #   ./aggiorna_kora.sh --no-avvio            # aggiorna e verifica, non avvia il server
@@ -22,7 +22,7 @@
 #
 set -uo pipefail
 
-VERSIONE="3.6.8"
+VERSIONE="3.6.9"
 ZIP_ID="1ZSvTzKLizaQsTxR9su5JvJPC9c7-oMkX"
 ZIP_NOME="KORA_Studio_Light_${VERSIONE}_installer.zip"
 PORTA="${KORA_PORT:-8020}"
@@ -174,7 +174,7 @@ ferma_server() {
   fi
 }
 
-# --------------------------------------------------- 4. pacchetto 3.6.8
+# --------------------------------------------------- 4. pacchetto 3.6.9
 scarica_pacchetto() {
   if [ -n "$ZIP_SCARICATO" ]; then
     [ -f "$ZIP_SCARICATO" ] || { ko "file non trovato: $ZIP_SCARICATO"; exit 1; }

@@ -1,0 +1,78 @@
+{
+  "project_id": "prj_6de272f4a3",
+  "mp3": "/home/user/OpenMontage/assets/kora/voices/voce_brando.mp3",
+  "copione": "Nel tardo pomeriggio d'autunno, la luce si abbassa e le ombre si allungano sul pergolato. Il bicchiere resta sul tavolo, il tempo rallenta.",
+  "sottotitoli_creativi": {
+    "0": "Il pomeriggio rallenta.",
+    "1": "Ombre lunghe.",
+    "2": "Un bicchiere, il silenzio."
+  },
+  "timeline": {
+    "alignment": "none",
+    "verified": false,
+    "verification": {
+      "timing_status": "none",
+      "text_status": "none",
+      "verified": false,
+      "words_from_asr": 0,
+      "words_forced_aligned": 0,
+      "words_estimated": 0
+    },
+    "caption_source_predefinito": "transcript"
+  },
+  "produzione_severa": {
+    "job_state": "Errore",
+    "messaggio": "Esportazione bloccata dal Controllo Qualità: Coerenza tra voiceover e sottotitoli: Testo e sottotitoli raccontano cose diverse (scena 1: voce «Nel tardo pomeriggio d'autunno,» ≠ sottotitoli «Il pomeriggio rallenta.»; scena 2: voce «la» ≠ sottotitoli «Ombre lunghe.»; scena 3: voce «luce si abbassa» ≠ sottotitoli «Un bicchiere, il silenzio.»). Due rimedi: (1) Storyboard → «Allinea sottotitoli al testo» per riallineare le scene indicate; (2) se i sottotitoli sono una scelta editoriale, dichiarali in Storyboard → Trascrizione & Sincronizzazione → Testo dei sottotitoli: «Editoriali sintetici». Poi premi Riprova. — Avvisi (non bloccanti): Trascrizione verificata sulle parole pronunciate: Tempi stimati dentro le pause misurate (nessun motore ASR): i sottotitoli sono coerenti con il testo, non trascritti dalla voce.",
+    "elenca_due_rimedi": true,
+    "separa_avvisi": true
+  },
+  "dichiarazione_editoriale": {
+    "caption_source": "editorial",
+    "sottotitoli_intatti_dopo_ricalcolo": true,
+    "sottotitoli_prima_della_dichiarazione": {
+      "0": "Il pomeriggio rallenta.",
+      "1": "Ombre lunghe.",
+      "2": "Un bicchiere, il silenzio."
+    }
+  },
+  "produzione_editoriale": {
+    "job_state": "Completato",
+    "error_message": null,
+    "mp4": "/tmp/acc369/data/exports/prj_6de272f4a3/prj_6de272f4a3_reel_final.mp4",
+    "mp4_esiste": true,
+    "mp4_bytes": 6935753,
+    "durata_sec": 21.08,
+    "video": {
+      "index": 0,
+      "codec_type": "video",
+      "codec_name": "h264",
+      "width": 1080,
+      "height": 1920,
+      "r_frame_rate": "25/1",
+      "avg_frame_rate": "25/1",
+      "duration": "21.08"
+    },
+    "audio": {
+      "index": 1,
+      "codec_type": "audio",
+      "codec_name": "aac",
+      "sample_rate": "48000",
+      "channels": 2,
+      "duration": "21.08"
+    }
+  },
+  "qc": {
+    "passed": true,
+    "controllo_coerenza": {
+      "passed": true,
+      "severity": "warning",
+      "requires_human_review": true,
+      "detail": "Sottotitoli editoriali dichiarati (scene 1, 2, 3): non sono la trascrizione letterale della voce, sono una sintesi creativa. Per sottotitoli fedeli: Storyboard → Trascrizione & Sincronizzazione → Testo dei sottotitoli: «Fedeli alla trascrizione approvata»."
+    },
+    "revisione_umana": true,
+    "motivi": [
+      "Sottotitoli editoriali alle scene 1, 2, 3: testo diverso dalla voce per scelta dichiarata.",
+      "Sincronizzazione non verificata: Tempi stimati dentro le pause misurate (nessun motore ASR o testo corretto a mano): la sincronizzazione è dichiarata, non verificata."
+    ]
+  }
+}
